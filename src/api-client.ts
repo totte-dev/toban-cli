@@ -65,6 +65,7 @@ export interface ApiClient {
   submitRetroComment(sprintNumber: number, data: RetroCommentInput): Promise<void>;
   reportProgress(data: ProgressReport): Promise<void>;
   fetchPlaybookPrompt(): Promise<string>;
+  sendMessage(from: string, to: string, content: string): Promise<void>;
 }
 
 export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
