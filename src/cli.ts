@@ -131,11 +131,19 @@ async function runLoop(cliArgs: CliArgs): Promise<void> {
   let workingDir = cliArgs.workingDir;
   let workspaceSpec: string | undefined;
   let workspaceName: string | undefined;
+  let playbookRules: string | undefined;
 
   try {
     const ws = await api.fetchWorkspace();
-    workspaceSpec = (ws as Record<string, unknown>).spec as string | undefined || undefined;
+    workspaceSpec = (ws as unknown as Record<string, unknown>).spec as string | undefined || undefined;
     workspaceName = ws.name || undefined;
+
+    // Fetch playbook rules (includes git strategy rules + security rules)
+    try {
+      playbookRules = await api.fetchPlaybookPrompt() || undefined;
+    } catch (pbErr) {
+      console.warn(`[toban] Could not fetch playbook rules: ${pbErr}`);
+    }
 
     if (!cliArgs.explicitWorkingDir) {
       if (ws.github_repo) {
@@ -304,6 +312,7 @@ async function runLoop(cliArgs: CliArgs): Promise<void> {
       taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
       apiUrl: cliArgs.apiUrl,
       apiKey: cliArgs.apiKey,
+      playbookRules,
     });
 
     try {
