@@ -7,7 +7,7 @@ export interface Task {
   id: string;
   title: string;
   description: string;
-  status: "todo" | "in-progress" | "review" | "done";
+  status: "todo" | "in_progress" | "review" | "done";
   priority: string | number;
   owner?: string;
   agent?: string;

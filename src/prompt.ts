@@ -95,7 +95,7 @@ Your task: ${ctx.taskTitle}${priorityLine}${descriptionBlock}
 Report progress to the Toban API:
 - API URL: ${ctx.apiUrl}
 - API Key: ${ctx.apiKey}
-- Update task status: PATCH ${ctx.apiUrl}/api/v1/tasks/${ctx.taskId} with {"status": "in-progress"} or {"status": "review"}
+- Update task status: PATCH ${ctx.apiUrl}/api/v1/tasks/${ctx.taskId} with {"status": "in_progress"} or {"status": "review"}
 - Use Authorization header: Bearer ${ctx.apiKey}
 
 Work in this directory. When done, commit your changes with a descriptive message.
