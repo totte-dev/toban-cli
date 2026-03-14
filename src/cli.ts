@@ -147,7 +147,12 @@ async function runLoop(cliArgs: CliArgs): Promise<void> {
 
         if (existsSync(join(repoDir, ".git"))) {
           console.log(`[toban] Pulling latest for ${ws.github_repo} in ${repoDir}`);
-          execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
+          try {
+            execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
+          } catch (pullErr) {
+            const pullMsg = pullErr instanceof Error ? pullErr.message : String(pullErr);
+            console.warn(`[toban] git pull failed, continuing with existing checkout: ${pullMsg}`);
+          }
         } else {
           console.log(`[toban] Cloning ${ws.github_repo} to ${repoDir}`);
           mkdirSync(tobanHome, { recursive: true });
@@ -186,12 +191,20 @@ async function runLoop(cliArgs: CliArgs): Promise<void> {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.log(`[toban] Workspace fetch/auto-clone failed, using working dir: ${workingDir}`, err);
 
-    // Notify user via chat if repo clone failed
-    if (errMsg.includes("clone") || errMsg.includes("Repository not found") || errMsg.includes("not found")) {
+    // Notify user via chat if any git operation failed (clone, pull, auth)
+    const isGitError =
+      errMsg.includes("clone") ||
+      errMsg.includes("pull") ||
+      errMsg.includes("Repository not found") ||
+      errMsg.includes("not found") ||
+      errMsg.includes("authentication") ||
+      errMsg.includes("fatal:") ||
+      errMsg.includes("Could not resolve host");
+    if (isGitError) {
       await api.sendMessage(
         "manager",
         "user",
-        `⚠️ Failed to clone repository. Please check access permissions.\n\nError: ${errMsg.slice(0, 200)}`
+        `⚠️ Failed to set up repository. Please check access permissions and network.\n\nError: ${errMsg.slice(0, 200)}`
       );
     }
   }
