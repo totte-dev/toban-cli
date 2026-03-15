@@ -1,12 +1,40 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import type { AgentConfig, RunningAgent } from "./types.js";
 import { getTerminal, buildShellCommand, type TerminalInfo } from "./terminal.js";
 import { buildCommand } from "./command-builder.js";
 
 /** Max lines to keep in stdout/stderr buffers */
 const LOG_BUFFER_SIZE = 200;
+
+/**
+ * Ensure ~/.claude.json exists so Claude CLI doesn't fail on startup.
+ */
+function ensureClaudeConfig(): void {
+  const configPath = path.join(os.homedir(), ".claude.json");
+  if (fs.existsSync(configPath)) return;
+
+  // Check for backup
+  const backupDir = path.join(os.homedir(), ".claude", "backups");
+  if (fs.existsSync(backupDir)) {
+    const backups = fs.readdirSync(backupDir).filter(f => f.startsWith(".claude.json.backup."));
+    if (backups.length > 0) {
+      const latest = backups.sort().pop()!;
+      fs.copyFileSync(path.join(backupDir, latest), configPath);
+      return;
+    }
+  }
+
+  // Create minimal config
+  fs.writeFileSync(configPath, JSON.stringify({
+    numStartups: 1,
+    autoUpdates: false,
+    hasCompletedOnboarding: true,
+  }, null, 2));
+}
 
 /**
  * Build the branch name for an agent task.
@@ -63,6 +91,11 @@ export function spawnAgent(
 ): { process: ChildProcess; agent: RunningAgent } {
   const branchName = buildBranchName(config.name, config.taskId);
   const { cmd, args } = buildCommand(config);
+
+  // Ensure Claude CLI config exists before spawning
+  if (config.type === "claude") {
+    ensureClaudeConfig();
+  }
 
   // Remove CLAUDECODE to avoid nested session detection when spawning claude
   const agentEnv = { ...process.env };
@@ -127,6 +160,10 @@ export function spawnAgentInTerminal(
 ): { process: ChildProcess; agent: RunningAgent; terminal: TerminalInfo } {
   const branchName = buildBranchName(config.name, config.taskId);
   const { cmd, args } = buildCommand(config);
+
+  if (config.type === "claude") {
+    ensureClaudeConfig();
+  }
 
   const terminal = getTerminal(terminalPreference);
 
