@@ -10,6 +10,50 @@ import color from "picocolors";
 
 const VERSION = "0.1.3";
 
+// ---------------------------------------------------------------------------
+// Debug mode
+// ---------------------------------------------------------------------------
+
+let _debug = false;
+
+export function setDebug(enabled: boolean): void {
+  _debug = enabled;
+}
+
+export function isDebug(): boolean {
+  return _debug;
+}
+
+function timestamp(): string {
+  return new Date().toLocaleTimeString("en-GB", { hour12: false });
+}
+
+/**
+ * Log a chat/message exchange between agents/users.
+ * Normal mode: single line with arrow notation
+ * Debug mode: timestamped, full content preserved
+ */
+export function chatMessage(from: string, to: string, content: string): void {
+  if (_debug) {
+    const indent = content.split("\n").map(l => `  ${l}`).join("\n");
+    console.log(`[${timestamp()}] [chat] ${from} → ${to}:\n${indent}`);
+  } else {
+    const oneLine = content.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+    const truncated = oneLine.length > 80 ? oneLine.slice(0, 77) + "..." : oneLine;
+    const symbol = from === "user" ? "◇" : "◆";
+    console.log(`${symbol} ${from} → ${to}: ${truncated}`);
+  }
+}
+
+/**
+ * Debug-only log. Only outputs in debug mode.
+ */
+export function debug(category: string, message: string): void {
+  if (_debug) {
+    console.log(`[${timestamp()}] [${category}] ${message}`);
+  }
+}
+
 /** Show the intro banner */
 export function intro(): void {
   p.intro(color.bgCyan(color.black(` toban-cli v${VERSION} `)));

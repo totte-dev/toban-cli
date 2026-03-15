@@ -48,6 +48,7 @@ interface CliArgs {
   llmApiKey?: string;
   noDocker: boolean;
   wsPort: number;
+  debug: boolean;
 }
 
 function printUsage(): void {
@@ -74,6 +75,7 @@ Options:
   --no-docker           Disable Docker isolation (run agents directly on host)
   --ws-port <port>      WebSocket server port for direct chat (default: 4000, 0=auto)
   --push                Push the sprint tag to origin (sprint complete only)
+  --debug               Enable verbose debug output (or DEBUG=1 env)
   --help                Show this help
 
 LLM Provider Examples:
@@ -136,6 +138,7 @@ function parseArgs(argv: string[]): CliArgs {
     llmApiKey: getFlag("--llm-api-key") ?? process.env.LLM_API_KEY,
     noDocker: args.includes("--no-docker"),
     wsPort: parseInt(getFlag("--ws-port") ?? "4000", 10),
+    debug: args.includes("--debug") || process.env.DEBUG === "1",
   };
 }
 
@@ -241,6 +244,7 @@ function resolveTaskWorkingDir(
 async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   const api = createApiClient(cliArgs.apiUrl, cliArgs.apiKey);
 
+  ui.setDebug(cliArgs.debug);
   ui.intro();
 
   const s = ui.createSpinner();

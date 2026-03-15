@@ -42,7 +42,7 @@ export class MessagePoller {
    * Start polling for messages.
    */
   start(): void {
-    ui.info(`[msg] Polling messages for "${this.channel}" every ${POLL_INTERVAL_MS / 1000}s`);
+    ui.debug("msg", `Polling messages for "${this.channel}" every ${POLL_INTERVAL_MS / 1000}s`);
     // Run immediately, then on interval
     this.poll();
     this.timer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
@@ -87,7 +87,7 @@ export class MessagePoller {
       for (const msg of newMessages) {
         this.deliveredIds.add(msg.id);
         this.appendToFile(msg);
-        ui.info(`[msg] New message for ${this.channel} from ${msg.from}: "${msg.content.slice(0, 80)}${msg.content.length > 80 ? "..." : ""}"`);
+        ui.chatMessage(msg.from, this.channel, msg.content);;
       }
 
       this.lastSeenTimestamp = newMessages[newMessages.length - 1].created_at;

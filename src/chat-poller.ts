@@ -7,6 +7,7 @@
  */
 
 import { spawn } from "node:child_process";
+import * as ui from "./ui.js";
 
 interface Message {
   id: string;
@@ -76,7 +77,7 @@ export class ChatPoller {
    * Start the polling loop.
    */
   start(): void {
-    console.log(`[chat] Starting manager chat poller (every ${this.pollIntervalMs}ms, model: ${this.model})`);
+    ui.debug("chat", `Starting manager chat poller (every ${this.pollIntervalMs}ms, model: ${this.model})`);
     this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
     // Run immediately once
     this.poll();
@@ -90,7 +91,7 @@ export class ChatPoller {
       clearInterval(this.timer);
       this.timer = null;
     }
-    console.log("[chat] Chat poller stopped");
+    ui.debug("chat", "Chat poller stopped");
   }
 
   private async poll(): Promise<void> {
@@ -112,14 +113,14 @@ export class ChatPoller {
       const newUserMessages = this.findNewUserMessages(messages);
 
       for (const msg of newUserMessages) {
-        console.log(`[chat] New message from user: "${msg.content.slice(0, 60)}${msg.content.length > 60 ? "..." : ""}"`);
+        ui.chatMessage("user", "manager", msg.content);
 
         try {
           const reply = await this.generateReply(msg, messages);
           await this.postReply(reply);
-          console.log(`[chat] Replied: "${reply.slice(0, 60)}${reply.length > 60 ? "..." : ""}"`);
+          ui.chatMessage("manager", "user", reply);
         } catch (err) {
-          console.error(`[chat] Failed to generate/post reply:`, err);
+          ui.warn(`[chat] Failed to generate/post reply: ${err}`);
           await this.postReply("Sorry, something went wrong. Please try again or wait a moment.").catch(() => {});
         }
 
@@ -127,7 +128,7 @@ export class ChatPoller {
         this.lastSeenId = msg.id;
       }
     } catch (err) {
-      console.error(`[chat] Poll error:`, err);
+      ui.debug("chat", `Poll error: ${err}`);
     } finally {
       this.processing = false;
     }
