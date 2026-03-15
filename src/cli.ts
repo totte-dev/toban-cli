@@ -14,7 +14,7 @@
  *   TOBAN_API_KEY  - API key for authentication
  */
 
-import { AgentRunner } from "./runner.js";
+import { AgentRunner, type AgentRunnerOptions } from "./runner.js";
 import {
   createApiClient,
   type Task,
@@ -42,6 +42,7 @@ interface CliArgs {
   model: string;
   llmBaseUrl?: string;
   llmApiKey?: string;
+  noDocker: boolean;
 }
 
 function printUsage(): void {
@@ -60,6 +61,7 @@ Options:
   --model <model>       AI model for manager chat (default: claude-sonnet-4-20250514)
   --llm-base-url <url>  OpenAI-compatible API base URL (or LLM_BASE_URL env)
   --llm-api-key <key>   LLM provider API key (or LLM_API_KEY env)
+  --no-docker           Disable Docker isolation (run agents directly on host)
   --help                Show this help
 
 LLM Provider Examples:
@@ -120,6 +122,7 @@ function parseArgs(argv: string[]): CliArgs {
     model: getFlag("--model") ?? "claude-sonnet-4-20250514",
     llmBaseUrl: getFlag("--llm-base-url") ?? process.env.LLM_BASE_URL,
     llmApiKey: getFlag("--llm-api-key") ?? process.env.LLM_API_KEY,
+    noDocker: args.includes("--no-docker"),
   };
 }
 
@@ -127,9 +130,8 @@ function parseArgs(argv: string[]): CliArgs {
 // Run loop
 // ---------------------------------------------------------------------------
 
-async function runLoop(cliArgs: CliArgs): Promise<void> {
+async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   const api = createApiClient(cliArgs.apiUrl, cliArgs.apiKey);
-  const runner = new AgentRunner();
 
   console.log(`[toban] Starting agent runner`);
   console.log(`[toban]   API:     ${cliArgs.apiUrl}`);
@@ -451,10 +453,10 @@ if (cliArgs.command !== "start") {
   process.exit(1);
 }
 
-const runner = new AgentRunner();
+const runner = new AgentRunner({ useDocker: !cliArgs.noDocker });
 setupShutdownHandlers(runner);
 
-runLoop(cliArgs).catch((err) => {
+runLoop(cliArgs, runner).catch((err) => {
   console.error(`[toban] Fatal error:`, err);
   process.exit(1);
 });
