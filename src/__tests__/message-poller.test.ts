@@ -7,6 +7,10 @@ vi.mock("../ui.js", () => ({
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
+  debug: vi.fn(),
+  chatMessage: vi.fn(),
+  setDebug: vi.fn(),
+  isDebug: vi.fn(() => false),
 }));
 
 // Mock fs to avoid real file writes

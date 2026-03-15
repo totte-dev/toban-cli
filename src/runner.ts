@@ -62,7 +62,7 @@ export class AgentRunner {
     this.dockerChecked = true;
 
     if (!this.useDocker) {
-      ui.info("[docker] Docker mode disabled (--no-docker)");
+      ui.debug("docker", "Docker mode disabled (--no-docker)");
       return false;
     }
 
@@ -140,7 +140,7 @@ export class AgentRunner {
     }
 
     if (useDocker) {
-      ui.info(`[docker] Agent ${config.name} running in container`);
+      ui.debug("docker", `Agent ${config.name} running in container`);
     }
 
     await this.reportStatus(config, "running");
@@ -155,10 +155,13 @@ export class AgentRunner {
           // Docker mode: the entrypoint created a worktree branch inside the container.
           // The branch persists on the host via the bind mount.
           const dockerBranch = buildDockerBranchName(config.name, config.taskId);
+          ui.debug("git", `Merging branch ${dockerBranch} → ${baseBranch}`);
           const merged = mergeAgentBranch(config.workingDir, dockerBranch, baseBranch);
           if (merged) {
+            ui.debug("git", `Branch ${dockerBranch} merged successfully`);
             await this.reportStatus(config, "completed", "Branch merged successfully");
           } else {
+            ui.debug("git", `Merge conflict on branch ${dockerBranch}`);
             await this.reportStatus(
               config,
               "completed",
@@ -166,11 +169,14 @@ export class AgentRunner {
             );
           }
         } else {
+          ui.debug("git", `Merging branch ${branchName} → ${baseBranch}`);
           const merged = tryMerge(config.workingDir, branchName, baseBranch);
           if (merged) {
+            ui.debug("git", `Branch ${branchName} merged successfully`);
             removeWorktree(config.workingDir, worktreePath, branchName);
             await this.reportStatus(config, "completed", "Branch merged successfully");
           } else {
+            ui.debug("git", `Merge conflict on branch ${branchName}`);
             await this.reportStatus(
               config,
               "completed",
@@ -325,6 +331,7 @@ export class AgentRunner {
     status: string,
     activity?: string
   ): Promise<void> {
+    ui.debug("api", `PUT /agents ${config.name} → ${status}${activity ? ` (${activity})` : ""}`);
     try {
       await fetch(`${config.apiUrl}/api/v1/agents`, {
         method: "PUT",
