@@ -16,6 +16,7 @@ import {
   stopDockerAgent,
 } from "./docker.js";
 import type { RetroCommentInput } from "./api-client.js";
+import * as ui from "./ui.js";
 
 export { detectTerminal, getTerminal } from "./terminal.js";
 export type { TerminalInfo } from "./terminal.js";
@@ -61,13 +62,13 @@ export class AgentRunner {
     this.dockerChecked = true;
 
     if (!this.useDocker) {
-      console.log("[docker] Docker mode disabled (--no-docker)");
+      ui.info("[docker] Docker mode disabled (--no-docker)");
       return false;
     }
 
     if (!isDockerAvailable()) {
-      console.warn(
-        "[docker] ⚠ Docker not available. Running agents directly on host.\n" +
+      ui.warn(
+        "[docker] Docker not available. Running agents directly on host.\n" +
         "[docker]   Install Docker for filesystem isolation: https://docs.docker.com/get-docker/"
       );
       this.useDocker = false;
@@ -79,14 +80,14 @@ export class AgentRunner {
         try {
           buildImage(this.dockerfilePath);
         } catch (err) {
-          console.warn(`[docker] ⚠ Failed to build image: ${err}`);
-          console.warn("[docker]   Falling back to direct execution");
+          ui.warn(`[docker] Failed to build image: ${err}`);
+          ui.warn("[docker]   Falling back to direct execution");
           this.useDocker = false;
           return false;
         }
       } else {
-        console.warn(
-          "[docker] ⚠ toban/agent:latest image not found. Running agents directly on host.\n" +
+        ui.warn(
+          "[docker] toban/agent:latest image not found. Running agents directly on host.\n" +
           "[docker]   Build the image: docker build -t toban/agent:latest ."
         );
         this.useDocker = false;
@@ -94,7 +95,7 @@ export class AgentRunner {
       }
     }
 
-    console.log("[docker] Using Docker container isolation for agents");
+    ui.step("[docker] Using Docker container isolation for agents");
     return true;
   }
 
@@ -134,7 +135,7 @@ export class AgentRunner {
     }
 
     if (useDocker) {
-      console.log(`[docker] Agent ${config.name} running in container`);
+      ui.info(`[docker] Agent ${config.name} running in container`);
     }
 
     await this.reportStatus(config, "running");
