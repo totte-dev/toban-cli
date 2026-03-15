@@ -75,6 +75,9 @@ function buildDockerArgs(
     ...(existsSync(join(home, ".claude"))
       ? ["-v", `${join(home, ".claude")}:/home/agent/.claude:ro`]
       : []),
+    ...(existsSync(join(home, ".claude.json"))
+      ? ["-v", `${join(home, ".claude.json")}:/home/agent/.claude.json:ro`]
+      : []),
     ...(existsSync(join(home, ".config", "claude"))
       ? ["-v", `${join(home, ".config", "claude")}:/home/agent/.config/claude:ro`]
       : []),
