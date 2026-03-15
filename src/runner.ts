@@ -27,11 +27,16 @@ interface ManagedAgent {
   docker?: boolean;
 }
 
+/** Callback for agent stdout/stderr streaming */
+export type StdoutCallback = (agentName: string, lines: string[], stream: "stdout" | "stderr") => void;
+
 export interface AgentRunnerOptions {
   /** Use Docker containers for agent isolation (default: auto-detect) */
   useDocker?: boolean;
   /** Path to Dockerfile directory for building the image */
   dockerfilePath?: string;
+  /** Callback for streaming agent stdout/stderr to WebSocket clients */
+  onStdout?: StdoutCallback;
 }
 
 export class AgentRunner {
@@ -39,10 +44,12 @@ export class AgentRunner {
   private useDocker: boolean;
   private dockerfilePath?: string;
   private dockerChecked = false;
+  private onStdout?: StdoutCallback;
 
   constructor(options?: AgentRunnerOptions) {
     this.useDocker = options?.useDocker ?? true; // default: try Docker
     this.dockerfilePath = options?.dockerfilePath;
+    this.onStdout = options?.onStdout;
   }
 
   /**
@@ -111,6 +118,20 @@ export class AgentRunner {
 
     const managed: ManagedAgent = { agent, process: child, docker: useDocker };
     this.agents.set(config.name, managed);
+
+    // Stream stdout/stderr to WebSocket clients
+    if (this.onStdout) {
+      const cb = this.onStdout;
+      const agentName = config.name;
+      child.stdout?.on("data", (data: Buffer) => {
+        const lines = data.toString().split("\n").filter(Boolean);
+        if (lines.length > 0) cb(agentName, lines, "stdout");
+      });
+      child.stderr?.on("data", (data: Buffer) => {
+        const lines = data.toString().split("\n").filter(Boolean);
+        if (lines.length > 0) cb(agentName, lines, "stderr");
+      });
+    }
 
     if (useDocker) {
       console.log(`[docker] Agent ${config.name} running in container`);

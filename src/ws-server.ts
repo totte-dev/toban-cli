@@ -15,11 +15,13 @@ import { WebSocketServer, WebSocket } from "ws";
 
 /** Message format over WebSocket */
 interface WsMessage {
-  type: "chat" | "status" | "ping" | "pong";
+  type: "chat" | "status" | "ping" | "pong" | "stdout" | "stderr";
   from?: string;
   to?: string;
   content?: string;
   timestamp?: string;
+  /** Agent name for stdout/stderr messages */
+  agent_name?: string;
 }
 
 export interface WsChatServerOptions {
@@ -151,6 +153,24 @@ export class WsChatServer {
    */
   broadcast(message: WsMessage): void {
     const data = JSON.stringify(message);
+    for (const client of this.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data);
+      }
+    }
+  }
+
+  /**
+   * Broadcast agent stdout/stderr lines to all connected clients.
+   */
+  broadcastStdout(agentName: string, lines: string[], stream: "stdout" | "stderr" = "stdout"): void {
+    if (this.clients.size === 0) return;
+    const data = JSON.stringify({
+      type: stream,
+      agent_name: agentName,
+      content: lines.join("\n"),
+      timestamp: new Date().toISOString(),
+    });
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
