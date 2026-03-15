@@ -56,6 +56,11 @@ toban - AI Agent Runner CLI
 
 Usage:
   toban start [options]
+  toban sprint complete [--push]
+
+Commands:
+  start                 Start the agent runner loop
+  sprint complete       Complete the current sprint and create a git tag
 
 Options:
   --api-url <url>       Toban API base URL (or TOBAN_API_URL env)
@@ -68,6 +73,7 @@ Options:
   --llm-api-key <key>   LLM provider API key (or LLM_API_KEY env)
   --no-docker           Disable Docker isolation (run agents directly on host)
   --ws-port <port>      WebSocket server port for direct chat (default: 4000, 0=auto)
+  --push                Push the sprint tag to origin (sprint complete only)
   --help                Show this help
 
 LLM Provider Examples:
@@ -488,8 +494,11 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         description: r.description,
       }));
 
+    const agentName = task.owner ?? "builder";
+    const apiDocs = await api.fetchApiDocs(agentName);
+
     const prompt = buildAgentPrompt({
-      role: task.owner ?? "builder",
+      role: agentName,
       projectName: workspaceName,
       projectSpec: workspaceSpec,
       taskId: task.id,
@@ -501,6 +510,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       playbookRules,
       targetRepo: task.target_repo ?? undefined,
       repositories: repoInfoList.length > 0 ? repoInfoList : undefined,
+      apiDocs: apiDocs || undefined,
     });
 
     try {
@@ -646,28 +656,108 @@ function setupShutdownHandlers(runner: AgentRunner): void {
 }
 
 // ---------------------------------------------------------------------------
+// Sprint complete
+// ---------------------------------------------------------------------------
+
+async function handleSprintComplete(apiUrl: string, apiKey: string, push: boolean): Promise<void> {
+  const api = createApiClient(apiUrl, apiKey);
+
+  ui.intro();
+
+  const s = ui.createSpinner();
+
+  // 1. Fetch current sprint
+  s.start("Fetching current sprint...");
+  const sprint = await api.fetchCurrentSprint();
+  if (!sprint) {
+    s.stop("No active sprint found");
+    ui.error("No active sprint found. Nothing to complete.");
+    process.exit(1);
+  }
+  s.stop(`Sprint #${sprint.number} (${sprint.status})`);
+
+  // 2. Complete the sprint if not already completed
+  if (sprint.status !== "completed") {
+    s.start(`Completing sprint #${sprint.number}...`);
+    try {
+      await api.completeSprint(sprint.number);
+      s.stop(`Sprint #${sprint.number} completed`);
+    } catch (err) {
+      s.stop("Failed to complete sprint");
+      ui.error(`${err}`);
+      process.exit(1);
+    }
+  } else {
+    ui.info(`Sprint #${sprint.number} already completed`);
+  }
+
+  // 3. Create git tag
+  const tagName = `sprint-${sprint.number}`;
+  try {
+    const existing = execSync(`git tag -l "${tagName}"`, { stdio: "pipe" }).toString().trim();
+    if (existing) {
+      ui.warn(`Tag ${tagName} already exists, skipping`);
+    } else {
+      execSync(`git tag "${tagName}"`, { stdio: "pipe" });
+      const shortHash = execSync("git rev-parse --short HEAD", { stdio: "pipe" }).toString().trim();
+      ui.step(`Tagged ${tagName} at ${shortHash}`);
+    }
+  } catch (err) {
+    ui.warn(`Failed to create tag: ${err}`);
+  }
+
+  // 4. Push tag if --push flag
+  if (push) {
+    try {
+      execSync(`git push origin "${tagName}"`, { stdio: "inherit" });
+      ui.step(`Pushed ${tagName} to origin`);
+    } catch (err) {
+      ui.error(`Failed to push tag: ${err}`);
+      process.exit(1);
+    }
+  }
+
+  ui.outro(`Sprint #${sprint.number} complete`);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 const cliArgs = parseArgs(process.argv);
 
-if (cliArgs.command !== "start") {
+// Handle "sprint complete" subcommand
+if (cliArgs.command === "sprint") {
+  const rawArgs = process.argv.slice(2);
+  const subCommand = rawArgs[1];
+  if (subCommand === "complete") {
+    const push = rawArgs.includes("--push");
+    handleSprintComplete(cliArgs.apiUrl, cliArgs.apiKey, push).catch((err) => {
+      ui.error(`Fatal error: ${err}`);
+      process.exit(1);
+    });
+  } else {
+    ui.error(`Unknown sprint subcommand: ${subCommand}`);
+    printUsage();
+    process.exit(1);
+  }
+} else if (cliArgs.command === "start") {
+  const runner = new AgentRunner({
+    useDocker: !cliArgs.noDocker,
+    onStdout: (agentName, lines, stream) => {
+      if (activeWsServer && activeWsServer.clientCount > 0) {
+        activeWsServer.broadcastStdout(agentName, lines, stream);
+      }
+    },
+  });
+  setupShutdownHandlers(runner);
+
+  runLoop(cliArgs, runner).catch((err) => {
+    ui.error(`Fatal error: ${err}`);
+    process.exit(1);
+  });
+} else {
   ui.error(`Unknown command: ${cliArgs.command}`);
   printUsage();
   process.exit(1);
 }
-
-const runner = new AgentRunner({
-  useDocker: !cliArgs.noDocker,
-  onStdout: (agentName, lines, stream) => {
-    if (activeWsServer && activeWsServer.clientCount > 0) {
-      activeWsServer.broadcastStdout(agentName, lines, stream);
-    }
-  },
-});
-setupShutdownHandlers(runner);
-
-runLoop(cliArgs, runner).catch((err) => {
-  ui.error(`Fatal error: ${err}`);
-  process.exit(1);
-});

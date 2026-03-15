@@ -27,12 +27,16 @@ RUN npm install -g @anthropic-ai/claude-code \
 # Create non-root user for agent execution
 RUN useradd -m -s /bin/bash agent
 
-# Set up workspace directory
-RUN mkdir -p /workspace && chown agent:agent /workspace
+# Set up workspace directories
+RUN mkdir -p /workspace /workspace-agent && chown agent:agent /workspace /workspace-agent
+
+# Add entrypoint script for worktree isolation
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Switch to non-root user
 USER agent
 WORKDIR /workspace
 
-# No fixed entrypoint - CLI specifies the command (claude, gemini, codex, etc.)
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]

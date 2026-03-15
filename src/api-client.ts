@@ -76,6 +76,8 @@ export interface ApiClient {
   fetchTasks(): Promise<Task[]>;
   fetchRepositories(): Promise<WorkspaceRepository[]>;
   startSprint(): Promise<SprintStartResult>;
+  fetchCurrentSprint(): Promise<{ number: number; status: string } | null>;
+  completeSprint(number: number): Promise<void>;
   updateTask(id: string, data: Partial<Task>): Promise<void>;
   updateAgent(data: {
     name: string;
@@ -88,6 +90,7 @@ export interface ApiClient {
   fetchMessages(channel: string): Promise<Message[]>;
   sendMessage(from: string, to: string, content: string): Promise<void>;
   fetchMySecrets(): Promise<Record<string, string>>;
+  fetchApiDocs(agentName: string): Promise<string>;
 }
 
 export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
@@ -134,6 +137,27 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         throw new Error(`Failed to start sprint: ${res.status} ${res.statusText}`);
       }
       return (await res.json()) as SprintStartResult;
+    },
+
+    async fetchCurrentSprint(): Promise<{ number: number; status: string } | null> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/sprints/current`, { headers });
+        if (!res.ok) return null;
+        return (await res.json()) as { number: number; status: string };
+      } catch {
+        return null;
+      }
+    },
+
+    async completeSprint(number: number): Promise<void> {
+      const res = await fetch(`${apiUrl}/api/v1/sprints/${number}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ status: "completed" }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to complete sprint: ${res.status} ${res.statusText}`);
+      }
     },
 
     async updateTask(id: string, data: Partial<Task>): Promise<void> {
@@ -239,6 +263,17 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         return data ?? {};
       } catch {
         return {};
+      }
+    },
+
+    async fetchApiDocs(agentName: string): Promise<string> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/agents/${encodeURIComponent(agentName)}/api-docs`, { headers });
+        if (!res.ok) return "";
+        const data = (await res.json()) as { prompt?: string };
+        return data.prompt ?? "";
+      } catch {
+        return "";
       }
     },
   };

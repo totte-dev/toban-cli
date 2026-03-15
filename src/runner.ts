@@ -1,4 +1,4 @@
-import type { ChildProcess } from "node:child_process";
+import { execSync, type ChildProcess } from "node:child_process";
 import type { AgentConfig, AgentStatusReport, RunningAgent } from "./types.js";
 import {
   buildBranchName,
@@ -111,7 +111,12 @@ export class AgentRunner {
     const baseBranch = config.branch ?? "main";
     const branchName = buildBranchName(config.name, config.taskId);
 
-    const worktreePath = createWorktree(config.workingDir, branchName, baseBranch);
+    // Docker mode: entrypoint creates worktree inside the container.
+    // The bind mount is the original repo so git operations persist on host.
+    // Non-Docker mode: create host-side worktree as before.
+    const worktreePath = useDocker
+      ? config.workingDir
+      : createWorktree(config.workingDir, branchName, baseBranch);
 
     const { process: child, agent } = useDocker
       ? spawnAgentInDocker(config, worktreePath)
@@ -146,16 +151,32 @@ export class AgentRunner {
       agent.stoppedAt = new Date();
 
       if (code === 0) {
-        const merged = tryMerge(config.workingDir, branchName, baseBranch);
-        if (merged) {
-          removeWorktree(config.workingDir, worktreePath, branchName);
-          await this.reportStatus(config, "completed", "Branch merged successfully");
+        if (useDocker) {
+          // Docker mode: the entrypoint created a worktree branch inside the container.
+          // The branch persists on the host via the bind mount.
+          const dockerBranch = buildDockerBranchName(config.name, config.taskId);
+          const merged = mergeAgentBranch(config.workingDir, dockerBranch, baseBranch);
+          if (merged) {
+            await this.reportStatus(config, "completed", "Branch merged successfully");
+          } else {
+            await this.reportStatus(
+              config,
+              "completed",
+              `Merge conflict on branch ${dockerBranch} - manual resolution needed`
+            );
+          }
         } else {
-          await this.reportStatus(
-            config,
-            "completed",
-            `Merge conflict on branch ${branchName} - manual resolution needed`
-          );
+          const merged = tryMerge(config.workingDir, branchName, baseBranch);
+          if (merged) {
+            removeWorktree(config.workingDir, worktreePath, branchName);
+            await this.reportStatus(config, "completed", "Branch merged successfully");
+          } else {
+            await this.reportStatus(
+              config,
+              "completed",
+              `Merge conflict on branch ${branchName} - manual resolution needed`
+            );
+          }
         }
 
         if (config.sprintNumber) {
@@ -206,14 +227,28 @@ export class AgentRunner {
       managed.process.kill("SIGTERM");
     }
 
-    try {
-      removeWorktree(
-        managed.agent.config.workingDir,
-        managed.agent.worktreePath,
-        managed.agent.branch
+    if (managed.docker) {
+      // Docker mode: clean up the in-container worktree branch
+      const dockerBranch = buildDockerBranchName(
+        managed.agent.config.name,
+        managed.agent.config.taskId
       );
-    } catch {
-      // best effort cleanup
+      try {
+        execSync(`git worktree prune`, { cwd: managed.agent.config.workingDir, stdio: "pipe" });
+        execSync(`git branch -D "${dockerBranch}"`, { cwd: managed.agent.config.workingDir, stdio: "pipe" });
+      } catch {
+        // best effort cleanup
+      }
+    } else {
+      try {
+        removeWorktree(
+          managed.agent.config.workingDir,
+          managed.agent.worktreePath,
+          managed.agent.branch
+        );
+      } catch {
+        // best effort cleanup
+      }
     }
 
     this.agents.delete(agentName);
@@ -307,5 +342,74 @@ export class AgentRunner {
     } catch {
       // Non-fatal
     }
+  }
+}
+
+/**
+ * Build the branch name used by the Docker entrypoint.
+ * Must match the pattern in entrypoint.sh.
+ */
+function buildDockerBranchName(agentName: string, taskId: string): string {
+  return `agent/${agentName}/${taskId}`;
+}
+
+/**
+ * Merge an agent's worktree branch into the base branch and clean up.
+ * Used after Docker container exits — the entrypoint created the branch
+ * inside the container, but it persists on the host via bind mount.
+ */
+export function mergeAgentBranch(
+  repoDir: string,
+  branchName: string,
+  baseBranch: string
+): boolean {
+  try {
+    // Check if branch has commits beyond base
+    const diff = execSync(
+      `git log "${baseBranch}".."${branchName}" --oneline`,
+      { cwd: repoDir, stdio: "pipe" }
+    ).toString().trim();
+
+    if (!diff) {
+      // No new commits — nothing to merge, just clean up
+      cleanupDockerBranch(repoDir, branchName);
+      return true;
+    }
+
+    // Squash merge into base branch
+    execSync(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
+    execSync(`git merge --squash "${branchName}"`, { cwd: repoDir, stdio: "pipe" });
+    execSync(
+      `git commit -m "feat: agent work from ${branchName}"`,
+      { cwd: repoDir, stdio: "pipe" }
+    );
+
+    cleanupDockerBranch(repoDir, branchName);
+    return true;
+  } catch {
+    // Merge conflict or other issue — abort if needed
+    try {
+      execSync("git merge --abort", { cwd: repoDir, stdio: "pipe" });
+    } catch {
+      // already clean
+    }
+    cleanupDockerBranch(repoDir, branchName);
+    return false;
+  }
+}
+
+/**
+ * Clean up a Docker worktree branch and prune stale worktree references.
+ */
+function cleanupDockerBranch(repoDir: string, branchName: string): void {
+  try {
+    execSync("git worktree prune", { cwd: repoDir, stdio: "pipe" });
+  } catch {
+    // best effort
+  }
+  try {
+    execSync(`git branch -D "${branchName}"`, { cwd: repoDir, stdio: "pipe" });
+  } catch {
+    // branch may not exist
   }
 }

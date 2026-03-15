@@ -102,14 +102,11 @@ function buildDockerArgs(
       ? ["-e", `GITHUB_TOKEN=${process.env.GITHUB_TOKEN}`]
       : []),
     // Inject project secrets with TOBAN_SECRET_ prefix
+    // The entrypoint script writes these to .env.local in the worktree
     ...(config.secrets
       ? Object.entries(config.secrets).flatMap(([key, value]) => [
           "-e", `TOBAN_SECRET_${key}=${value}`,
         ])
-      : []),
-    // Mount tmpfs for .env.local if secrets exist
-    ...(config.secrets && Object.keys(config.secrets).length > 0
-      ? ["--tmpfs", "/workspace/.env.local:rw,noexec,nosuid,size=64k"]
       : []),
     // Image
     AGENT_IMAGE,
