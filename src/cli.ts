@@ -23,6 +23,7 @@ import {
 } from "./api-client.js";
 import { buildAgentPrompt, type RepoInfo } from "./prompt.js";
 import { ChatPoller } from "./chat-poller.js";
+import { MessagePoller } from "./message-poller.js";
 import { WsChatServer } from "./ws-server.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
@@ -503,6 +504,18 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     });
 
     try {
+      // Fetch project secrets for the agent
+      let secrets: Record<string, string> = {};
+      try {
+        secrets = await api.fetchMySecrets();
+        if (Object.keys(secrets).length > 0) {
+          const secretNames = Object.keys(secrets).join(", ");
+          ui.info(`Injected ${Object.keys(secrets).length} secrets: ${secretNames}`);
+        }
+      } catch (err) {
+        ui.warn(`Could not fetch secrets: ${err}`);
+      }
+
       const agentConfig = {
         name: `${cliArgs.agentName}-${task.id.slice(0, 8)}`,
         type: "claude" as const,
@@ -513,6 +526,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         apiUrl: cliArgs.apiUrl,
         prompt,
         parentAgent: cliArgs.agentName,
+        ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
       };
 
       ui.agentSpawned({
@@ -521,9 +535,22 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         taskTitle: task.title,
         docker: !cliArgs.noDocker,
       });
+
+      // Start message poller for this agent's channel
+      const agentChannel = task.owner ?? cliArgs.agentName;
+      const messagePoller = new MessagePoller({
+        api,
+        channel: agentChannel,
+        workingDir: taskWorkingDir,
+      });
+      messagePoller.start();
+
       const runningAgent = await runner.spawn(agentConfig);
 
       await waitForAgent(runner, agentConfig.name);
+
+      // Stop message poller after agent completes
+      messagePoller.stop();
 
       const status = runner.status();
       const agentReport = status.find((s) => s.name === agentConfig.name);

@@ -99,6 +99,16 @@ function buildDockerArgs(
     ...(process.env.GITHUB_TOKEN
       ? ["-e", `GITHUB_TOKEN=${process.env.GITHUB_TOKEN}`]
       : []),
+    // Inject project secrets with TOBAN_SECRET_ prefix
+    ...(config.secrets
+      ? Object.entries(config.secrets).flatMap(([key, value]) => [
+          "-e", `TOBAN_SECRET_${key}=${value}`,
+        ])
+      : []),
+    // Mount tmpfs for .env.local if secrets exist
+    ...(config.secrets && Object.keys(config.secrets).length > 0
+      ? ["--tmpfs", "/workspace/.env.local:rw,noexec,nosuid,size=64k"]
+      : []),
     // Image
     AGENT_IMAGE,
     // Override CMD with the full command (e.g., "claude --dangerously-skip-permissions ...")
@@ -150,15 +160,34 @@ function buildAgentCommand(config: AgentConfig): { cmd: string; args: string[] }
     return { cmd, args: [...templateArgs, ...(config.prompt ? [config.prompt] : [])] };
   }
 
-  // Default: claude
-  return {
-    cmd: "claude",
-    args: [
-      "--dangerously-skip-permissions",
-      "--print",
-      ...(config.prompt ? [config.prompt] : []),
-    ],
-  };
+  // Fallback: use config.type
+  switch (config.type) {
+    case "codex":
+      return {
+        cmd: "codex",
+        args: [
+          "--quiet",
+          ...(config.prompt ? ["--prompt", config.prompt] : []),
+        ],
+      };
+    case "gemini":
+      return {
+        cmd: "gemini",
+        args: [
+          ...(config.prompt ? [config.prompt] : []),
+        ],
+      };
+    default:
+      // Default: claude
+      return {
+        cmd: "claude",
+        args: [
+          "--dangerously-skip-permissions",
+          "--print",
+          ...(config.prompt ? [config.prompt] : []),
+        ],
+      };
+  }
 }
 
 /**

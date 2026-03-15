@@ -46,6 +46,15 @@ export interface WorkspaceRepository {
   access_agents: string[];
 }
 
+export interface Message {
+  id: string;
+  from: string;
+  to: string;
+  content: string;
+  read: boolean;
+  created_at: string;
+}
+
 export interface RetroCommentInput {
   agent_name: string;
   went_well?: string;
@@ -76,7 +85,9 @@ export interface ApiClient {
   submitRetroComment(sprintNumber: number, data: RetroCommentInput): Promise<void>;
   reportProgress(data: ProgressReport): Promise<void>;
   fetchPlaybookPrompt(): Promise<string>;
+  fetchMessages(channel: string): Promise<Message[]>;
   sendMessage(from: string, to: string, content: string): Promise<void>;
+  fetchMySecrets(): Promise<Record<string, string>>;
 }
 
 export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
@@ -186,6 +197,17 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       }
     },
 
+    async fetchMessages(channel: string): Promise<Message[]> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/messages?channel=${encodeURIComponent(channel)}`, { headers });
+        if (!res.ok) return [];
+        const data = (await res.json()) as { messages?: Message[] } | Message[];
+        return Array.isArray(data) ? data : data.messages ?? [];
+      } catch {
+        return [];
+      }
+    },
+
     async sendMessage(from: string, to: string, content: string): Promise<void> {
       try {
         await fetch(`${apiUrl}/api/v1/messages`, {
@@ -206,6 +228,17 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         return data.prompt ?? "";
       } catch {
         return "";
+      }
+    },
+
+    async fetchMySecrets(): Promise<Record<string, string>> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/secrets/mine`, { headers });
+        if (!res.ok) return {};
+        const data = (await res.json()) as Record<string, string>;
+        return data ?? {};
+      } catch {
+        return {};
       }
     },
   };
