@@ -6,6 +6,36 @@ export interface CommandSpec {
 }
 
 /**
+ * Build a mock agent command that simulates work without calling an LLM.
+ * Creates a small file, commits it, and outputs a retro comment.
+ * Token cost: zero.
+ */
+function buildMockCommand(config: AgentConfig): CommandSpec {
+  const taskId = config.taskId.slice(0, 8);
+  const name = config.name;
+  const script = `
+echo "[mock] Agent ${name} starting task ${taskId}..."
+sleep 2
+echo "[mock] Analyzing task requirements..."
+sleep 1
+echo "[mock] Implementing changes..."
+mkdir -p .mock-output
+echo "Mock output for task ${taskId} by ${name} at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > .mock-output/${taskId}.txt
+git add .mock-output/${taskId}.txt 2>/dev/null
+git commit -m "mock: simulated work for task ${taskId}" --allow-empty 2>/dev/null || true
+echo "[mock] Changes committed."
+sleep 1
+echo "[mock] Task complete."
+echo 'RETRO_JSON:{"went_well":"Mock agent completed successfully","to_improve":"This was a simulated run","suggested_tasks":[]}'
+`.trim();
+
+  return {
+    cmd: "bash",
+    args: ["-c", script],
+  };
+}
+
+/**
  * Build the command and args for a given agent config.
  * If commandTemplate is set (from provider config), it takes precedence.
  */
@@ -93,6 +123,9 @@ export function buildCommand(config: AgentConfig): CommandSpec {
           ...(config.args ?? []),
         ],
       };
+
+    case "mock":
+      return buildMockCommand(config);
 
     case "custom":
       if (!config.command) {
