@@ -1,24 +1,41 @@
 {
-  "name": "@toban/cli",
-  "version": "0.1.0",
+  "name": "toban-cli",
+  "version": "0.1.3",
   "description": "Toban Agent Runner CLI - Orchestrate AI coding agents from your terminal",
   "type": "module",
   "bin": {
-    "toban": "./dist/cli.js"
+    "toban-cli": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsup src/cli.ts --format esm --out-dir dist --target node20 --clean",
     "dev": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "bash scripts/docker-e2e-test.sh",
+    "test:ws": "tsx scripts/ws-integration-test.ts"
   },
-  "keywords": ["ai", "agent", "cli", "orchestration", "claude", "coding-agent"],
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "orchestration",
+    "claude",
+    "coding-agent"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=20"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "ws": "^8.19.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "tsup": "^8.5.1",
     "tsx": "^4.19.0",
     "typescript": "^5.9.0"
