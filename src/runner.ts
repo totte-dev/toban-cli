@@ -8,6 +8,13 @@ import {
   spawnAgentInTerminal,
   tryMerge,
 } from "./spawner.js";
+import {
+  isDockerAvailable,
+  isImageAvailable,
+  buildImage,
+  spawnAgentInDocker,
+  stopDockerAgent,
+} from "./docker.js";
 import type { RetroCommentInput } from "./api-client.js";
 
 export { detectTerminal, getTerminal } from "./terminal.js";
@@ -17,10 +24,72 @@ export type { AgentConfig, AgentStatusReport, RunningAgent } from "./types.js";
 interface ManagedAgent {
   agent: RunningAgent;
   process: ChildProcess;
+  docker?: boolean;
+}
+
+export interface AgentRunnerOptions {
+  /** Use Docker containers for agent isolation (default: auto-detect) */
+  useDocker?: boolean;
+  /** Path to Dockerfile directory for building the image */
+  dockerfilePath?: string;
 }
 
 export class AgentRunner {
   private agents = new Map<string, ManagedAgent>();
+  private useDocker: boolean;
+  private dockerfilePath?: string;
+  private dockerChecked = false;
+
+  constructor(options?: AgentRunnerOptions) {
+    this.useDocker = options?.useDocker ?? true; // default: try Docker
+    this.dockerfilePath = options?.dockerfilePath;
+  }
+
+  /**
+   * Check Docker availability and prepare the image if needed.
+   * Called once before the first Docker spawn.
+   */
+  private ensureDocker(): boolean {
+    if (this.dockerChecked) return this.useDocker;
+    this.dockerChecked = true;
+
+    if (!this.useDocker) {
+      console.log("[docker] Docker mode disabled (--no-docker)");
+      return false;
+    }
+
+    if (!isDockerAvailable()) {
+      console.warn(
+        "[docker] ⚠ Docker not available. Running agents directly on host.\n" +
+        "[docker]   Install Docker for filesystem isolation: https://docs.docker.com/get-docker/"
+      );
+      this.useDocker = false;
+      return false;
+    }
+
+    if (!isImageAvailable()) {
+      if (this.dockerfilePath) {
+        try {
+          buildImage(this.dockerfilePath);
+        } catch (err) {
+          console.warn(`[docker] ⚠ Failed to build image: ${err}`);
+          console.warn("[docker]   Falling back to direct execution");
+          this.useDocker = false;
+          return false;
+        }
+      } else {
+        console.warn(
+          "[docker] ⚠ toban/agent:latest image not found. Running agents directly on host.\n" +
+          "[docker]   Build the image: docker build -t toban/agent:latest ."
+        );
+        this.useDocker = false;
+        return false;
+      }
+    }
+
+    console.log("[docker] Using Docker container isolation for agents");
+    return true;
+  }
 
   /**
    * Spawn a new agent process.
@@ -30,14 +99,22 @@ export class AgentRunner {
       throw new Error(`Agent "${config.name}" is already running`);
     }
 
+    const useDocker = this.ensureDocker();
     const baseBranch = config.branch ?? "main";
     const branchName = buildBranchName(config.name, config.taskId);
 
     const worktreePath = createWorktree(config.workingDir, branchName, baseBranch);
-    const { process: child, agent } = spawnAgent(config, worktreePath);
 
-    const managed: ManagedAgent = { agent, process: child };
+    const { process: child, agent } = useDocker
+      ? spawnAgentInDocker(config, worktreePath)
+      : spawnAgent(config, worktreePath);
+
+    const managed: ManagedAgent = { agent, process: child, docker: useDocker };
     this.agents.set(config.name, managed);
+
+    if (useDocker) {
+      console.log(`[docker] Agent ${config.name} running in container`);
+    }
 
     await this.reportStatus(config, "running");
 
@@ -94,7 +171,10 @@ export class AgentRunner {
     managed.agent.status = "stopped";
     managed.agent.stoppedAt = new Date();
 
-    if (managed.process.pid) {
+    if (managed.docker) {
+      // Stop the Docker container
+      stopDockerAgent(managed.agent.config.name, managed.agent.config.taskId);
+    } else if (managed.process.pid) {
       try {
         process.kill(-managed.process.pid, "SIGTERM");
       } catch {
