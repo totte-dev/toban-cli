@@ -120,6 +120,7 @@ export class ChatPoller {
           console.log(`[chat] Replied: "${reply.slice(0, 60)}${reply.length > 60 ? "..." : ""}"`);
         } catch (err) {
           console.error(`[chat] Failed to generate/post reply:`, err);
+          await this.postReply("Sorry, something went wrong. Please try again or wait a moment.").catch(() => {});
         }
 
         // Track this message as processed
@@ -190,6 +191,25 @@ export class ChatPoller {
   }
 
   /**
+   * Generate a reply for a WebSocket message (no message history needed).
+   * Fetches recent history from API for context.
+   */
+  async generateReplyForWs(content: string): Promise<string> {
+    const messages = await this.fetchMessages();
+    const fakeMsg: Message = {
+      id: `ws-${Date.now()}`,
+      from: "user",
+      to: "manager",
+      content,
+      read: false,
+      created_at: new Date().toISOString(),
+    };
+    // Append the current message for context building
+    const allMessages = [...messages, fakeMsg];
+    return this.generateReply(fakeMsg, allMessages);
+  }
+
+  /**
    * Generate reply using Claude Code CLI (no API key needed).
    * Uses the user's existing Claude Code login session.
    */
@@ -241,8 +261,8 @@ export class ChatPoller {
 
       const timer = setTimeout(() => {
         child.kill("SIGTERM");
-        reject(new Error("Claude CLI timed out after 60s"));
-      }, 60_000);
+        reject(new Error("Claude CLI timed out after 180s"));
+      }, 180_000);
 
       child.on("error", (err: NodeJS.ErrnoException) => {
         clearTimeout(timer);

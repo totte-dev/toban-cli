@@ -22,6 +22,7 @@ import {
 } from "./api-client.js";
 import { buildAgentPrompt } from "./prompt.js";
 import { ChatPoller } from "./chat-poller.js";
+import { WsChatServer } from "./ws-server.js";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -43,6 +44,7 @@ interface CliArgs {
   llmBaseUrl?: string;
   llmApiKey?: string;
   noDocker: boolean;
+  wsPort: number;
 }
 
 function printUsage(): void {
@@ -62,6 +64,7 @@ Options:
   --llm-base-url <url>  OpenAI-compatible API base URL (or LLM_BASE_URL env)
   --llm-api-key <key>   LLM provider API key (or LLM_API_KEY env)
   --no-docker           Disable Docker isolation (run agents directly on host)
+  --ws-port <port>      WebSocket server port for direct chat (default: 4000, 0=auto)
   --help                Show this help
 
 LLM Provider Examples:
@@ -123,6 +126,7 @@ function parseArgs(argv: string[]): CliArgs {
     llmBaseUrl: getFlag("--llm-base-url") ?? process.env.LLM_BASE_URL,
     llmApiKey: getFlag("--llm-api-key") ?? process.env.LLM_API_KEY,
     noDocker: args.includes("--no-docker"),
+    wsPort: parseInt(getFlag("--ws-port") ?? "4000", 10),
   };
 }
 
@@ -243,9 +247,9 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     console.log(`[toban] Sprint start API unavailable, falling back to task fetch: ${err}`);
   }
 
-  // Start the manager chat poller
-  // Uses Claude Code CLI by default (no API key needed).
-  // Falls back to OpenAI-compatible API if LLM_BASE_URL is configured.
+  // Start the manager chat system:
+  // 1. WebSocket server for direct browser-to-CLI communication (instant)
+  // 2. API polling as fallback when WS is not connected
   let chatPoller: ChatPoller | null = null;
   chatPoller = new ChatPoller({
     apiUrl: cliArgs.apiUrl,
@@ -256,6 +260,25 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   });
   chatPoller.start();
   activeChatPoller = chatPoller;
+
+  // Start WebSocket server for direct chat
+  let wsServer: WsChatServer | null = null;
+  try {
+    wsServer = new WsChatServer({
+      port: cliArgs.wsPort,
+      apiKey: cliArgs.apiKey,
+      apiUrl: cliArgs.apiUrl,
+      onMessage: (content) => chatPoller!.generateReplyForWs(content),
+    });
+    const actualPort = await wsServer.start();
+    await wsServer.registerPort();
+    activeWsServer = wsServer;
+    console.log(`[ws] Dashboard can connect at ws://127.0.0.1:${actualPort}?token=<api-key>`);
+  } catch (err) {
+    console.warn(`[ws] WebSocket server failed to start: ${err}`);
+    console.warn("[ws] Chat will use API polling only");
+  }
+
   if (!cliArgs.llmBaseUrl) {
     console.log("[chat] Using Claude Code CLI for chat (no LLM_BASE_URL set)");
   } else {
@@ -414,12 +437,17 @@ function waitForAgent(runner: AgentRunner, agentName: string): Promise<void> {
 let shuttingDown = false;
 
 let activeChatPoller: ChatPoller | null = null;
+let activeWsServer: WsChatServer | null = null;
 
 function setupShutdownHandlers(runner: AgentRunner): void {
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n[toban] Shutting down...`);
+
+    if (activeWsServer) {
+      activeWsServer.stop().catch(() => {});
+    }
 
     if (activeChatPoller) {
       activeChatPoller.stop();
