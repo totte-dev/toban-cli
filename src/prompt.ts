@@ -5,6 +5,12 @@
  * so the agent knows its role, task, and how to report back.
  */
 
+export interface RepoInfo {
+  name: string;
+  path: string;
+  description?: string;
+}
+
 export interface PromptContext {
   /** Agent role name (e.g. "builder", "cloud-engineer") */
   role: string;
@@ -26,6 +32,10 @@ export interface PromptContext {
   apiKey: string;
   /** Pre-built playbook rules block */
   playbookRules?: string;
+  /** Target repository name for this task */
+  targetRepo?: string;
+  /** Available repositories for this agent */
+  repositories?: RepoInfo[];
 }
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -125,9 +135,21 @@ export function buildAgentPrompt(ctx: PromptContext): string {
   const securityRules = buildSecurityRules(ctx.role);
   const playbookBlock = ctx.playbookRules ?? "";
 
+  let repoBlock = "";
+  if (ctx.repositories && ctx.repositories.length > 0) {
+    const rows = ctx.repositories.map(
+      (r) => `| ${r.name} | ${r.path} | ${r.description || ""} |`
+    );
+    repoBlock = `\n\n## Available Repositories\n| Repository | Path | Description |\n|---|---|---|\n${rows.join("\n")}`;
+  }
+
+  const targetRepoLine = ctx.targetRepo
+    ? `\nTarget Repository: ${ctx.targetRepo}`
+    : "";
+
   return `${roleDesc}${projectLine}${specBlock}
-${securityRules}${playbookBlock}
-Your task: ${ctx.taskTitle}${priorityLine}${descriptionBlock}
+${securityRules}${playbookBlock}${repoBlock}
+Your task: ${ctx.taskTitle}${priorityLine}${targetRepoLine}${descriptionBlock}
 
 Report progress to the Toban API:
 - API URL: ${ctx.apiUrl}
@@ -136,8 +158,13 @@ Report progress to the Toban API:
 - Use Authorization header: Bearer ${ctx.apiKey}
 
 Work in this directory. When done, commit your changes with a descriptive message.
+When completing a task:
+1. Commit your changes: git add -A && git commit -m "<descriptive message>"
+2. Push the branch: git push origin HEAD
+3. Create a PR: gh pr create --title "<task title>" --body "<summary of changes>"
+4. Update the task with the PR URL: curl -s -X PATCH ${ctx.apiUrl}/api/v1/tasks/${ctx.taskId} -H "Content-Type: application/json" -H "Authorization: Bearer ${ctx.apiKey}" -d '{"branch":"<pr-url>","status":"review"}'
 
-When completing a task, write a brief retrospective as a JSON comment to stdout on a new line in this format:
+Write a brief retrospective as a JSON comment to stdout on a new line in this format:
 RETRO_JSON:{"went_well":"what went well","to_improve":"what could be improved","suggested_tasks":[{"title":"task title","priority":"p1"}]}
 This helps the team improve in future sprints.`;
 }

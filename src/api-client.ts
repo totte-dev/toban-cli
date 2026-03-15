@@ -11,6 +11,7 @@ export interface Task {
   priority: string | number;
   owner?: string;
   agent?: string;
+  target_repo?: string | null;
   [key: string]: unknown;
 }
 
@@ -36,6 +37,15 @@ export interface WorkspaceInfo {
   terminal_emulator: string | null;
 }
 
+export interface WorkspaceRepository {
+  id: string;
+  repo_path: string;
+  repo_name: string;
+  repo_url: string;
+  description: string;
+  access_agents: string[];
+}
+
 export interface RetroCommentInput {
   agent_name: string;
   went_well?: string;
@@ -55,6 +65,7 @@ export interface ApiClient {
   fetchWorkspace(): Promise<WorkspaceInfo>;
   fetchGitToken(): Promise<{ token: string; repo: string | null } | null>;
   fetchTasks(): Promise<Task[]>;
+  fetchRepositories(): Promise<WorkspaceRepository[]>;
   startSprint(): Promise<SprintStartResult>;
   updateTask(id: string, data: Partial<Task>): Promise<void>;
   updateAgent(data: {
@@ -90,6 +101,17 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       }
       const data = (await res.json()) as { tasks?: Task[] } | Task[];
       return Array.isArray(data) ? data : data.tasks ?? [];
+    },
+
+    async fetchRepositories(): Promise<WorkspaceRepository[]> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/workspace/repositories`, { headers });
+        if (!res.ok) return [];
+        const data = (await res.json()) as WorkspaceRepository[];
+        return Array.isArray(data) ? data : [];
+      } catch {
+        return [];
+      }
     },
 
     async startSprint(): Promise<SprintStartResult> {

@@ -19,8 +19,9 @@ import {
   createApiClient,
   type Task,
   type SprintStartResult,
+  type WorkspaceRepository,
 } from "./api-client.js";
-import { buildAgentPrompt } from "./prompt.js";
+import { buildAgentPrompt, type RepoInfo } from "./prompt.js";
 import { ChatPoller } from "./chat-poller.js";
 import { WsChatServer } from "./ws-server.js";
 import { execSync } from "node:child_process";
@@ -128,6 +129,105 @@ function parseArgs(argv: string[]): CliArgs {
     noDocker: args.includes("--no-docker"),
     wsPort: parseInt(getFlag("--ws-port") ?? "4000", 10),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Workspace repo management
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensure a repository is cloned/updated for the given agent.
+ * Returns the path to the repo working directory.
+ *
+ * Structure: .toban/<agent-name>/<repo-name>/
+ */
+function ensureAgentRepo(
+  tobanHome: string,
+  agentName: string,
+  repo: WorkspaceRepository,
+  gitToken?: string
+): string {
+  const agentDir = join(tobanHome, agentName);
+  const repoDir = join(agentDir, repo.repo_name);
+
+  mkdirSync(agentDir, { recursive: true });
+
+  if (existsSync(join(repoDir, ".git"))) {
+    // Existing repo: fetch + reset to main
+    console.log(`[workspace] Updating ${repo.repo_name} for ${agentName}`);
+    try {
+      execSync("git fetch origin", { cwd: repoDir, stdio: "pipe" });
+      execSync("git checkout main 2>/dev/null || git checkout master", {
+        cwd: repoDir,
+        stdio: "pipe",
+        shell: "/bin/sh",
+      });
+      execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[workspace] git pull failed for ${repo.repo_name}: ${msg}`);
+    }
+  } else {
+    // Clone the repo
+    let cloneUrl = repo.repo_url || repo.repo_path;
+    if (gitToken && cloneUrl.includes("github.com")) {
+      // Use token-authenticated URL
+      const repoPath = cloneUrl
+        .replace(/^https?:\/\/github\.com\//, "")
+        .replace(/\.git$/, "");
+      cloneUrl = `https://x-access-token:${gitToken}@github.com/${repoPath}.git`;
+      console.log(`[workspace] Cloning ${repo.repo_name} (authenticated)`);
+    } else if (!cloneUrl.startsWith("http") && !cloneUrl.startsWith("git@")) {
+      // Assume GitHub org/repo format
+      if (gitToken) {
+        cloneUrl = `https://x-access-token:${gitToken}@github.com/${cloneUrl}.git`;
+      } else {
+        cloneUrl = `https://github.com/${cloneUrl}.git`;
+      }
+      console.log(`[workspace] Cloning ${repo.repo_name}`);
+    } else {
+      console.log(`[workspace] Cloning ${repo.repo_name}`);
+    }
+
+    execSync(`git clone "${cloneUrl}" "${repoDir}"`, { stdio: "pipe" });
+  }
+
+  return repoDir;
+}
+
+/**
+ * Resolve the working directory for a task.
+ * If the task has a target_repo, ensure that repo is cloned for the agent.
+ * Otherwise, use the default working directory.
+ */
+function resolveTaskWorkingDir(
+  task: Task,
+  repos: WorkspaceRepository[],
+  tobanHome: string,
+  agentName: string,
+  defaultWorkingDir: string,
+  gitToken?: string
+): string {
+  if (!task.target_repo) return defaultWorkingDir;
+
+  const repo = repos.find(
+    (r) => r.repo_name === task.target_repo || r.id === task.target_repo
+  );
+  if (!repo) {
+    console.warn(
+      `[workspace] target_repo "${task.target_repo}" not found in workspace repositories, using default`
+    );
+    return defaultWorkingDir;
+  }
+
+  try {
+    return ensureAgentRepo(tobanHome, agentName, repo, gitToken);
+  } catch (err) {
+    console.error(
+      `[workspace] Failed to setup repo ${repo.repo_name}: ${err}`
+    );
+    return defaultWorkingDir;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +420,28 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     return;
   }
 
+  // Fetch workspace repositories for per-task repo resolution
+  let repos: WorkspaceRepository[] = [];
+  try {
+    repos = await api.fetchRepositories();
+    if (repos.length > 0) {
+      console.log(`[toban] Found ${repos.length} workspace repositor${repos.length === 1 ? "y" : "ies"}`);
+    }
+  } catch (err) {
+    console.warn(`[toban] Could not fetch repositories: ${err}`);
+  }
+
+  // Get git token for repo cloning
+  let gitToken: string | undefined;
+  try {
+    const creds = await api.fetchGitToken();
+    if (creds?.token) gitToken = creds.token;
+  } catch {
+    // Non-fatal
+  }
+
+  const tobanHome = join(homedir(), ".toban");
+
   console.log(`[toban] Found ${todoTasks.length} task(s) to process`);
 
   for (const task of todoTasks) {
@@ -343,6 +465,28 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       activity: `Task ${task.id}: ${task.title}`,
     });
 
+    // Resolve the working directory for this task
+    const taskWorkingDir = resolveTaskWorkingDir(
+      task,
+      repos,
+      tobanHome,
+      cliArgs.agentName,
+      workingDir,
+      gitToken
+    );
+
+    // Build repository info for prompt
+    const repoInfoList: RepoInfo[] = repos
+      .filter((r) => {
+        const agents = r.access_agents ?? [];
+        return agents.length === 0 || agents.includes(task.owner ?? cliArgs.agentName);
+      })
+      .map((r) => ({
+        name: r.repo_name,
+        path: join(tobanHome, cliArgs.agentName, r.repo_name),
+        description: r.description,
+      }));
+
     const prompt = buildAgentPrompt({
       role: task.owner ?? "builder",
       projectName: workspaceName,
@@ -354,6 +498,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       apiUrl: cliArgs.apiUrl,
       apiKey: cliArgs.apiKey,
       playbookRules,
+      targetRepo: task.target_repo ?? undefined,
+      repositories: repoInfoList.length > 0 ? repoInfoList : undefined,
     });
 
     try {
@@ -361,7 +507,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         name: `${cliArgs.agentName}-${task.id.slice(0, 8)}`,
         type: "claude" as const,
         taskId: task.id,
-        workingDir,
+        workingDir: taskWorkingDir,
         branch: cliArgs.baseBranch,
         apiKey: cliArgs.apiKey,
         apiUrl: cliArgs.apiUrl,
