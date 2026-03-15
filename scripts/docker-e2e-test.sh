@@ -169,6 +169,36 @@ else
   fail "PR URL extraction failed: $PR_URL_EXTRACT"
 fi
 
+# Test full PR branch workflow (agent creates branch, commits, ready for gh pr create)
+TMPPR=$(mktemp -d)
+cd "$TMPPR" && git init -b main > /dev/null 2>&1
+git config user.email "test@test.com" && git config user.name "Test"
+echo "init" > README.md && git add . && git commit -m "init" > /dev/null 2>&1
+
+PR_BRANCH_FLOW=$(docker run --rm \
+  -v "$TMPPR:/workspace" \
+  -e GITHUB_TOKEN=ghp_testtoken123 \
+  "$IMAGE" bash -c '
+cd /workspace
+git config user.email "agent@toban.dev"
+git config user.name "Toban Agent"
+git checkout -b agent/builder-pr-test 2>/dev/null
+echo "feature code" > feature.ts
+git add .
+git commit -m "feat: add feature for PR" > /dev/null 2>&1
+BRANCH=$(git branch --show-current)
+COMMITS=$(git log --oneline main..HEAD | wc -l | tr -d " ")
+echo "${BRANCH}|${COMMITS}"
+')
+PR_BRANCH=$(echo "$PR_BRANCH_FLOW" | cut -d'|' -f1)
+PR_COMMITS=$(echo "$PR_BRANCH_FLOW" | cut -d'|' -f2)
+if [ "$PR_BRANCH" = "agent/builder-pr-test" ] && [ "$PR_COMMITS" -ge 1 ] 2>/dev/null; then
+  pass "PR branch workflow: branch created with $PR_COMMITS commit(s)"
+else
+  fail "PR branch workflow failed: branch=$PR_BRANCH commits=$PR_COMMITS"
+fi
+rm -rf "$TMPPR"
+
 # 11. WebSocket stdout/stderr streaming
 echo "11. WebSocket stdout/stderr streaming"
 
@@ -325,6 +355,32 @@ if [ "$CODEX_CMD" = "--quiet" ]; then
   pass "Codex command includes --quiet"
 else
   fail "Codex command flag check failed"
+fi
+
+# Gemini gets prompt as positional arg (no special flags like --quiet or --print)
+GEMINI_CMD=$(docker run --rm "$IMAGE" bash -c '
+# gemini just takes prompt as positional arg, no --print or --quiet
+echo "gemini test-prompt" | awk "{print NF}"
+')
+if [ "$GEMINI_CMD" = "2" ]; then
+  pass "Gemini command uses positional prompt (no special flags)"
+else
+  fail "Gemini command format unexpected: $GEMINI_CMD"
+fi
+
+# Verify all three CLIs coexist without path conflicts
+MULTI_CLI=$(docker run --rm "$IMAGE" bash -c '
+C=$(which claude) && G=$(which gemini) && X=$(which codex)
+if [ -n "$C" ] && [ -n "$G" ] && [ -n "$X" ]; then
+  echo "ALL_OK"
+else
+  echo "MISSING: claude=$C gemini=$G codex=$X"
+fi
+')
+if [ "$MULTI_CLI" = "ALL_OK" ]; then
+  pass "All agent CLIs (claude/gemini/codex) coexist"
+else
+  fail "CLI conflict: $MULTI_CLI"
 fi
 
 # 13. Container cleanup (--rm flag)

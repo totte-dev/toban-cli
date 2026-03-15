@@ -133,6 +133,15 @@ function buildCommand(config: AgentConfig): { cmd: string; args: string[] } {
         ],
       };
 
+    case "gemini":
+      return {
+        cmd: "gemini",
+        args: [
+          ...(config.prompt ? [config.prompt] : []),
+          ...(config.args ?? []),
+        ],
+      };
+
     case "custom":
       if (!config.command) {
         throw new Error("Custom agent type requires a command");
@@ -170,6 +179,8 @@ export function spawnAgent(
       TOBAN_API_URL: config.apiUrl,
       TOBAN_AGENT_NAME: config.name,
       TOBAN_TASK_ID: config.taskId,
+      // Inject project secrets directly as env vars (no prefix in non-Docker mode)
+      ...(config.secrets ?? {}),
     },
     detached: true,
   });

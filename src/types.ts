@@ -1,4 +1,4 @@
-export type AgentType = "claude" | "cursor" | "codex" | "custom";
+export type AgentType = "claude" | "cursor" | "codex" | "gemini" | "custom";
 
 export interface AgentConfig {
   /** Agent display name */
@@ -27,6 +27,8 @@ export interface AgentConfig {
   sprintNumber?: number;
   /** Full command template from provider config (e.g. "claude --model claude-sonnet-4-20250514") */
   commandTemplate?: string;
+  /** Project secrets to inject into the agent environment */
+  secrets?: Record<string, string>;
 }
 
 export type AgentStatus = "spawning" | "running" | "completed" | "failed" | "stopped";
