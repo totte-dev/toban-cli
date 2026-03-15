@@ -129,6 +129,23 @@ function buildAgentCommand(config: AgentConfig): { cmd: string; args: string[] }
           ...(config.prompt ? [config.prompt] : []),
         ],
       };
+    } else if (cmdBase === "codex") {
+      return {
+        cmd,
+        args: [
+          ...templateArgs,
+          "--quiet",
+          ...(config.prompt ? ["--prompt", config.prompt] : []),
+        ],
+      };
+    } else if (cmdBase === "gemini") {
+      return {
+        cmd,
+        args: [
+          ...templateArgs,
+          ...(config.prompt ? [config.prompt] : []),
+        ],
+      };
     }
     return { cmd, args: [...templateArgs, ...(config.prompt ? [config.prompt] : [])] };
   }
