@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "bash scripts/docker-e2e-test.sh",
+    "test:e2e:mock": "bash scripts/mock-e2e-test.sh",
     "test:ws": "tsx scripts/ws-integration-test.ts"
   },
   "keywords": [
