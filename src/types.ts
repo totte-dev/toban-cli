@@ -25,6 +25,8 @@ export interface AgentConfig {
   parentAgent?: string;
   /** Sprint number for retro comments */
   sprintNumber?: number;
+  /** Full command template from provider config (e.g. "claude --model claude-sonnet-4-20250514") */
+  commandTemplate?: string;
 }
 
 export type AgentStatus = "spawning" | "running" | "completed" | "failed" | "stopped";
