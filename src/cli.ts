@@ -40,6 +40,8 @@ interface CliArgs {
   agentName: string;
   baseBranch: string;
   model: string;
+  llmBaseUrl?: string;
+  llmApiKey?: string;
 }
 
 function printUsage(): void {
@@ -50,13 +52,23 @@ Usage:
   toban start [options]
 
 Options:
-  --api-url <url>     Toban API base URL (or TOBAN_API_URL env)
-  --api-key <key>     API key (or TOBAN_API_KEY env)
-  --working-dir <dir> Repository root (default: cwd)
-  --agent-name <name> Agent name for status reporting (default: hostname)
-  --branch <branch>   Base branch (default: main)
-  --model <model>     AI model for manager chat (default: claude-sonnet-4-20250514)
-  --help              Show this help
+  --api-url <url>       Toban API base URL (or TOBAN_API_URL env)
+  --api-key <key>       API key (or TOBAN_API_KEY env)
+  --working-dir <dir>   Repository root (default: cwd)
+  --agent-name <name>   Agent name for status reporting (default: hostname)
+  --branch <branch>     Base branch (default: main)
+  --model <model>       AI model for manager chat (default: claude-sonnet-4-20250514)
+  --llm-base-url <url>  OpenAI-compatible API base URL (or LLM_BASE_URL env)
+  --llm-api-key <key>   LLM provider API key (or LLM_API_KEY env)
+  --help                Show this help
+
+LLM Provider Examples:
+  Anthropic: --llm-base-url https://api.anthropic.com/v1 --model claude-sonnet-4-20250514
+  OpenAI:    --llm-base-url https://api.openai.com/v1 --model gpt-4o
+  Gemini:    --llm-base-url https://generativelanguage.googleapis.com/v1beta/openai --model gemini-2.0-flash
+  Local:     --llm-base-url http://localhost:11434/v1 --model llama3
+
+If --llm-base-url is not set, uses Claude Code CLI (no API key needed).
 `);
 }
 
@@ -106,6 +118,8 @@ function parseArgs(argv: string[]): CliArgs {
     agentName: getFlag("--agent-name") ?? "manager",
     baseBranch: getFlag("--branch") ?? "main",
     model: getFlag("--model") ?? "claude-sonnet-4-20250514",
+    llmBaseUrl: getFlag("--llm-base-url") ?? process.env.LLM_BASE_URL,
+    llmApiKey: getFlag("--llm-api-key") ?? process.env.LLM_API_KEY,
   };
 }
 
@@ -229,19 +243,21 @@ async function runLoop(cliArgs: CliArgs): Promise<void> {
 
   // Start the manager chat poller
   // Uses Claude Code CLI by default (no API key needed).
-  // Falls back to Anthropic API if ANTHROPIC_API_KEY is set.
+  // Falls back to OpenAI-compatible API if LLM_BASE_URL is configured.
   let chatPoller: ChatPoller | null = null;
-  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   chatPoller = new ChatPoller({
     apiUrl: cliArgs.apiUrl,
     apiKey: cliArgs.apiKey,
-    anthropicApiKey: anthropicApiKey || undefined,
+    llmBaseUrl: cliArgs.llmBaseUrl,
+    llmApiKey: cliArgs.llmApiKey,
     model: cliArgs.model,
   });
   chatPoller.start();
   activeChatPoller = chatPoller;
-  if (!anthropicApiKey) {
-    console.log("[chat] Using Claude Code CLI for chat (no ANTHROPIC_API_KEY set)");
+  if (!cliArgs.llmBaseUrl) {
+    console.log("[chat] Using Claude Code CLI for chat (no LLM_BASE_URL set)");
+  } else {
+    console.log(`[chat] Using OpenAI-compatible API: ${cliArgs.llmBaseUrl}`);
   }
 
   let tasks: Task[];

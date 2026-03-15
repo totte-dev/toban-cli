@@ -3,7 +3,7 @@
  *
  * Watches the manager channel for new user messages, builds context
  * from workspace/sprint/tasks, and responds using Claude Code CLI
- * (falls back to Anthropic API if ANTHROPIC_API_KEY is set).
+ * or any OpenAI-compatible API endpoint (Anthropic, Google, OpenAI, etc.).
  */
 
 import { spawn } from "node:child_process";
@@ -39,7 +39,10 @@ interface TaskSummary {
 export interface ChatPollerOptions {
   apiUrl: string;
   apiKey: string;
-  anthropicApiKey?: string;
+  /** OpenAI-compatible base URL (e.g. https://api.openai.com/v1, https://generativelanguage.googleapis.com/v1beta/openai) */
+  llmBaseUrl?: string;
+  /** API key for the LLM provider */
+  llmApiKey?: string;
   model?: string;
   pollIntervalMs?: number;
 }
@@ -47,7 +50,8 @@ export interface ChatPollerOptions {
 export class ChatPoller {
   private apiUrl: string;
   private apiKey: string;
-  private anthropicApiKey?: string;
+  private llmBaseUrl?: string;
+  private llmApiKey?: string;
   private model: string;
   private pollIntervalMs: number;
   private lastSeenId: string | null = null;
@@ -60,11 +64,12 @@ export class ChatPoller {
   constructor(options: ChatPollerOptions) {
     this.apiUrl = options.apiUrl;
     this.apiKey = options.apiKey;
-    this.anthropicApiKey = options.anthropicApiKey;
+    this.llmBaseUrl = options.llmBaseUrl;
+    this.llmApiKey = options.llmApiKey;
     this.model = options.model ?? "claude-sonnet-4-20250514";
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
-    // Use Claude CLI by default, fall back to Anthropic API if key is provided
-    this.useClaudeCli = !options.anthropicApiKey;
+    // Use Claude CLI by default, fall back to OpenAI-compatible API if configured
+    this.useClaudeCli = !options.llmBaseUrl || !options.llmApiKey;
   }
 
   /**
@@ -262,7 +267,8 @@ export class ChatPoller {
   }
 
   /**
-   * Generate reply using Anthropic API directly (requires ANTHROPIC_API_KEY).
+   * Generate reply using OpenAI-compatible /v1/chat/completions endpoint.
+   * Works with any provider: Anthropic, Google, OpenAI, local models, etc.
    */
   private async generateReplyViaApi(
     userMessage: Message,
@@ -273,34 +279,38 @@ export class ChatPoller {
     const systemPrompt = await this.buildSystemPrompt(isFirstContact);
     const conversationHistory = this.buildConversationHistory(allMessages, userMessage);
 
+    // Build OpenAI-compatible messages array with system prompt
+    const messages = [
+      { role: "system" as const, content: systemPrompt },
+      ...conversationHistory,
+    ];
+
     const body = {
       model: this.model,
       max_tokens: 1024,
-      system: systemPrompt,
-      messages: conversationHistory,
+      messages,
     };
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const baseUrl = this.llmBaseUrl!.replace(/\/$/, "");
+    const res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
-        "x-api-key": this.anthropicApiKey!,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
+        Authorization: `Bearer ${this.llmApiKey!}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
     });
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`Anthropic API error ${res.status}: ${errText}`);
+      throw new Error(`LLM API error ${res.status}: ${errText}`);
     }
 
     const data = (await res.json()) as {
-      content: Array<{ type: string; text?: string }>;
+      choices: Array<{ message: { content: string } }>;
     };
 
-    const textBlock = data.content.find((c) => c.type === "text");
-    return textBlock?.text ?? "(no response)";
+    return data.choices?.[0]?.message?.content ?? "(no response)";
   }
 
   private async buildSystemPrompt(isFirstContact = true): Promise<string> {
@@ -457,7 +467,7 @@ Help the user with sprint management. Propose the next action based on task stat
       }
     }
 
-    // Anthropic API requires messages to start with "user" role
+    // OpenAI-compatible APIs require messages to start with "user" role
     while (history.length > 0 && history[0].role !== "user") {
       history.shift();
     }
