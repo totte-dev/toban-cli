@@ -72,7 +72,8 @@ export function buildCommand(config: AgentConfig): CommandSpec {
         cmd,
         args: [
           ...templateArgs,
-          ...(config.prompt ? [config.prompt] : []),
+          "-y",
+          ...(config.prompt ? ["-p", config.prompt] : []),
         ],
       };
     } else {
@@ -119,7 +120,8 @@ export function buildCommand(config: AgentConfig): CommandSpec {
       return {
         cmd: "gemini",
         args: [
-          ...(config.prompt ? [config.prompt] : []),
+          "-y",
+          ...(config.prompt ? ["-p", config.prompt] : []),
           ...(config.args ?? []),
         ],
       };
