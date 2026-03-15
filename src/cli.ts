@@ -24,6 +24,7 @@ import {
 import { buildAgentPrompt, type RepoInfo } from "./prompt.js";
 import { ChatPoller } from "./chat-poller.js";
 import { WsChatServer } from "./ws-server.js";
+import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -97,11 +98,11 @@ function parseArgs(argv: string[]): CliArgs {
   const apiKey = getFlag("--api-key") ?? process.env.TOBAN_API_KEY;
 
   if (!apiUrl) {
-    console.error("Error: --api-url or TOBAN_API_URL is required");
+    ui.error("--api-url or TOBAN_API_URL is required");
     process.exit(1);
   }
   if (!apiKey) {
-    console.error("Error: --api-key or TOBAN_API_KEY is required");
+    ui.error("--api-key or TOBAN_API_KEY is required");
     process.exit(1);
   }
 
@@ -154,7 +155,7 @@ function ensureAgentRepo(
 
   if (existsSync(join(repoDir, ".git"))) {
     // Existing repo: fetch + reset to main
-    console.log(`[workspace] Updating ${repo.repo_name} for ${agentName}`);
+    ui.info(`Updating ${repo.repo_name} for ${agentName}`);
     try {
       execSync("git fetch origin", { cwd: repoDir, stdio: "pipe" });
       execSync("git checkout main 2>/dev/null || git checkout master", {
@@ -165,7 +166,7 @@ function ensureAgentRepo(
       execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[workspace] git pull failed for ${repo.repo_name}: ${msg}`);
+      ui.warn(`git pull failed for ${repo.repo_name}: ${msg}`);
     }
   } else {
     // Clone the repo
@@ -176,7 +177,7 @@ function ensureAgentRepo(
         .replace(/^https?:\/\/github\.com\//, "")
         .replace(/\.git$/, "");
       cloneUrl = `https://x-access-token:${gitToken}@github.com/${repoPath}.git`;
-      console.log(`[workspace] Cloning ${repo.repo_name} (authenticated)`);
+      ui.info(`Cloning ${repo.repo_name} (authenticated)`);
     } else if (!cloneUrl.startsWith("http") && !cloneUrl.startsWith("git@")) {
       // Assume GitHub org/repo format
       if (gitToken) {
@@ -184,9 +185,9 @@ function ensureAgentRepo(
       } else {
         cloneUrl = `https://github.com/${cloneUrl}.git`;
       }
-      console.log(`[workspace] Cloning ${repo.repo_name}`);
+      ui.info(`Cloning ${repo.repo_name}`);
     } else {
-      console.log(`[workspace] Cloning ${repo.repo_name}`);
+      ui.info(`Cloning ${repo.repo_name}`);
     }
 
     execSync(`git clone "${cloneUrl}" "${repoDir}"`, { stdio: "pipe" });
@@ -214,18 +215,14 @@ function resolveTaskWorkingDir(
     (r) => r.repo_name === task.target_repo || r.id === task.target_repo
   );
   if (!repo) {
-    console.warn(
-      `[workspace] target_repo "${task.target_repo}" not found in workspace repositories, using default`
-    );
+    ui.warn(`target_repo "${task.target_repo}" not found in workspace repositories, using default`);
     return defaultWorkingDir;
   }
 
   try {
     return ensureAgentRepo(tobanHome, agentName, repo, gitToken);
   } catch (err) {
-    console.error(
-      `[workspace] Failed to setup repo ${repo.repo_name}: ${err}`
-    );
+    ui.error(`Failed to setup repo ${repo.repo_name}: ${err}`);
     return defaultWorkingDir;
   }
 }
@@ -237,32 +234,35 @@ function resolveTaskWorkingDir(
 async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   const api = createApiClient(cliArgs.apiUrl, cliArgs.apiKey);
 
-  console.log(`[toban] Starting agent runner`);
-  console.log(`[toban]   API:     ${cliArgs.apiUrl}`);
-  console.log(`[toban]   Agent:   ${cliArgs.agentName}`);
-  console.log(`[toban]   Branch:  ${cliArgs.baseBranch}`);
+  ui.intro();
 
+  const s = ui.createSpinner();
+
+  s.start("Authenticating...");
   await api.updateAgent({
     name: cliArgs.agentName,
     status: "online",
     activity: "Starting up",
   });
+  s.stop("Authenticated");
 
   let workingDir = cliArgs.workingDir;
   let workspaceSpec: string | undefined;
   let workspaceName: string | undefined;
   let playbookRules: string | undefined;
 
+  s.start("Fetching workspace...");
   try {
     const ws = await api.fetchWorkspace();
     workspaceSpec = (ws as unknown as Record<string, unknown>).spec as string | undefined || undefined;
     workspaceName = ws.name || undefined;
+    s.stop(workspaceName ? `Workspace: ${workspaceName}` : "Workspace loaded");
 
     // Fetch playbook rules (includes git strategy rules + security rules)
     try {
       playbookRules = await api.fetchPlaybookPrompt() || undefined;
     } catch (pbErr) {
-      console.warn(`[toban] Could not fetch playbook rules: ${pbErr}`);
+      ui.warn(`Could not fetch playbook rules: ${pbErr}`);
     }
 
     if (!cliArgs.explicitWorkingDir) {
@@ -274,50 +274,50 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         const gitCreds = await api.fetchGitToken();
 
         if (existsSync(join(repoDir, ".git"))) {
-          console.log(`[toban] Pulling latest for ${ws.github_repo} in ${repoDir}`);
+          s.start(`Pulling latest for ${ws.github_repo}...`);
           try {
             execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
+            s.stop(`Repo updated: ${ws.github_repo}`);
           } catch (pullErr) {
             const pullMsg = pullErr instanceof Error ? pullErr.message : String(pullErr);
-            console.warn(`[toban] git pull failed, continuing with existing checkout: ${pullMsg}`);
+            s.stop(`Repo: ${ws.github_repo} (pull failed, using existing)`);
+            ui.warn(`git pull failed: ${pullMsg}`);
           }
         } else {
-          console.log(`[toban] Cloning ${ws.github_repo} to ${repoDir}`);
+          s.start(`Cloning ${ws.github_repo}...`);
           mkdirSync(tobanHome, { recursive: true });
 
           // Build clone URL with token authentication
           let cloneUrl: string;
           if (gitCreds?.token) {
-            // Use token-authenticated URL: https://x-access-token:<token>@github.com/org/repo.git
             const repoPath = ws.github_repo.replace(/^https?:\/\/github\.com\//, "");
             cloneUrl = `https://x-access-token:${gitCreds.token}@github.com/${repoPath}.git`;
-            console.log(`[toban] Using API-provided GitHub token for clone`);
           } else {
-            // Fallback to unauthenticated (relies on local git credentials)
             const repoUrl = ws.github_repo.startsWith("https://")
               ? ws.github_repo
               : `https://github.com/${ws.github_repo}`;
             cloneUrl = `${repoUrl}.git`;
-            console.log(`[toban] No GitHub token available, using local git credentials`);
           }
 
           execSync(
             `git clone ${cloneUrl} "${repoDir}"`,
             { stdio: "pipe" }
           );
+          s.stop(`Repo cloned: ${ws.github_repo}`);
         }
 
         workingDir = repoDir;
-        console.log(`[toban]   Repo:    ${workingDir} (auto-cloned)`);
+        ui.workspaceInfo(undefined, workingDir, true);
       } else {
-        console.log(`[toban]   Repo:    ${workingDir} (no GitHub repo configured)`);
+        ui.workspaceInfo(undefined, workingDir);
       }
     } else {
-      console.log(`[toban]   Repo:    ${workingDir}`);
+      ui.workspaceInfo(undefined, workingDir);
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.log(`[toban] Workspace fetch/auto-clone failed, using working dir: ${workingDir}`, err);
+    s.stop("Workspace fetch failed");
+    ui.warn(`Using working dir: ${workingDir}`);
 
     // Notify user via chat if any git operation failed (clone, pull, auth)
     const isGitError =
@@ -332,7 +332,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       await api.sendMessage(
         "manager",
         "user",
-        `⚠️ Failed to set up repository. Please check access permissions and network.\n\nError: ${errMsg.slice(0, 200)}`
+        `Failed to set up repository. Please check access permissions and network.\n\nError: ${errMsg.slice(0, 200)}`
       );
     }
   }
@@ -340,16 +340,12 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   let sprintData: SprintStartResult | null = null;
   try {
     sprintData = await api.startSprint();
-    console.log(
-      `[toban] Sprint ${sprintData.sprint.number} started with ${sprintData.agents.length} agent(s) and ${sprintData.tasks.length} task(s)`
-    );
+    ui.sprintInfo(sprintData.sprint.number, sprintData.agents.length, sprintData.tasks.length);
   } catch (err) {
-    console.log(`[toban] Sprint start API unavailable, falling back to task fetch: ${err}`);
+    ui.warn(`Sprint API unavailable, falling back to task fetch`);
   }
 
-  // Start the manager chat system:
-  // 1. WebSocket server for direct browser-to-CLI communication (instant)
-  // 2. API polling as fallback when WS is not connected
+  // Start the manager chat system
   let chatPoller: ChatPoller | null = null;
   chatPoller = new ChatPoller({
     apiUrl: cliArgs.apiUrl,
@@ -363,6 +359,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
   // Start WebSocket server for direct chat
   let wsServer: WsChatServer | null = null;
+  let actualWsPort: number | undefined;
   try {
     wsServer = new WsChatServer({
       port: cliArgs.wsPort,
@@ -370,20 +367,22 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       apiUrl: cliArgs.apiUrl,
       onMessage: (content) => chatPoller!.generateReplyForWs(content),
     });
-    const actualPort = await wsServer.start();
+    actualWsPort = await wsServer.start();
     await wsServer.registerPort();
     activeWsServer = wsServer;
-    console.log(`[ws] Dashboard can connect at ws://127.0.0.1:${actualPort}?token=<api-key>`);
   } catch (err) {
-    console.warn(`[ws] WebSocket server failed to start: ${err}`);
-    console.warn("[ws] Chat will use API polling only");
+    ui.warn(`WebSocket server failed to start: ${err}`);
   }
 
-  if (!cliArgs.llmBaseUrl) {
-    console.log("[chat] Using Claude Code CLI for chat (no LLM_BASE_URL set)");
-  } else {
-    console.log(`[chat] Using OpenAI-compatible API: ${cliArgs.llmBaseUrl}`);
-  }
+  // Show connection info
+  ui.connectionInfo({
+    apiUrl: cliArgs.apiUrl,
+    agent: cliArgs.agentName,
+    branch: cliArgs.baseBranch,
+    docker: !cliArgs.noDocker,
+    wsPort: actualWsPort,
+    llmProvider: cliArgs.llmBaseUrl || "Claude Code CLI",
+  });
 
   let tasks: Task[];
   if (sprintData?.tasks && sprintData.tasks.length > 0) {
@@ -392,7 +391,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     try {
       tasks = await api.fetchTasks();
     } catch (err) {
-      console.error(`[toban] Failed to fetch tasks:`, err);
+      ui.error(`Failed to fetch tasks: ${err}`);
       await api.updateAgent({
         name: cliArgs.agentName,
         status: "error",
@@ -411,12 +410,13 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     });
 
   if (todoTasks.length === 0) {
-    console.log(`[toban] No tasks to work on. Reporting idle and exiting.`);
+    ui.info("No tasks to work on");
     await api.updateAgent({
       name: cliArgs.agentName,
       status: "idle",
       activity: "No tasks available",
     });
+    ui.outro("Idle — no tasks available");
     return;
   }
 
@@ -425,10 +425,10 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   try {
     repos = await api.fetchRepositories();
     if (repos.length > 0) {
-      console.log(`[toban] Found ${repos.length} workspace repositor${repos.length === 1 ? "y" : "ies"}`);
+      ui.info(`${repos.length} workspace repositor${repos.length === 1 ? "y" : "ies"} found`);
     }
   } catch (err) {
-    console.warn(`[toban] Could not fetch repositories: ${err}`);
+    ui.warn(`Could not fetch repositories: ${err}`);
   }
 
   // Get git token for repo cloning
@@ -442,20 +442,20 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
   const tobanHome = join(homedir(), ".toban");
 
-  console.log(`[toban] Found ${todoTasks.length} task(s) to process`);
+  ui.tasksSummary(todoTasks.length);
 
   for (const task of todoTasks) {
     if (shuttingDown) {
-      console.log(`[toban] Shutting down, skipping remaining tasks.`);
+      ui.warn("Shutting down, skipping remaining tasks");
       break;
     }
 
-    console.log(`[toban] Processing task: ${task.id} - ${task.title}`);
+    ui.step(`Starting task: ${task.title}`);
 
     try {
       await api.updateTask(task.id, { status: "in_progress" });
     } catch (err) {
-      console.error(`[toban] Failed to update task ${task.id}:`, err);
+      ui.error(`Failed to update task ${task.id}: ${err}`);
       continue;
     }
 
@@ -515,7 +515,12 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         parentAgent: cliArgs.agentName,
       };
 
-      console.log(`[toban] Spawning Claude Code agent for task ${task.id}`);
+      ui.agentSpawned({
+        agentName: agentConfig.name,
+        taskId: task.id,
+        taskTitle: task.title,
+        docker: !cliArgs.noDocker,
+      });
       const runningAgent = await runner.spawn(agentConfig);
 
       await waitForAgent(runner, agentConfig.name);
@@ -525,12 +530,10 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
       if (!agentReport) {
         if (runningAgent.status === "completed") {
-          console.log(`[toban] Task ${task.id} completed successfully`);
+          ui.taskResult(task.id, task.title, "completed");
           await api.updateTask(task.id, { status: "review" });
         } else if (runningAgent.status === "failed") {
-          console.log(
-            `[toban] Task ${task.id} failed (exit code: ${runningAgent.exitCode})`
-          );
+          ui.taskResult(task.id, task.title, "failed", `exit code: ${runningAgent.exitCode}`);
           await api.updateTask(task.id, { status: "todo" });
           const stderrSnippet = runningAgent.stderr.slice(-3).join("\n");
           await api.sendMessage(
@@ -539,12 +542,12 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
             `⚠️ Task "${task.title}" failed (exit code: ${runningAgent.exitCode}).\n\n${stderrSnippet ? `Error: ${stderrSnippet.slice(0, 300)}` : "Check CLI logs for details."}`
           );
         } else {
-          console.log(`[toban] Task ${task.id} finished (status: ${runningAgent.status})`);
+          ui.taskResult(task.id, task.title, "completed", `status: ${runningAgent.status}`);
           await api.updateTask(task.id, { status: "review" });
         }
       }
     } catch (err) {
-      console.error(`[toban] Error spawning agent for task ${task.id}:`, err);
+      ui.error(`Error spawning agent for task ${task.id}: ${err}`);
       await api.updateTask(task.id, { status: "todo" });
       const errMsg = err instanceof Error ? err.message : String(err);
       await api.sendMessage(
@@ -555,12 +558,12 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     }
   }
 
-  console.log(`[toban] All tasks processed. Reporting idle.`);
   await api.updateAgent({
     name: cliArgs.agentName,
     status: "idle",
     activity: "All tasks completed",
   });
+  ui.outro("All tasks processed — idle");
 }
 
 function waitForAgent(runner: AgentRunner, agentName: string): Promise<void> {
@@ -589,7 +592,7 @@ function setupShutdownHandlers(runner: AgentRunner): void {
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`\n[toban] Shutting down...`);
+    ui.warn("Shutting down...");
 
     if (activeWsServer) {
       activeWsServer.stop().catch(() => {});
@@ -601,12 +604,12 @@ function setupShutdownHandlers(runner: AgentRunner): void {
 
     const agents = runner.status();
     for (const agent of agents) {
-      console.log(`[toban] Stopping agent: ${agent.name}`);
+      ui.info(`Stopping agent: ${agent.name}`);
       runner.stop(agent.name);
     }
 
     setTimeout(() => {
-      console.log(`[toban] Goodbye.`);
+      ui.shutdown();
       process.exit(0);
     }, 3000);
   };
@@ -622,7 +625,7 @@ function setupShutdownHandlers(runner: AgentRunner): void {
 const cliArgs = parseArgs(process.argv);
 
 if (cliArgs.command !== "start") {
-  console.error(`Unknown command: ${cliArgs.command}`);
+  ui.error(`Unknown command: ${cliArgs.command}`);
   printUsage();
   process.exit(1);
 }
@@ -638,6 +641,6 @@ const runner = new AgentRunner({
 setupShutdownHandlers(runner);
 
 runLoop(cliArgs, runner).catch((err) => {
-  console.error(`[toban] Fatal error:`, err);
+  ui.error(`Fatal error: ${err}`);
   process.exit(1);
 });
