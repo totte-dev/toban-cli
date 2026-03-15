@@ -36,6 +36,8 @@ export interface PromptContext {
   targetRepo?: string;
   /** Available repositories for this agent */
   repositories?: RepoInfo[];
+  /** Pre-fetched API documentation for the agent */
+  apiDocs?: string;
 }
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -147,41 +149,12 @@ export function buildAgentPrompt(ctx: PromptContext): string {
     ? `\nTarget Repository: ${ctx.targetRepo}`
     : "";
 
+  const apiDocsBlock = ctx.apiDocs ?? "";
+
   return `${roleDesc}${projectLine}${specBlock}
 ${securityRules}${playbookBlock}${repoBlock}
 Your task: ${ctx.taskTitle}${priorityLine}${targetRepoLine}${descriptionBlock}
-
-## Toban API Reference
-// TODO: Fetch from GET /agents/:name/api-docs when available
-Base URL: ${ctx.apiUrl}/api/v1
-Authorization: Bearer ${ctx.apiKey}
-Use curl with: -H "Content-Type: application/json" -H "Authorization: Bearer ${ctx.apiKey}"
-
-### Task Management
-- PATCH /tasks/${ctx.taskId} — Update your task: {"status": "in_progress"} or {"status": "review"}
-- GET /tasks — List all tasks in workspace
-
-### Messaging (communicate with other agents and users)
-- GET /messages?channel=<agent_name> — Read messages from/to a specific agent
-- POST /messages — Send a message: {"to": "<agent_name>", "content": "...", "from": "${ctx.role}"}
-  Use messaging to:
-  - Ask another agent for input (e.g. ask strategist for requirements)
-  - Report blockers to the user: {"to": "user", "content": "Blocked: ..."}
-  - Coordinate with teammates on shared work
-
-### Memory (persist knowledge across sessions)
-- GET /agents/${ctx.role}/memories — Read your memories from previous sessions
-- PUT /agents/${ctx.role}/memories/<key> — Save a memory: {"content": "...", "type": "identity|feedback|project|reference", "version": <current_version>}
-  Save memories when you:
-  - Learn something important about the project
-  - Receive feedback or corrections from the user
-  - Discover patterns that future sessions should know
-  - Want to record a decision and its reasoning
-- DELETE /agents/${ctx.role}/memories/<key> — Remove outdated memory
-
-### Progress Reporting
-- POST /agents/${ctx.role}/progress — Report step-by-step progress: {"step": "...", "detail": "...", "percent": 50}
-
+${apiDocsBlock}
 Work in this directory. When done, commit your changes with a descriptive message.
 
 When completing a task:

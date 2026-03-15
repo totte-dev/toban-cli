@@ -6,13 +6,15 @@
  * discover and read them.
  */
 
-import { writeFileSync, existsSync, readFileSync } from "node:fs";
+import { writeFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ApiClient, Message } from "./api-client.js";
 import * as ui from "./ui.js";
 
 const POLL_INTERVAL_MS = 10_000;
 const MESSAGES_FILE = ".toban-messages.md";
+const MAX_FILE_SIZE = 50 * 1024; // 50KB
+const TRUNCATE_TO = 25 * 1024; // Keep last 25KB
 
 export interface MessagePollerOptions {
   api: ApiClient;
@@ -102,6 +104,16 @@ export class MessagePoller {
     let existing = "";
     if (existsSync(filePath)) {
       existing = readFileSync(filePath, "utf-8");
+
+      // Truncate if file exceeds MAX_FILE_SIZE: keep only the last TRUNCATE_TO bytes
+      if (existing.length > MAX_FILE_SIZE) {
+        const tail = existing.slice(-TRUNCATE_TO);
+        // Find the first complete message boundary (### From:) to avoid partial entries
+        const boundaryIndex = tail.indexOf("\n### From:");
+        existing =
+          "## Messages\n\n(earlier messages truncated)\n\n" +
+          (boundaryIndex >= 0 ? tail.slice(boundaryIndex + 1) : tail);
+      }
     } else {
       existing = "## Messages\n\n";
     }

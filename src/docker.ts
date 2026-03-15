@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentConfig, RunningAgent } from "./types.js";
 import { buildBranchName } from "./spawner.js";
+import { buildCommand } from "./command-builder.js";
+import * as ui from "./ui.js";
 
 /** Docker image name for the agent container */
 const AGENT_IMAGE = "toban/agent:latest";
@@ -43,12 +45,12 @@ export function isImageAvailable(): boolean {
  * @param dockerfilePath Path to the directory containing the Dockerfile
  */
 export function buildImage(dockerfilePath: string): void {
-  console.log(`[docker] Building ${AGENT_IMAGE} image...`);
+  ui.info(`[docker] Building ${AGENT_IMAGE} image...`);
   execSync(`docker build -t ${AGENT_IMAGE} "${dockerfilePath}"`, {
     stdio: "inherit",
     timeout: 300000, // 5 min
   });
-  console.log(`[docker] Image ${AGENT_IMAGE} built successfully`);
+  ui.step(`[docker] Image ${AGENT_IMAGE} built successfully`);
 }
 
 /**
@@ -120,77 +122,6 @@ function buildDockerArgs(
 }
 
 /**
- * Build the agent command and args (same logic as spawner.ts buildCommand).
- */
-function buildAgentCommand(config: AgentConfig): { cmd: string; args: string[] } {
-  if (config.commandTemplate) {
-    const parts = config.commandTemplate.split(/\s+/).filter(Boolean);
-    const cmd = parts[0];
-    const templateArgs = parts.slice(1);
-    const cmdBase = cmd.split("/").pop() ?? cmd;
-
-    if (cmdBase === "claude") {
-      return {
-        cmd,
-        args: [
-          ...templateArgs,
-          "--dangerously-skip-permissions",
-          "--print",
-          ...(config.prompt ? [config.prompt] : []),
-        ],
-      };
-    } else if (cmdBase === "codex") {
-      return {
-        cmd,
-        args: [
-          ...templateArgs,
-          "--quiet",
-          ...(config.prompt ? ["--prompt", config.prompt] : []),
-        ],
-      };
-    } else if (cmdBase === "gemini") {
-      return {
-        cmd,
-        args: [
-          ...templateArgs,
-          ...(config.prompt ? [config.prompt] : []),
-        ],
-      };
-    }
-    return { cmd, args: [...templateArgs, ...(config.prompt ? [config.prompt] : [])] };
-  }
-
-  // Fallback: use config.type
-  switch (config.type) {
-    case "codex":
-      return {
-        cmd: "codex",
-        args: [
-          "--quiet",
-          ...(config.prompt ? ["--prompt", config.prompt] : []),
-        ],
-      };
-    case "gemini":
-      return {
-        cmd: "gemini",
-        args: [
-          ...(config.prompt ? [config.prompt] : []),
-        ],
-      };
-    default:
-      // Default: claude
-      return {
-        cmd: "claude",
-        args: [
-          "--dangerously-skip-permissions",
-          "--print",
-          ...(config.prompt ? [config.prompt] : []),
-        ],
-      };
-  }
-}
-
-/**
  * Spawn an agent process inside a Docker container.
  */
 export function spawnAgentInDocker(
@@ -198,7 +129,7 @@ export function spawnAgentInDocker(
   worktreePath: string
 ): { process: ChildProcess; agent: RunningAgent } {
   const branchName = buildBranchName(config.name, config.taskId);
-  const { cmd, args: agentArgs } = buildAgentCommand(config);
+  const { cmd, args: agentArgs } = buildCommand(config);
 
   const dockerArgs = buildDockerArgs(config, worktreePath, cmd, agentArgs);
 

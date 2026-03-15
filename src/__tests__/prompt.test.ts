@@ -41,11 +41,17 @@ describe("buildAgentPrompt", () => {
     expect(prompt).not.toContain("Description:");
   });
 
-  it("includes API reference section with correct URL and key", () => {
-    const prompt = buildAgentPrompt(makeCtx());
+  it("includes apiDocs when provided", () => {
+    const apiDocs = "## Toban API Reference\nBase URL: https://api.example.com/api/v1\nAuthorization: Bearer test-key-123";
+    const prompt = buildAgentPrompt(makeCtx({ apiDocs }));
     expect(prompt).toContain("## Toban API Reference");
     expect(prompt).toContain("Base URL: https://api.example.com/api/v1");
     expect(prompt).toContain("Authorization: Bearer test-key-123");
+  });
+
+  it("omits apiDocs block when not provided", () => {
+    const prompt = buildAgentPrompt(makeCtx());
+    expect(prompt).not.toContain("## Toban API Reference");
   });
 
   it("includes security rules", () => {
@@ -105,6 +111,7 @@ describe("buildAgentPrompt", () => {
     const prompt = buildAgentPrompt(makeCtx());
     expect(prompt).toBeTruthy();
     expect(prompt).toContain("Your task:");
-    expect(prompt).toContain("## Toban API Reference");
+    // apiDocs is optional; when absent, the block is empty
+    expect(prompt).not.toContain("## Toban API Reference");
   });
 });
