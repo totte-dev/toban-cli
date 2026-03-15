@@ -15,6 +15,7 @@
  */
 
 import { AgentRunner, type AgentRunnerOptions } from "./runner.js";
+import type { AgentType } from "./types.js";
 import {
   createApiClient,
   type Task,
@@ -49,6 +50,7 @@ interface CliArgs {
   noDocker: boolean;
   wsPort: number;
   debug: boolean;
+  engine: AgentType;
 }
 
 function printUsage(): void {
@@ -72,6 +74,7 @@ Options:
   --model <model>       AI model for manager chat (default: claude-sonnet-4-20250514)
   --llm-base-url <url>  OpenAI-compatible API base URL (or LLM_BASE_URL env)
   --llm-api-key <key>   LLM provider API key (or LLM_API_KEY env)
+  --engine <type>       Agent engine: claude, codex, gemini, mock, custom (default: claude)
   --no-docker           Disable Docker isolation (run agents directly on host)
   --ws-port <port>      WebSocket server port for direct chat (default: 4000, 0=auto)
   --push                Push the sprint tag to origin (sprint complete only)
@@ -139,6 +142,7 @@ function parseArgs(argv: string[]): CliArgs {
     noDocker: args.includes("--no-docker"),
     wsPort: parseInt(getFlag("--ws-port") ?? "4000", 10),
     debug: args.includes("--debug") || process.env.DEBUG === "1",
+    engine: (getFlag("--engine") ?? "claude") as AgentType,
   };
 }
 
@@ -532,7 +536,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
       const agentConfig = {
         name: `${cliArgs.agentName}-${task.id.slice(0, 8)}`,
-        type: "claude" as const,
+        type: cliArgs.engine,
         taskId: task.id,
         workingDir: taskWorkingDir,
         branch: cliArgs.baseBranch,
@@ -540,6 +544,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         apiUrl: cliArgs.apiUrl,
         prompt,
         parentAgent: cliArgs.agentName,
+        sprintNumber: sprintData?.sprint.number,
         ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
       };
 

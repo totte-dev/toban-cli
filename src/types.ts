@@ -1,4 +1,4 @@
-export type AgentType = "claude" | "cursor" | "codex" | "gemini" | "custom";
+export type AgentType = "claude" | "cursor" | "codex" | "gemini" | "mock" | "custom";
 
 export interface AgentConfig {
   /** Agent display name */
