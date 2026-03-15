@@ -76,6 +76,18 @@ function buildDockerArgs(
     ...(existsSync(join(home, ".config", "claude"))
       ? ["-v", `${join(home, ".config", "claude")}:/home/agent/.config/claude:ro`]
       : []),
+    // Gemini CLI auth
+    ...(existsSync(join(home, ".config", "gemini"))
+      ? ["-v", `${join(home, ".config", "gemini")}:/home/agent/.config/gemini:ro`]
+      : []),
+    // Codex CLI auth
+    ...(existsSync(join(home, ".codex"))
+      ? ["-v", `${join(home, ".codex")}:/home/agent/.codex:ro`]
+      : []),
+    // OpenAI config (used by Codex)
+    ...(existsSync(join(home, ".config", "openai"))
+      ? ["-v", `${join(home, ".config", "openai")}:/home/agent/.config/openai:ro`]
+      : []),
     // Environment variables
     "-e", `TOBAN_API_KEY=${config.apiKey}`,
     "-e", `TOBAN_API_URL=${config.apiUrl}`,
@@ -83,9 +95,14 @@ function buildDockerArgs(
     "-e", `TOBAN_TASK_ID=${config.taskId}`,
     // Working directory
     "-w", "/workspace",
+    // Pass GITHUB_TOKEN for git push and gh pr create
+    ...(process.env.GITHUB_TOKEN
+      ? ["-e", `GITHUB_TOKEN=${process.env.GITHUB_TOKEN}`]
+      : []),
     // Image
     AGENT_IMAGE,
-    // Override entrypoint with the full command
+    // Override CMD with the full command (e.g., "claude --dangerously-skip-permissions ...")
+    agentCmd,
     ...agentArgs,
   ];
 

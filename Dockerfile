@@ -4,15 +4,25 @@
 
 FROM node:20-slim
 
-# Install system dependencies
+# Install system dependencies + GitHub CLI
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    gpg \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && apt-get purge -y gpg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI globally
-RUN npm install -g @anthropic-ai/claude-code
+# Install coding agent CLIs globally
+RUN npm install -g @anthropic-ai/claude-code \
+    && npm install -g @google/gemini-cli \
+    && npm install -g @openai/codex \
+    && npm cache clean --force
 
 # Create non-root user for agent execution
 RUN useradd -m -s /bin/bash agent
@@ -24,5 +34,5 @@ RUN mkdir -p /workspace && chown agent:agent /workspace
 USER agent
 WORKDIR /workspace
 
-# Default entrypoint: run claude with provided arguments
-ENTRYPOINT ["claude"]
+# No fixed entrypoint - CLI specifies the command (claude, gemini, codex, etc.)
+CMD ["bash"]
