@@ -481,7 +481,14 @@ if (cliArgs.command !== "start") {
   process.exit(1);
 }
 
-const runner = new AgentRunner({ useDocker: !cliArgs.noDocker });
+const runner = new AgentRunner({
+  useDocker: !cliArgs.noDocker,
+  onStdout: (agentName, lines, stream) => {
+    if (activeWsServer && activeWsServer.clientCount > 0) {
+      activeWsServer.broadcastStdout(agentName, lines, stream);
+    }
+  },
+});
 setupShutdownHandlers(runner);
 
 runLoop(cliArgs, runner).catch((err) => {
