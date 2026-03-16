@@ -158,16 +158,13 @@ export class Manager {
 
       const newMessages = this.findNewInboundMessages(messages);
       if (newMessages.length > 0) {
-        ui.info(`[manager] ${newMessages.length} new message(s) to process`);
+        ui.debug("manager", `${newMessages.length} new message(s) to process`);
       }
 
       for (const msg of newMessages) {
         const isFromUser = msg.from === "user" || msg.from.startsWith("user:");
-        const senderLabel = isFromUser ? msg.from : `agent:${msg.from}`;
-        ui.chatMessage(msg.from, "manager", msg.content);
 
         try {
-          // Include sender context so LLM knows who it's talking to
           const senderContext = isFromUser
             ? `[Message from user: ${msg.from}]`
             : `[Message from agent: ${msg.from}]`;
@@ -176,15 +173,14 @@ export class Manager {
           const context = await this.fetchContext();
           const { reply, actions } = await this.think(enrichedContent, context);
           await this.executeActions(actions, context);
-          // Reply to the sender
           await this.postReplyTo(msg.from, reply);
-          // Broadcast via WS so dashboard gets real-time update (for user messages)
           if (isFromUser) {
             this.onReply?.(reply);
           }
-          ui.chatMessage("manager", msg.from, reply);
+          // Compact log: inbound + reply on two lines
+          ui.chatExchange(msg.from, msg.content, reply, actions.length);
         } catch (err) {
-          ui.warn(`[manager] Failed to process message from ${senderLabel}: ${err}`);
+          ui.chatExchange(msg.from, msg.content, `Error: ${err}`, 0);
           await this.postReplyTo(msg.from, "Sorry, an error occurred while processing your message. Please try again.").catch(() => {});
         }
 
