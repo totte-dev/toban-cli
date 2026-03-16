@@ -62,6 +62,11 @@ export class WsChatServer {
   private onRevert?: (taskId: string, repo: string, commits: string[]) => Promise<{ ok: boolean; error?: string }>;
   private clients = new Set<WebSocket>();
 
+  /** Whether any browser clients are connected */
+  get hasClients(): boolean {
+    return this.clients.size > 0;
+  }
+
   constructor(options: WsChatServerOptions) {
     this.port = options.port ?? 0;
     this.apiKey = options.apiKey;

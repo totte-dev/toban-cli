@@ -463,6 +463,19 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     ui.warn(`WebSocket server failed to start: ${err}`);
   }
 
+  // Wire Manager's spawn_agent action to move tasks to in_progress
+  // (the main loop picks up in_progress tasks and runs them)
+  mgr.onSpawnAgent = async (_role: string, taskIds: string[]) => {
+    for (const taskId of taskIds) {
+      try {
+        await api.updateTask(taskId, { status: "in_progress" });
+        ui.info(`[manager] Queued task ${taskId.slice(0, 8)} for agent execution`);
+      } catch (err) {
+        ui.warn(`[manager] Failed to queue task ${taskId.slice(0, 8)}: ${err}`);
+      }
+    }
+  };
+
   mgr.start();
 
   // Show connection info
@@ -532,7 +545,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         status: "idle",
         activity: isIdle ? `Sprint ${phase}, waiting` : "Waiting for tasks",
       });
-      if (!isIdle) ui.info(`No tasks — polling again in ${waitMs / 1000}s`);
+      // Only log "No tasks" when no WS clients are connected (avoid noise)
+      if (!isIdle && !wsServer?.hasClients) ui.info(`No tasks — polling again in ${waitMs / 1000}s`);
       await sleep(waitMs);
       continue;
     }

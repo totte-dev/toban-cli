@@ -1,8 +1,7 @@
 /**
- * Rich CLI output using @clack/prompts.
+ * CLI output module for toban-cli.
  *
- * Provides a structured UI for the toban-cli startup sequence and agent lifecycle.
- * All console.log/warn calls in cli.ts should go through this module.
+ * Unified format: all output uses "  HH:MM:SS  message" with blank lines between entries.
  */
 
 import * as p from "@clack/prompts";
@@ -39,15 +38,25 @@ function timestamp(): string {
   return new Date().toLocaleTimeString("en-GB", { hour12: false });
 }
 
+// ---------------------------------------------------------------------------
+// Core log — unified format: "  HH:MM:SS  message" with blank line after
+// ---------------------------------------------------------------------------
+
+function log(msg: string): void {
+  console.log(`\n  ${color.dim(timestamp())}  ${msg}`);
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
- * Log a chat/message exchange between agents/users.
- * Normal mode: compact single line with timestamp
- * Debug mode: timestamped, full content preserved
+ * Log a chat message between agents/users.
  */
 export function chatMessage(from: string, to: string, content: string): void {
   if (_debug) {
-    const indent = content.split("\n").map(l => `    ${l}`).join("\n");
-    console.log(`[${timestamp()}] [chat] ${from} → ${to}:\n${indent}`);
+    const indent = content.split("\n").map(l => `              ${l}`).join("\n");
+    log(`[chat] ${from} → ${to}:\n${indent}`);
   } else {
     const oneLine = content.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
     const cols = process.stdout.columns ?? 80;
@@ -55,43 +64,8 @@ export function chatMessage(from: string, to: string, content: string): void {
     const truncated = oneLine.length > maxLen ? oneLine.slice(0, maxLen - 3) + "..." : oneLine;
     const symbol = from.startsWith("user") ? "◇" : "◆";
     const shortFrom = from.startsWith("user:") ? "user" : from;
-    console.log(`${color.dim(timestamp())} ${symbol} ${color.bold(shortFrom)}→${to}: ${truncated}`);
+    log(`${symbol} ${color.bold(shortFrom)}→${to}: ${truncated}`);
   }
-}
-
-/**
- * Log a message exchange pair (inbound → reply) on two lines.
- * Format: (from → to)[transport]: content
- */
-export function chatExchange(
-  from: string,
-  inbound: string,
-  reply: string,
-  actionCount: number,
-  transport: "ws" | "api" = "api"
-): void {
-  if (_debug) {
-    chatMessage(from, "manager", inbound);
-    chatMessage("manager", from, reply);
-    return;
-  }
-  const ts = timestamp();
-  const shortFrom = from.startsWith("user:") ? from : from;
-  const tColor = transport === "ws" ? color.green(`[${transport}]`) : color.dim(`[${transport}]`);
-  const actionSuffix = actionCount > 0
-    ? color.cyan(` [${actionCount} action${actionCount > 1 ? "s" : ""}]`)
-    : "";
-  const flatIn = inbound.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
-  const flatRe = reply.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
-  console.log(
-    `${color.dim(ts)} (${shortFrom} → manager)${tColor}: ${flatIn}\n` +
-    `${color.dim(ts)} (manager → ${shortFrom})${tColor}: ${flatRe}${actionSuffix}`
-  );
-}
-
-function truncateLine(text: string, maxLen: number): string {
-  const oneLine = text.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
-  return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 3) + "..." : oneLine;
 }
 
 /**
@@ -99,7 +73,7 @@ function truncateLine(text: string, maxLen: number): string {
  */
 export function debug(category: string, message: string): void {
   if (_debug) {
-    console.log(`[${timestamp()}] [${category}] ${message}`);
+    log(`[${category}] ${message}`);
   }
 }
 
@@ -113,29 +87,24 @@ export function outro(message: string): void {
   p.outro(message);
 }
 
-/** Log a success step (e.g. authentication, Docker detection) */
+/** Log a success step */
 export function step(message: string): void {
-  p.log.success(message);
+  log(`${color.green("✓")} ${message}`);
 }
 
 /** Log an info message */
 export function info(message: string): void {
-  p.log.info(message);
+  log(`${color.blue("ℹ")} ${message}`);
 }
 
 /** Log a warning */
 export function warn(message: string): void {
-  p.log.warn(color.yellow(message));
+  log(`${color.yellow("⚠")} ${color.yellow(message)}`);
 }
 
 /** Log an error */
 export function error(message: string): void {
-  p.log.error(color.red(message));
-}
-
-/** Log a plain message */
-function message(text: string): void {
-  p.log.message(text);
+  log(`${color.red("✖")} ${color.red(message)}`);
 }
 
 /** Show connection / config details in a note box */
@@ -169,7 +138,7 @@ export function workspaceInfo(name?: string, repoPath?: string, autoCloned?: boo
   }
   if (repoPath) {
     const suffix = autoCloned ? color.dim(" (auto-cloned)") : "";
-    p.log.info(`Repo: ${repoPath}${suffix}`);
+    info(`Repo: ${repoPath}${suffix}`);
   }
 }
 
@@ -198,7 +167,7 @@ export function agentSpawned(opts: {
   if (opts.container) {
     lines.push(`  container: ${color.dim(opts.container)}`);
   }
-  p.log.step(lines.join("\n"));
+  step(lines.join("\n"));
 }
 
 /** Show task completion status */
@@ -211,9 +180,9 @@ export function taskResult(taskId: string, title: string, status: "completed" | 
   const line = `Task ${color.dim(taskId.slice(0, 8))} ${statusLabel}: ${title}`;
 
   if (status === "failed") {
-    p.log.error(line + (detail ? `\n  ${color.dim(detail)}` : ""));
+    error(line + (detail ? `\n  ${color.dim(detail)}` : ""));
   } else {
-    p.log.success(line);
+    step(line);
   }
 }
 
