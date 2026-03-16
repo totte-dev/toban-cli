@@ -81,9 +81,11 @@ export function chatExchange(
   const actionSuffix = actionCount > 0
     ? color.cyan(` [${actionCount} action${actionCount > 1 ? "s" : ""}]`)
     : "";
+  const flatIn = inbound.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+  const flatRe = reply.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
   console.log(
-    `${color.dim(ts)} (${shortFrom} → manager)${tColor}: ${inbound}\n` +
-    `${color.dim(ts)} (manager → ${shortFrom})${tColor}: ${reply}${actionSuffix}`
+    `${color.dim(ts)} (${shortFrom} → manager)${tColor}: ${flatIn}\n` +
+    `${color.dim(ts)} (manager → ${shortFrom})${tColor}: ${flatRe}${actionSuffix}`
   );
 }
 
