@@ -148,6 +148,46 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 // ---------------------------------------------------------------------------
+// Git revert execution
+// ---------------------------------------------------------------------------
+
+/**
+ * Execute git revert for given commits in the appropriate repo directory.
+ * Reverts are done on the main branch (trunk-based).
+ */
+async function executeRevert(
+  repoName: string,
+  commits: string[],
+  repos: WorkspaceRepository[]
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const repo = repos.find((r) => r.repo_name === repoName);
+    const repoPath = repo?.repo_path;
+    if (!repoPath || !existsSync(repoPath)) {
+      return { ok: false, error: `Repository path not found for "${repoName}"` };
+    }
+
+    // Revert commits in reverse order (newest first)
+    const reversed = [...commits].reverse();
+    for (const hash of reversed) {
+      ui.info(`[revert] Reverting ${hash.slice(0, 7)} in ${repoName}`);
+      execSync(`git revert --no-edit ${hash}`, { cwd: repoPath, stdio: "pipe" });
+    }
+
+    // Push the reverts
+    ui.info(`[revert] Pushing reverts for ${repoName}`);
+    execSync("git push origin HEAD", { cwd: repoPath, stdio: "pipe" });
+
+    ui.step(`[revert] Successfully reverted ${commits.length} commit(s) in ${repoName}`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ui.warn(`[revert] Failed: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Workspace repo management
 // ---------------------------------------------------------------------------
 
@@ -390,9 +430,12 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       port: cliArgs.wsPort,
       apiKey: cliArgs.apiKey,
       apiUrl: cliArgs.apiUrl,
-      onMessage: (content) => mgr.handleWsMessage(content),
+      onMessage: async (content) => mgr.handleWsMessage(content),
       onClientConnected: () => mgr.pausePolling(),
       onAllClientsDisconnected: () => mgr.resumePolling(),
+      onRevert: async (taskId, repoName, commits) => {
+        return executeRevert(repoName, commits, repos);
+      },
     });
     actualWsPort = await wsServer.start();
     await wsServer.registerPort();
@@ -405,6 +448,13 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         from: "manager",
         to: "user",
         content: reply,
+        timestamp: new Date().toISOString(),
+      });
+    };
+    mgr.onProposals = (proposals) => {
+      wsServer?.broadcast({
+        type: "proposals",
+        tasks: proposals,
         timestamp: new Date().toISOString(),
       });
     };
