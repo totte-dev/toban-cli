@@ -131,7 +131,7 @@ export class Manager {
     ui.debug("manager", "Manager stopped");
   }
 
-  /** Pause polling (e.g. when WS clients are connected) */
+  /** Pause polling when WS clients are connected (messages come via WS) */
   pausePolling(): void {
     if (this.timer) {
       clearInterval(this.timer);
@@ -140,7 +140,7 @@ export class Manager {
     }
   }
 
-  /** Resume polling (e.g. when all WS clients disconnected) */
+  /** Resume polling when all WS clients disconnected */
   resumePolling(): void {
     if (!this.timer) {
       this.timer = setInterval(() => this.poll(), this.pollIntervalMs);

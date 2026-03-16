@@ -452,9 +452,9 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   // Main polling loop — stays resident, re-checks for new tasks periodically
   // ---------------------------------------------------------------------------
   while (!shuttingDown) {
-    // Re-fetch sprint data to pick up newly added tasks
+    // Re-fetch sprint data to pick up newly added tasks (GET, no side effects)
     try {
-      sprintData = await api.startSprint();
+      sprintData = await api.fetchSprintData();
     } catch (err) {
       ui.warn(`Failed to refresh sprint: ${err}`);
       ui.info(`Waiting ${POLL_INTERVAL_MS / 1000}s before retry...`);

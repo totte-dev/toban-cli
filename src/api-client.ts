@@ -76,6 +76,7 @@ export interface ApiClient {
   fetchTasks(): Promise<Task[]>;
   fetchRepositories(): Promise<WorkspaceRepository[]>;
   startSprint(): Promise<SprintStartResult>;
+  fetchSprintData(): Promise<SprintStartResult>;
   fetchCurrentSprint(): Promise<{ number: number; status: string } | null>;
   completeSprint(number: number): Promise<void>;
   updateTask(id: string, data: Partial<Task>): Promise<void>;
@@ -135,6 +136,14 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       });
       if (!res.ok) {
         throw new Error(`Failed to start sprint: ${res.status} ${res.statusText}`);
+      }
+      return (await res.json()) as SprintStartResult;
+    },
+
+    async fetchSprintData(): Promise<SprintStartResult> {
+      const res = await fetch(`${apiUrl}/api/v1/sprints/current/tasks`, { headers });
+      if (!res.ok) {
+        throw new Error(`Failed to fetch sprint: ${res.status} ${res.statusText}`);
       }
       return (await res.json()) as SprintStartResult;
     },
