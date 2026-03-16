@@ -6,7 +6,7 @@
  * or any OpenAI-compatible API endpoint (Anthropic, Google, OpenAI, etc.).
  */
 
-import { spawn } from "node:child_process";
+import { callClaudeCli, createAuthHeaders } from "./llm-client.js";
 import * as ui from "./ui.js";
 
 interface Message {
@@ -226,64 +226,14 @@ export class ChatPoller {
 
     const systemPrompt = await this.buildSystemPrompt(isFirstContact);
 
-    // Build the prompt: include recent history for context
-    const contextLines: string[] = [];
-    // Only include the last few exchanges for context (skip the current message)
-    for (const msg of history.slice(-6, -1)) {
-      const label = msg.role === "user" ? "User" : "Manager";
-      contextLines.push(`${label}: ${msg.content}`);
-    }
+    // Use last few exchanges for context (skip the current message)
+    const historyForCli = history.slice(-6, -1);
 
-    const fullPrompt = contextLines.length > 0
-      ? `Recent conversation:\n${contextLines.join("\n")}\n\nUser: ${userMessage.content}`
-      : userMessage.content;
-
-    // Remove CLAUDECODE env var to avoid nested session detection
-    const env = { ...process.env };
-    delete env.CLAUDECODE;
-
-    return new Promise<string>((resolve, reject) => {
-      const child = spawn("claude", [
-        "--print",
-        "--system-prompt", systemPrompt,
-        "--model", this.model,
-        fullPrompt,
-      ], {
-        env,
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        reject(new Error("Claude CLI timed out after 180s"));
-      }, 180_000);
-
-      child.on("error", (err: NodeJS.ErrnoException) => {
-        clearTimeout(timer);
-        if (err.code === "ENOENT") {
-          reject(new Error("Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code"));
-        } else {
-          reject(new Error(`Claude CLI spawn error: ${err.message}`));
-        }
-      });
-
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (code === 0) {
-          resolve(stdout.trim() || "(no response)");
-        } else {
-          reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 200)}`));
-        }
-      });
-
-      // Don't unref — we need to wait for the child to complete
+    return callClaudeCli({
+      systemPrompt,
+      history: historyForCli,
+      userMessage: userMessage.content,
+      model: this.model,
     });
   }
 
@@ -539,9 +489,6 @@ Help the user with sprint management. Propose the next action based on task stat
   }
 
   private authHeaders(): Record<string, string> {
-    return {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${this.apiKey}`,
-    };
+    return createAuthHeaders(this.apiKey);
   }
 }

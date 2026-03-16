@@ -12,6 +12,7 @@
 
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+import { createAuthHeaders } from "./llm-client.js";
 import * as ui from "./ui.js";
 
 /** Message format over WebSocket */
@@ -155,10 +156,7 @@ export class WsChatServer {
     try {
       await fetch(`${this.apiUrl}/api/v1/agents`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers: createAuthHeaders(this.apiKey),
         body: JSON.stringify({
           name: "manager",
           status: "active",
@@ -210,10 +208,7 @@ export class WsChatServer {
     try {
       await fetch(`${this.apiUrl}/api/v1/agents`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers: createAuthHeaders(this.apiKey),
         body: JSON.stringify({
           name: "manager",
           status: "active",
@@ -385,10 +380,7 @@ export class WsChatServer {
   ): Promise<void> {
     await fetch(`${this.apiUrl}/api/v1/messages`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
+      headers: createAuthHeaders(this.apiKey),
       body: JSON.stringify({ from, to, content }),
     });
   }
