@@ -12,6 +12,7 @@
 
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+import * as ui from "./ui.js";
 
 /** Message format over WebSocket */
 interface WsMessage {
@@ -77,14 +78,14 @@ export class WsChatServer {
 
       this.wss.on("connection", (ws) => {
         this.clients.add(ws);
-        console.log(`[ws] Client connected (${this.clients.size} total)`);
+        ui.info(`[ws] Client connected (${this.clients.size} total)`);
 
         ws.on("message", async (data) => {
           try {
             const msg: WsMessage = JSON.parse(data.toString());
             await this.handleMessage(ws, msg);
           } catch (err) {
-            console.error(`[ws] Invalid message:`, err);
+            ui.warn(`[ws] Invalid message: ${err}`);
             ws.send(JSON.stringify({
               type: "status",
               content: "Invalid message format",
@@ -94,11 +95,11 @@ export class WsChatServer {
 
         ws.on("close", () => {
           this.clients.delete(ws);
-          console.log(`[ws] Client disconnected (${this.clients.size} remaining)`);
+          ui.info(`[ws] Client disconnected (${this.clients.size} remaining)`);
         });
 
         ws.on("error", (err) => {
-          console.error(`[ws] Client error:`, err.message);
+          ui.warn(`[ws] Client error: ${err.message}`);
           this.clients.delete(ws);
         });
 
@@ -118,7 +119,7 @@ export class WsChatServer {
         const addr = this.httpServer!.address();
         const actualPort = typeof addr === "object" && addr ? addr.port : this.port;
         this.port = actualPort;
-        console.log(`[ws] WebSocket server listening on ws://127.0.0.1:${actualPort}`);
+        ui.step(`[ws] WebSocket server listening on ws://127.0.0.1:${actualPort}`);
         resolve(actualPort);
       });
     });
@@ -142,9 +143,9 @@ export class WsChatServer {
           ws_port: this.port,
         }),
       });
-      console.log(`[ws] Registered WS port ${this.port} with API`);
+      ui.step(`[ws] Registered WS port ${this.port} with API`);
     } catch (err) {
-      console.warn(`[ws] Failed to register WS port: ${err}`);
+      ui.warn(`[ws] Failed to register WS port: ${err}`);
     }
   }
 
@@ -208,7 +209,7 @@ export class WsChatServer {
 
     this.wss?.close();
     this.httpServer?.close();
-    console.log("[ws] WebSocket server stopped");
+    ui.info("[ws] WebSocket server stopped");
   }
 
   /** Number of connected clients */
