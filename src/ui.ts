@@ -60,14 +60,15 @@ export function chatMessage(from: string, to: string, content: string): void {
 }
 
 /**
- * Log a message exchange pair (inbound → reply) on two compact lines.
- * Reduces log noise for poll-path message processing.
+ * Log a message exchange pair (inbound → reply) on two lines.
+ * Format: (from → to)[transport]: content
  */
 export function chatExchange(
   from: string,
   inbound: string,
   reply: string,
-  actionCount: number
+  actionCount: number,
+  transport: "ws" | "api" = "api"
 ): void {
   if (_debug) {
     chatMessage(from, "manager", inbound);
@@ -75,17 +76,14 @@ export function chatExchange(
     return;
   }
   const ts = timestamp();
-  const cols = process.stdout.columns ?? 80;
-  const maxLen = Math.max(30, cols - 35);
-  const inTrunc = truncateLine(inbound, maxLen);
-  const reTrunc = truncateLine(reply, maxLen);
-  const shortFrom = from.startsWith("user:") ? "user" : from;
+  const shortFrom = from.startsWith("user:") ? from : from;
+  const tColor = transport === "ws" ? color.green(`[${transport}]`) : color.dim(`[${transport}]`);
   const actionSuffix = actionCount > 0
     ? color.cyan(` [${actionCount} action${actionCount > 1 ? "s" : ""}]`)
     : "";
   console.log(
-    `${color.dim(ts)} ◇ ${color.bold(shortFrom)}: ${inTrunc}\n` +
-    `${color.dim(ts)} ◆ ${color.bold("manager")}: ${reTrunc}${actionSuffix}`
+    `${color.dim(ts)} (${shortFrom} → manager)${tColor}: ${inbound}\n` +
+    `${color.dim(ts)} (manager → ${shortFrom})${tColor}: ${reply}${actionSuffix}`
   );
 }
 
