@@ -7,8 +7,19 @@
 
 import * as p from "@clack/prompts";
 import color from "picocolors";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
-const VERSION = "0.1.3";
+const VERSION = (() => {
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+    return pkg.version;
+  } catch {
+    return "unknown";
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Debug mode
