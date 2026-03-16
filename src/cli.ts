@@ -24,6 +24,7 @@ import {
 } from "./api-client.js";
 import { buildAgentPrompt, type RepoInfo } from "./prompt.js";
 import { ChatPoller } from "./chat-poller.js";
+import { Manager } from "./manager.js";
 import { MessagePoller } from "./message-poller.js";
 import { WsChatServer } from "./ws-server.js";
 import * as ui from "./ui.js";
@@ -366,17 +367,20 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     process.exit(1);
   }
 
-  // Start the manager chat system
-  let chatPoller: ChatPoller | null = null;
-  chatPoller = new ChatPoller({
+  // Start the Manager (replaces ChatPoller with action-capable LLM manager)
+  const mgr = new Manager({
     apiUrl: cliArgs.apiUrl,
     apiKey: cliArgs.apiKey,
     llmBaseUrl: cliArgs.llmBaseUrl,
     llmApiKey: cliArgs.llmApiKey,
     model: cliArgs.model,
+    runner,
+    api,
   });
-  chatPoller.start();
-  activeChatPoller = chatPoller;
+  activeManager = mgr;
+
+  // Keep ChatPoller as fallback (for backward compat, will be removed)
+  activeChatPoller = null;
 
   // Start WebSocket server for direct chat
   let wsServer: WsChatServer | null = null;
@@ -386,14 +390,27 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       port: cliArgs.wsPort,
       apiKey: cliArgs.apiKey,
       apiUrl: cliArgs.apiUrl,
-      onMessage: (content) => chatPoller!.generateReplyForWs(content),
+      onMessage: (content) => mgr.handleWsMessage(content),
     });
     actualWsPort = await wsServer.start();
     await wsServer.registerPort();
     activeWsServer = wsServer;
+
+    // Wire Manager poll-path replies to WS broadcast
+    mgr.onReply = (reply) => {
+      wsServer?.broadcast({
+        type: "chat",
+        from: "manager",
+        to: "user",
+        content: reply,
+        timestamp: new Date().toISOString(),
+      });
+    };
   } catch (err) {
     ui.warn(`WebSocket server failed to start: ${err}`);
   }
+
+  mgr.start();
 
   // Show connection info
   ui.connectionInfo({
@@ -404,27 +421,6 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     wsPort: actualWsPort,
     llmProvider: cliArgs.llmBaseUrl || "Claude Code CLI",
   });
-
-  const tasks: Task[] = sprintData.tasks;
-
-  const todoTasks = tasks
-    .filter((t) => (t.status === "todo" || t.status === "in_progress") && t.owner !== "user")
-    .sort((a, b) => {
-      const pa = typeof a.priority === "string" ? parseInt(a.priority.replace("p", ""), 10) : (a.priority ?? 99);
-      const pb = typeof b.priority === "string" ? parseInt(b.priority.replace("p", ""), 10) : (b.priority ?? 99);
-      return (pa as number) - (pb as number);
-    });
-
-  if (todoTasks.length === 0) {
-    ui.info("No tasks to work on");
-    await api.updateAgent({
-      name: cliArgs.agentName,
-      status: "idle",
-      activity: "No tasks available",
-    });
-    ui.outro("Idle — no tasks available");
-    return;
-  }
 
   // Fetch workspace repositories for per-task repo resolution
   let repos: WorkspaceRepository[] = [];
@@ -448,159 +444,212 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
   const tobanHome = join(homedir(), ".toban");
 
-  ui.tasksSummary(todoTasks.length);
+  const POLL_INTERVAL_MS = 30_000; // 30 seconds
 
-  for (const task of todoTasks) {
-    if (shuttingDown) {
-      ui.warn("Shutting down, skipping remaining tasks");
-      break;
-    }
-
-    ui.step(`Starting task: ${task.title}`);
-
+  // ---------------------------------------------------------------------------
+  // Main polling loop — stays resident, re-checks for new tasks periodically
+  // ---------------------------------------------------------------------------
+  while (!shuttingDown) {
+    // Re-fetch sprint data to pick up newly added tasks
     try {
-      await api.updateTask(task.id, { status: "in_progress" });
+      sprintData = await api.startSprint();
     } catch (err) {
-      ui.error(`Failed to update task ${task.id}: ${err}`);
+      ui.warn(`Failed to refresh sprint: ${err}`);
+      ui.info(`Waiting ${POLL_INTERVAL_MS / 1000}s before retry...`);
+      await sleep(POLL_INTERVAL_MS);
       continue;
     }
 
-    await api.updateAgent({
-      name: cliArgs.agentName,
-      status: "working",
-      activity: `Task ${task.id}: ${task.title}`,
-    });
+    const tasks: Task[] = sprintData.tasks;
 
-    // Resolve the working directory for this task
-    const taskWorkingDir = resolveTaskWorkingDir(
-      task,
-      repos,
-      tobanHome,
-      cliArgs.agentName,
-      workingDir,
-      gitToken
-    );
+    const todoTasks = tasks
+      .filter((t) => (t.status === "todo" || t.status === "in_progress") && t.owner !== "user")
+      .sort((a, b) => {
+        const pa = typeof a.priority === "string" ? parseInt(a.priority.replace("p", ""), 10) : (a.priority ?? 99);
+        const pb = typeof b.priority === "string" ? parseInt(b.priority.replace("p", ""), 10) : (b.priority ?? 99);
+        return (pa as number) - (pb as number);
+      });
 
-    // Build repository info for prompt
-    const repoInfoList: RepoInfo[] = repos
-      .filter((r) => {
-        const agents = r.access_agents ?? [];
-        return agents.length === 0 || agents.includes(task.owner ?? cliArgs.agentName);
-      })
-      .map((r) => ({
-        name: r.repo_name,
-        path: join(tobanHome, cliArgs.agentName, r.repo_name),
-        description: r.description,
-      }));
+    if (todoTasks.length === 0) {
+      await api.updateAgent({
+        name: cliArgs.agentName,
+        status: "idle",
+        activity: "Waiting for tasks",
+      });
+      ui.info(`No tasks — polling again in ${POLL_INTERVAL_MS / 1000}s`);
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
 
-    const agentName = task.owner ?? "builder";
-    const apiDocs = await api.fetchApiDocs(agentName);
+    ui.tasksSummary(todoTasks.length);
 
-    const prompt = buildAgentPrompt({
-      role: agentName,
-      projectName: workspaceName,
-      projectSpec: workspaceSpec,
-      taskId: task.id,
-      taskTitle: task.title,
-      taskDescription: task.description || undefined,
-      taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
-      apiUrl: cliArgs.apiUrl,
-      apiKey: cliArgs.apiKey,
-      playbookRules,
-      targetRepo: task.target_repo ?? undefined,
-      repositories: repoInfoList.length > 0 ? repoInfoList : undefined,
-      apiDocs: apiDocs || undefined,
-    });
-
-    try {
-      // Fetch project secrets for the agent
-      let secrets: Record<string, string> = {};
-      try {
-        secrets = await api.fetchMySecrets();
-        if (Object.keys(secrets).length > 0) {
-          const secretNames = Object.keys(secrets).join(", ");
-          ui.info(`Injected ${Object.keys(secrets).length} secrets: ${secretNames}`);
-        }
-      } catch (err) {
-        ui.warn(`Could not fetch secrets: ${err}`);
+    for (const task of todoTasks) {
+      if (shuttingDown) {
+        ui.warn("Shutting down, skipping remaining tasks");
+        break;
       }
 
-      const agentConfig = {
-        name: `${cliArgs.agentName}-${task.id.slice(0, 8)}`,
-        type: cliArgs.engine,
-        taskId: task.id,
-        workingDir: taskWorkingDir,
-        branch: cliArgs.baseBranch,
-        apiKey: cliArgs.apiKey,
-        apiUrl: cliArgs.apiUrl,
-        prompt,
-        parentAgent: cliArgs.agentName,
-        sprintNumber: sprintData.sprint.number,
-        ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
-      };
+      ui.step(`Starting task: ${task.title}`);
 
-      ui.agentSpawned({
-        agentName: agentConfig.name,
+      try {
+        await api.updateTask(task.id, { status: "in_progress" });
+      } catch (err) {
+        ui.error(`Failed to update task ${task.id}: ${err}`);
+        continue;
+      }
+
+      await api.updateAgent({
+        name: cliArgs.agentName,
+        status: "working",
+        activity: `Task ${task.id}: ${task.title}`,
+      });
+
+      // Resolve the working directory for this task
+      const taskWorkingDir = resolveTaskWorkingDir(
+        task,
+        repos,
+        tobanHome,
+        cliArgs.agentName,
+        workingDir,
+        gitToken
+      );
+
+      // Build repository info for prompt
+      const repoInfoList: RepoInfo[] = repos
+        .filter((r) => {
+          const agents = r.access_agents ?? [];
+          return agents.length === 0 || agents.includes(task.owner ?? cliArgs.agentName);
+        })
+        .map((r) => ({
+          name: r.repo_name,
+          path: join(tobanHome, cliArgs.agentName, r.repo_name),
+          description: r.description,
+        }));
+
+      const agentName = task.owner ?? "builder";
+      const apiDocs = await api.fetchApiDocs(agentName);
+
+      const prompt = buildAgentPrompt({
+        role: agentName,
+        projectName: workspaceName,
+        projectSpec: workspaceSpec,
         taskId: task.id,
         taskTitle: task.title,
-        docker: !cliArgs.noDocker,
+        taskDescription: task.description || undefined,
+        taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
+        apiUrl: cliArgs.apiUrl,
+        apiKey: cliArgs.apiKey,
+        playbookRules,
+        targetRepo: task.target_repo ?? undefined,
+        repositories: repoInfoList.length > 0 ? repoInfoList : undefined,
+        apiDocs: apiDocs || undefined,
       });
 
-      // Start message poller for this agent's channel
-      const agentChannel = task.owner ?? cliArgs.agentName;
-      const messagePoller = new MessagePoller({
-        api,
-        channel: agentChannel,
-        workingDir: taskWorkingDir,
-      });
-      messagePoller.start();
-
-      const runningAgent = await runner.spawn(agentConfig);
-
-      await waitForAgent(runner, agentConfig.name);
-
-      // Stop message poller after agent completes
-      messagePoller.stop();
-
-      const status = runner.status();
-      const agentReport = status.find((s) => s.name === agentConfig.name);
-
-      if (!agentReport) {
-        if (runningAgent.status === "completed") {
-          ui.taskResult(task.id, task.title, "completed");
-          await api.updateTask(task.id, { status: "review" });
-        } else if (runningAgent.status === "failed") {
-          ui.taskResult(task.id, task.title, "failed", `exit code: ${runningAgent.exitCode}`);
-          await api.updateTask(task.id, { status: "todo" });
-          const stderrSnippet = runningAgent.stderr.slice(-3).join("\n");
-          await api.sendMessage(
-            "manager",
-            "user",
-            `⚠️ Task "${task.title}" failed (exit code: ${runningAgent.exitCode}).\n\n${stderrSnippet ? `Error: ${stderrSnippet.slice(0, 300)}` : "Check CLI logs for details."}`
-          );
-        } else {
-          ui.taskResult(task.id, task.title, "completed", `status: ${runningAgent.status}`);
-          await api.updateTask(task.id, { status: "review" });
+      try {
+        // Fetch project secrets for the agent
+        let secrets: Record<string, string> = {};
+        try {
+          secrets = await api.fetchMySecrets();
+          if (Object.keys(secrets).length > 0) {
+            const secretNames = Object.keys(secrets).join(", ");
+            ui.info(`Injected ${Object.keys(secrets).length} secrets: ${secretNames}`);
+          }
+        } catch (err) {
+          ui.warn(`Could not fetch secrets: ${err}`);
         }
+
+        const agentConfig = {
+          name: `${cliArgs.agentName}-${task.id.slice(0, 8)}`,
+          type: cliArgs.engine,
+          taskId: task.id,
+          workingDir: taskWorkingDir,
+          branch: cliArgs.baseBranch,
+          apiKey: cliArgs.apiKey,
+          apiUrl: cliArgs.apiUrl,
+          prompt,
+          parentAgent: cliArgs.agentName,
+          sprintNumber: sprintData.sprint.number,
+          ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
+        };
+
+        ui.agentSpawned({
+          agentName: agentConfig.name,
+          taskId: task.id,
+          taskTitle: task.title,
+          docker: !cliArgs.noDocker,
+        });
+
+        // Start message poller for this agent's channel
+        const agentChannel = task.owner ?? cliArgs.agentName;
+        const messagePoller = new MessagePoller({
+          api,
+          channel: agentChannel,
+          workingDir: taskWorkingDir,
+        });
+        messagePoller.start();
+
+        const runningAgent = await runner.spawn(agentConfig);
+
+        await waitForAgent(runner, agentConfig.name);
+
+        // Stop message poller after agent completes
+        messagePoller.stop();
+
+        const status = runner.status();
+        const agentReport = status.find((s) => s.name === agentConfig.name);
+
+        if (!agentReport) {
+          if (runningAgent.status === "completed") {
+            ui.taskResult(task.id, task.title, "completed");
+            await api.updateTask(task.id, { status: "review" });
+          } else if (runningAgent.status === "failed") {
+            ui.taskResult(task.id, task.title, "failed", `exit code: ${runningAgent.exitCode}`);
+            await api.updateTask(task.id, { status: "todo" });
+            const stderrSnippet = runningAgent.stderr.slice(-3).join("\n");
+            await api.sendMessage(
+              "manager",
+              "user",
+              `⚠️ Task "${task.title}" failed (exit code: ${runningAgent.exitCode}).\n\n${stderrSnippet ? `Error: ${stderrSnippet.slice(0, 300)}` : "Check CLI logs for details."}`
+            );
+          } else {
+            ui.taskResult(task.id, task.title, "completed", `status: ${runningAgent.status}`);
+            await api.updateTask(task.id, { status: "review" });
+          }
+        }
+      } catch (err) {
+        ui.error(`Error spawning agent for task ${task.id}: ${err}`);
+        await api.updateTask(task.id, { status: "todo" });
+        const errMsg = err instanceof Error ? err.message : String(err);
+        await api.sendMessage(
+          "manager",
+          "user",
+          `⚠️ Failed to spawn agent for task "${task.title}".\n\nError: ${errMsg.slice(0, 300)}`
+        );
       }
-    } catch (err) {
-      ui.error(`Error spawning agent for task ${task.id}: ${err}`);
-      await api.updateTask(task.id, { status: "todo" });
-      const errMsg = err instanceof Error ? err.message : String(err);
-      await api.sendMessage(
-        "manager",
-        "user",
-        `⚠️ Failed to spawn agent for task "${task.title}".\n\nError: ${errMsg.slice(0, 300)}`
-      );
+    }
+
+    // After processing all tasks in this cycle, loop back to poll for more
+    if (!shuttingDown) {
+      await api.updateAgent({
+        name: cliArgs.agentName,
+        status: "idle",
+        activity: "All tasks completed, waiting for new tasks",
+      });
+      ui.info(`Tasks done — polling again in ${POLL_INTERVAL_MS / 1000}s`);
+      await sleep(POLL_INTERVAL_MS);
     }
   }
 
   await api.updateAgent({
     name: cliArgs.agentName,
     status: "idle",
-    activity: "All tasks completed",
+    activity: "Shut down",
   });
-  ui.outro("All tasks processed — idle");
+  ui.outro("Shutting down — goodbye");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function waitForAgent(runner: AgentRunner, agentName: string): Promise<void> {
@@ -623,6 +672,7 @@ function waitForAgent(runner: AgentRunner, agentName: string): Promise<void> {
 let shuttingDown = false;
 
 let activeChatPoller: ChatPoller | null = null;
+let activeManager: Manager | null = null;
 let activeWsServer: WsChatServer | null = null;
 
 function setupShutdownHandlers(runner: AgentRunner): void {
@@ -637,6 +687,10 @@ function setupShutdownHandlers(runner: AgentRunner): void {
 
     if (activeChatPoller) {
       activeChatPoller.stop();
+    }
+
+    if (activeManager) {
+      activeManager.stop();
     }
 
     const agents = runner.status();
