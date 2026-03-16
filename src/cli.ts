@@ -463,7 +463,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     const tasks: Task[] = sprintData.tasks;
 
     const todoTasks = tasks
-      .filter((t) => (t.status === "todo" || t.status === "in_progress") && t.owner !== "user")
+      .filter((t) => t.status === "in_progress" && t.owner !== "user")
       .sort((a, b) => {
         const pa = typeof a.priority === "string" ? parseInt(a.priority.replace("p", ""), 10) : (a.priority ?? 99);
         const pb = typeof b.priority === "string" ? parseInt(b.priority.replace("p", ""), 10) : (b.priority ?? 99);
