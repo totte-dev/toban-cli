@@ -34,6 +34,10 @@ export interface WsChatServerOptions {
   apiUrl: string;
   /** Callback when a user message is received */
   onMessage: (message: string) => Promise<string>;
+  /** Callback when first WS client connects */
+  onClientConnected?: () => void;
+  /** Callback when last WS client disconnects */
+  onAllClientsDisconnected?: () => void;
 }
 
 export class WsChatServer {
@@ -43,6 +47,8 @@ export class WsChatServer {
   private apiKey: string;
   private apiUrl: string;
   private onMessage: (message: string) => Promise<string>;
+  private onClientConnected?: () => void;
+  private onAllClientsDisconnected?: () => void;
   private clients = new Set<WebSocket>();
 
   constructor(options: WsChatServerOptions) {
@@ -50,6 +56,8 @@ export class WsChatServer {
     this.apiKey = options.apiKey;
     this.apiUrl = options.apiUrl;
     this.onMessage = options.onMessage;
+    this.onClientConnected = options.onClientConnected;
+    this.onAllClientsDisconnected = options.onAllClientsDisconnected;
   }
 
   /**
@@ -79,8 +87,10 @@ export class WsChatServer {
       });
 
       this.wss.on("connection", (ws) => {
+        const wasEmpty = this.clients.size === 0;
         this.clients.add(ws);
         ui.info(`[ws] Client connected (${this.clients.size} total)`);
+        if (wasEmpty) this.onClientConnected?.();
 
         ws.on("message", async (data) => {
           try {
@@ -98,6 +108,7 @@ export class WsChatServer {
         ws.on("close", () => {
           this.clients.delete(ws);
           ui.info(`[ws] Client disconnected (${this.clients.size} remaining)`);
+          if (this.clients.size === 0) this.onAllClientsDisconnected?.();
         });
 
         ws.on("error", (err) => {

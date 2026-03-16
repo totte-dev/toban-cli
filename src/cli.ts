@@ -391,6 +391,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       apiKey: cliArgs.apiKey,
       apiUrl: cliArgs.apiUrl,
       onMessage: (content) => mgr.handleWsMessage(content),
+      onClientConnected: () => mgr.pausePolling(),
+      onAllClientsDisconnected: () => mgr.resumePolling(),
     });
     actualWsPort = await wsServer.start();
     await wsServer.registerPort();

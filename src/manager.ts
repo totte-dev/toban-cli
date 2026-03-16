@@ -131,6 +131,23 @@ export class Manager {
     ui.debug("manager", "Manager stopped");
   }
 
+  /** Pause polling (e.g. when WS clients are connected) */
+  pausePolling(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+      ui.info("[manager] Polling paused (WS connected)");
+    }
+  }
+
+  /** Resume polling (e.g. when all WS clients disconnected) */
+  resumePolling(): void {
+    if (!this.timer) {
+      this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
+      ui.info("[manager] Polling resumed (no WS clients)");
+    }
+  }
+
   // ── WebSocket entry point ────────────────────────────────
 
   /**
