@@ -138,11 +138,10 @@ export class Manager {
    * Fetches context, calls LLM, executes actions, returns reply.
    */
   async handleWsMessage(content: string): Promise<string> {
-    ui.chatMessage("user", "manager", `[ws] ${content}`);
     const context = await this.fetchContext();
     const { reply, actions } = await this.think(content, context);
     await this.executeActions(actions, context);
-    ui.chatExchange("user", content, reply, actions.length);
+    ui.chatExchange("user", content, reply, actions.length, "ws");
     // Advance lastSeenId so poll doesn't reprocess this message
     await this.advanceLastSeen();
     return reply;
