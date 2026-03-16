@@ -153,10 +153,11 @@ export class Manager {
    * Fetches context, calls LLM, executes actions, returns reply.
    */
   async handleWsMessage(content: string): Promise<{ reply: string; proposals?: Array<Record<string, string>> }> {
+    ui.chatMessage("user", "manager", content);
     const context = await this.fetchContext();
     const { reply, actions, proposals } = await this.think(content, context);
     await this.executeActions(actions, context);
-    ui.chatExchange("user", content, reply, actions.length, "ws");
+    ui.chatMessage("manager", "user", reply);
     await this.advanceLastSeen();
     return { reply, proposals };
   }
@@ -192,6 +193,9 @@ export class Manager {
     for (const msg of newMessages) {
       const isFromUser = msg.from === "user" || msg.from.startsWith("user:");
 
+      // Show inbound message immediately before processing
+      ui.chatMessage(msg.from, "manager", msg.content);
+
       try {
         const senderContext = isFromUser
           ? `[Message from user: ${msg.from}]`
@@ -208,10 +212,9 @@ export class Manager {
             this.onProposals?.(proposals);
           }
         }
-        // Compact log: inbound + reply on two lines
-        ui.chatExchange(msg.from, msg.content, reply, actions.length);
+        ui.chatMessage("manager", msg.from, reply);
       } catch (err) {
-        ui.chatExchange(msg.from, msg.content, `Error: ${err}`, 0);
+        ui.chatMessage("manager", msg.from, `Error: ${err}`);
         await this.postReplyTo(msg.from, "Sorry, an error occurred while processing your message. Please try again.").catch(() => {});
       }
 
