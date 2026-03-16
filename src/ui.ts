@@ -31,7 +31,7 @@ export function setDebug(enabled: boolean): void {
   _debug = enabled;
 }
 
-export function isDebug(): boolean {
+function isDebug(): boolean {
   return _debug;
 }
 
@@ -134,7 +134,7 @@ export function error(message: string): void {
 }
 
 /** Log a plain message */
-export function message(text: string): void {
+function message(text: string): void {
   p.log.message(text);
 }
 
