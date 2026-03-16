@@ -11,9 +11,11 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup src/cli.ts --format esm --out-dir dist --target node20 --clean",
+    "build": "tsup src/cli.ts src/discord-bot-cli.ts --format esm --out-dir dist --target node20 --clean",
     "local": "npm run build && node dist/cli.js",
     "dev": "tsx src/cli.ts",
+    "discord-bot": "tsx src/discord-bot-cli.ts",
+    "discord-bot:build": "npm run build && node dist/discord-bot-cli.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "bash scripts/docker-e2e-test.sh",
@@ -34,6 +36,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
+    "discord.js": "^14.25.1",
     "ws": "^8.19.0"
   },
   "devDependencies": {
