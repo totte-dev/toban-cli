@@ -473,13 +473,16 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       });
 
     if (todoTasks.length === 0) {
+      const phase = sprintData.sprint?.status ?? "unknown";
+      const isIdle = phase === "review" || phase === "retrospective" || phase === "completed";
+      const waitMs = isIdle ? POLL_INTERVAL_MS * 4 : POLL_INTERVAL_MS; // 2min in review, 30s in active
       await api.updateAgent({
         name: cliArgs.agentName,
         status: "idle",
-        activity: "Waiting for tasks",
+        activity: isIdle ? `Sprint ${phase}, waiting` : "Waiting for tasks",
       });
-      ui.info(`No tasks — polling again in ${POLL_INTERVAL_MS / 1000}s`);
-      await sleep(POLL_INTERVAL_MS);
+      if (!isIdle) ui.info(`No tasks — polling again in ${waitMs / 1000}s`);
+      await sleep(waitMs);
       continue;
     }
 
