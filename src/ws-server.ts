@@ -58,7 +58,9 @@ export class WsChatServer {
    */
   async start(): Promise<number> {
     return new Promise((resolve, reject) => {
-      this.httpServer = createServer();
+      this.httpServer = createServer((req, res) => {
+        this.handleHttpRequest(req, res);
+      });
 
       this.wss = new WebSocketServer({
         server: this.httpServer,
@@ -220,6 +222,53 @@ export class WsChatServer {
   /** The port this server is listening on */
   get listeningPort(): number {
     return this.port;
+  }
+
+  private handleHttpRequest(req: IncomingMessage, res: import("node:http").ServerResponse): void {
+    // Health check
+    if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, clients: this.clients.size }));
+      return;
+    }
+
+    // Agent message endpoint
+    if (req.method === "POST" && req.url === "/message") {
+      let body = "";
+      req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      req.on("end", () => {
+        try {
+          const { from, to, content } = JSON.parse(body);
+          if (!from || !to || !content) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "from, to, content required" }));
+            return;
+          }
+          this.handleAgentMessage(from, to, content);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true }));
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON" }));
+        }
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  }
+
+  private handleAgentMessage(from: string, to: string, content: string): void {
+    ui.info(`[ws] Agent message: ${from} → ${to}`);
+    this.saveMessageToApi(from, to, content).catch(() => {});
+    this.broadcast({
+      type: "chat",
+      from,
+      to,
+      content,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   private async handleMessage(ws: WebSocket, msg: WsMessage): Promise<void> {
