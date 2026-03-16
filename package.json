@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "build": "tsup src/cli.ts --format esm --out-dir dist --target node20 --clean",
+    "local": "npm run build && node dist/cli.js",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
