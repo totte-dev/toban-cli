@@ -323,6 +323,7 @@ Action types:
 ## Rules
 - ALWAYS include at least one ACTION block in your response. Responses without ACTION blocks are useless.
 - When suggesting tasks, ALWAYS use ACTION: propose_tasks. This renders cards in the UI that the user can add with one click. Never just list tasks in text.
+- When delegating work to other agents, ALWAYS create a task first (create_task with owner), then spawn_agent. Never use send_message for work requests — messages are only for status checks and coordination.
 - Keep text brief (2-3 sentences). The ACTION blocks are the main output.
 - Task IDs: use the short 8-char prefix shown above.
 - Reply in the same language the sender used.
