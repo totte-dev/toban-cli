@@ -138,10 +138,29 @@ export class Manager {
    * Fetches context, calls LLM, executes actions, returns reply.
    */
   async handleWsMessage(content: string): Promise<string> {
+    ui.chatMessage("user", "manager", `[ws] ${content}`);
     const context = await this.fetchContext();
     const { reply, actions } = await this.think(content, context);
     await this.executeActions(actions, context);
+    ui.chatExchange("user", content, reply, actions.length);
+    // Advance lastSeenId so poll doesn't reprocess this message
+    await this.advanceLastSeen();
     return reply;
+  }
+
+  /** Sync lastSeenId with API to skip messages already handled via WS */
+  private async advanceLastSeen(): Promise<void> {
+    try {
+      const messages = await this.fetchMessages();
+      if (messages.length > 0) {
+        const sorted = [...messages].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        this.lastSeenId = sorted[sorted.length - 1].id;
+      }
+    } catch {
+      // Non-fatal
+    }
   }
 
   // ── Polling ──────────────────────────────────────────────
