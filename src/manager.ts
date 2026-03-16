@@ -12,9 +12,9 @@
  * On event: fetch enriched context → build prompt → call LLM → parse actions → execute.
  */
 
-import { spawn } from "node:child_process";
 import type { ApiClient, Task } from "./api-client.js";
 import type { AgentRunner } from "./runner.js";
+import { callClaudeCli, createAuthHeaders } from "./llm-client.js";
 import * as ui from "./ui.js";
 
 // ---------------------------------------------------------------------------
@@ -247,7 +247,7 @@ export class Manager {
 
     let llmResponse: string;
     if (this.useClaudeCli) {
-      llmResponse = await this.callClaudeCli(systemPrompt, conversationHistory, userMessage);
+      llmResponse = await this.callClaudeCliLocal(systemPrompt, conversationHistory, userMessage);
     } else {
       llmResponse = await this.callLlmApi(systemPrompt, conversationHistory, userMessage);
     }
@@ -531,64 +531,12 @@ Help the user with sprint management.`;
 
   // ── LLM backends ────────────────────────────────────────
 
-  private async callClaudeCli(
+  private callClaudeCliLocal(
     systemPrompt: string,
     history: Array<{ role: string; content: string }>,
     userMessage: string
   ): Promise<string> {
-    const contextLines = history.slice(-6).map((m) => {
-      const label = m.role === "user" ? "User" : "Manager";
-      return `${label}: ${m.content}`;
-    });
-
-    const fullPrompt = contextLines.length > 0
-      ? `Recent conversation:\n${contextLines.join("\n")}\n\nUser: ${userMessage}`
-      : userMessage;
-
-    const env = { ...process.env };
-    delete env.CLAUDECODE;
-
-    return new Promise<string>((resolve, reject) => {
-      const child = spawn("claude", [
-        "--print",
-        "--system-prompt", systemPrompt,
-        "--model", this.model,
-        fullPrompt,
-      ], {
-        env,
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        reject(new Error("Claude CLI timed out after 180s"));
-      }, 180_000);
-
-      child.on("error", (err: NodeJS.ErrnoException) => {
-        clearTimeout(timer);
-        if (err.code === "ENOENT") {
-          reject(new Error("Claude Code CLI not found. Install with: npm install -g @anthropic-ai/claude-code"));
-        } else {
-          reject(new Error(`Claude CLI error: ${err.message}`));
-        }
-      });
-
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (code === 0) {
-          resolve(stdout.trim() || "(no response)");
-        } else {
-          reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 200)}`));
-        }
-      });
-    });
+    return callClaudeCli({ systemPrompt, history, userMessage, model: this.model });
   }
 
   private async callLlmApi(
@@ -698,9 +646,6 @@ Help the user with sprint management.`;
   }
 
   private authHeaders(): Record<string, string> {
-    return {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${this.apiKey}`,
-    };
+    return createAuthHeaders(this.apiKey);
   }
 }
