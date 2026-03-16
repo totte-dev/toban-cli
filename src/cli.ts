@@ -27,6 +27,7 @@ import { ChatPoller } from "./chat-poller.js";
 import { Manager } from "./manager.js";
 import { MessagePoller } from "./message-poller.js";
 import { WsChatServer } from "./ws-server.js";
+import { WS_MSG } from "./ws-types.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -444,7 +445,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     // Wire Manager poll-path replies to WS broadcast
     mgr.onReply = (reply) => {
       wsServer?.broadcast({
-        type: "chat",
+        type: WS_MSG.CHAT,
         from: "manager",
         to: "user",
         content: reply,
@@ -453,7 +454,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     };
     mgr.onProposals = (proposals) => {
       wsServer?.broadcast({
-        type: "proposals",
+        type: WS_MSG.PROPOSALS,
         tasks: proposals,
         timestamp: new Date().toISOString(),
       });

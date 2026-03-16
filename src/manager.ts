@@ -14,7 +14,7 @@
 
 import type { ApiClient, Task } from "./api-client.js";
 import type { AgentRunner } from "./runner.js";
-import { callClaudeCli, createAuthHeaders } from "./llm-client.js";
+import { callClaudeCli, createAuthHeaders, buildConversationHistory } from "./llm-client.js";
 import * as ui from "./ui.js";
 
 // ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ export class Manager {
     context: ManagerContext
   ): Promise<{ reply: string; actions: ManagerAction[]; proposals?: Array<Record<string, string>> }> {
     const systemPrompt = this.buildSystemPrompt(context);
-    const conversationHistory = this.buildConversationHistory(context);
+    const conversationHistory = this.buildManagerConversationHistory(context);
 
     let llmResponse: string;
     if (this.useClaudeCli) {
@@ -372,27 +372,10 @@ Help the user with sprint management.`;
 
   // ── Conversation history ─────────────────────────────────
 
-  private buildConversationHistory(
+  private buildManagerConversationHistory(
     ctx: ManagerContext
   ): Array<{ role: "user" | "assistant"; content: string }> {
-    const history: Array<{ role: "user" | "assistant"; content: string }> = [];
-
-    for (const msg of ctx.recent_messages) {
-      const role: "user" | "assistant" = (msg.from === "user" || msg.from.startsWith("user:")) ? "user" : "assistant";
-      if (history.length > 0 && history[history.length - 1].role === role) {
-        history[history.length - 1].content += "\n" + msg.content;
-      } else {
-        history.push({ role, content: msg.content });
-      }
-    }
-
-    // OpenAI APIs require starting with "user"
-    while (history.length > 0 && history[0].role !== "user") {
-      history.shift();
-    }
-
-    // Keep last 10 turns
-    return history.slice(-10);
+    return buildConversationHistory(ctx.recent_messages, { maxTurns: 10 });
   }
 
   // ── Response parsing ─────────────────────────────────────
