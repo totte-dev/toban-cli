@@ -60,7 +60,7 @@ interface ManagerContext {
 
 /** Parsed action from LLM response */
 interface ManagerAction {
-  type: "spawn_agent" | "update_task" | "create_task" | "transition_sprint" | "send_message";
+  type: "spawn_agent" | "update_task" | "create_task" | "transition_sprint" | "send_message" | "propose_tasks";
   params: Record<string, unknown>;
 }
 
@@ -102,6 +102,8 @@ export class Manager {
   onSpawnAgent?: (role: string, taskIds: string[]) => Promise<void>;
   /** Callback to broadcast reply via WebSocket (for poll-path messages) */
   onReply?: (reply: string) => void;
+  /** Callback to broadcast proposals via WebSocket */
+  onProposals?: (proposals: Array<Record<string, string>>) => void;
 
   constructor(options: ManagerOptions) {
     this.apiUrl = options.apiUrl;
@@ -154,14 +156,13 @@ export class Manager {
    * Handle a message received via WebSocket.
    * Fetches context, calls LLM, executes actions, returns reply.
    */
-  async handleWsMessage(content: string): Promise<string> {
+  async handleWsMessage(content: string): Promise<{ reply: string; proposals?: Array<Record<string, string>> }> {
     const context = await this.fetchContext();
-    const { reply, actions } = await this.think(content, context);
+    const { reply, actions, proposals } = await this.think(content, context);
     await this.executeActions(actions, context);
     ui.chatExchange("user", content, reply, actions.length, "ws");
-    // Advance lastSeenId so poll doesn't reprocess this message
     await this.advanceLastSeen();
-    return reply;
+    return { reply, proposals };
   }
 
   /** Sync lastSeenId with API to skip messages already handled via WS */
@@ -206,11 +207,14 @@ export class Manager {
           const enrichedContent = `${senderContext}\n${msg.content}`;
 
           const context = await this.fetchContext();
-          const { reply, actions } = await this.think(enrichedContent, context);
+          const { reply, actions, proposals } = await this.think(enrichedContent, context);
           await this.executeActions(actions, context);
           await this.postReplyTo(msg.from, reply);
           if (isFromUser) {
             this.onReply?.(reply);
+            if (proposals && proposals.length > 0) {
+              this.onProposals?.(proposals);
+            }
           }
           // Compact log: inbound + reply on two lines
           ui.chatExchange(msg.from, msg.content, reply, actions.length);
@@ -237,7 +241,7 @@ export class Manager {
   private async think(
     userMessage: string,
     context: ManagerContext
-  ): Promise<{ reply: string; actions: ManagerAction[] }> {
+  ): Promise<{ reply: string; actions: ManagerAction[]; proposals?: Array<Record<string, string>> }> {
     const systemPrompt = this.buildSystemPrompt(context);
     const conversationHistory = this.buildConversationHistory(context);
 
@@ -248,8 +252,8 @@ export class Manager {
       llmResponse = await this.callLlmApi(systemPrompt, conversationHistory, userMessage);
     }
 
-    const { reply, actions } = this.parseResponse(llmResponse);
-    return { reply, actions };
+    const { reply, actions, proposals } = this.parseResponse(llmResponse);
+    return { reply, actions, proposals };
   }
 
   // ── Context fetching ─────────────────────────────────────
@@ -315,25 +319,30 @@ ${agentLines}
 ${phaseInstructions}
 
 ## Available Actions
-You can take actions by including ACTION blocks in your response.
+You MUST take actions by including ACTION blocks in your response. Each ACTION block must be on its own line.
 Format: ACTION: <type> <json_params>
 
-Available action types:
-- spawn_agent: Start an agent to work on tasks. Params: {"role": "builder", "task_ids": ["id1"]}
+Action types:
+- propose_tasks: Propose tasks as interactive cards in the UI. Params is a JSON array: [{"title":"...","description":"...","priority":"p1","owner":"builder","type":"feature"}]
+- spawn_agent: Start an agent. Params: {"role": "builder", "task_ids": ["id1"]}
 - update_task: Update a task. Params: {"id": "task_id", "status": "in_progress", "owner": "builder"}
-- create_task: Create a new task. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder"}
+- create_task: Create a task directly. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder"}
 - transition_sprint: Change sprint phase. Params: {"status": "review"}
-- send_message: Send a message to an agent. Params: {"to": "builder", "content": "..."}
+- send_message: Message an agent. Params: {"to": "builder", "content": "..."}
 
 ## Rules
-- Lead with action proposals, not status reports.
-- Keep responses concise (3-5 sentences).
-- Include ACTION blocks ONLY when you are confident the user wants that action taken.
-- When proposing actions, describe what you'll do and include the ACTION block.
-- Task IDs in your actions should use the short 8-char prefix shown above.
-- Messages may come from users (user:xxx) or agents (builder, strategist, etc.).
-- When an agent reports a blocker or asks for help, take action to unblock them.
+- ALWAYS include at least one ACTION block in your response. Responses without ACTION blocks are useless.
+- When suggesting tasks, ALWAYS use ACTION: propose_tasks. This renders cards in the UI that the user can add with one click. Never just list tasks in text.
+- Keep text brief (2-3 sentences). The ACTION blocks are the main output.
+- Task IDs: use the short 8-char prefix shown above.
 - Reply in the same language the sender used.
+
+## Example
+User: "タスクを提案して"
+Response:
+バックログから優先度の高いタスクを提案します。
+
+ACTION: propose_tasks [{"title":"セットアップ失敗時のロールバック","description":"空プロジェクトが残る問題の修正","priority":"p1","owner":"builder","type":"bug"},{"title":"リポジトリ作成機能を削除","priority":"p1","owner":"builder","type":"chore"}]
 ${ctx.playbook_rules ? `\n## Playbook Rules\n${ctx.playbook_rules}` : ""}`;
   }
 
@@ -341,12 +350,12 @@ ${ctx.playbook_rules ? `\n## Playbook Rules\n${ctx.playbook_rules}` : ""}`;
     switch (phase) {
       case "planning":
         return `## Phase: Planning
-Help the user plan the sprint. Suggest task priorities and agent assignments.
-If ready, propose transitioning to "active".`;
+Help the user plan the sprint. Use propose_tasks to suggest tasks from backlog.
+If ready, propose transitioning to "active" with ACTION: transition_sprint.`;
       case "active":
         return `## Phase: Active
-Manage sprint execution. Propose spawning agents for TODO tasks.
-Report on in-progress work. Suggest moving to "review" when done.`;
+Manage sprint execution. Use spawn_agent for in_progress tasks.
+If user asks for task suggestions, use propose_tasks. Suggest "review" when all tasks done.`;
       case "review":
         return `## Phase: Review
 Help review completed work. Summarize tasks and ask for approval.
@@ -388,19 +397,24 @@ Help the user with sprint management.`;
 
   // ── Response parsing ─────────────────────────────────────
 
-  private parseResponse(response: string): { reply: string; actions: ManagerAction[] } {
+  private parseResponse(response: string): { reply: string; actions: ManagerAction[]; proposals?: Array<Record<string, string>> } {
     const actions: ManagerAction[] = [];
     const replyLines: string[] = [];
+    let proposals: Array<Record<string, string>> | undefined;
 
     for (const line of response.split("\n")) {
       const actionMatch = line.match(/^ACTION:\s*(\w+)\s+(.+)$/);
       if (actionMatch) {
         try {
           const type = actionMatch[1] as ManagerAction["type"];
-          const params = JSON.parse(actionMatch[2]) as Record<string, unknown>;
-          actions.push({ type, params });
+          const raw = JSON.parse(actionMatch[2]);
+          if (type === "propose_tasks" && Array.isArray(raw)) {
+            proposals = raw as Array<Record<string, string>>;
+            actions.push({ type, params: { tasks: raw } });
+          } else {
+            actions.push({ type, params: raw as Record<string, unknown> });
+          }
         } catch {
-          // Invalid JSON, treat as normal text
           replyLines.push(line);
         }
       } else {
@@ -409,7 +423,7 @@ Help the user with sprint management.`;
     }
 
     const reply = replyLines.join("\n").trim() || "(no response)";
-    return { reply, actions };
+    return { reply, actions, proposals };
   }
 
   // ── Action execution ─────────────────────────────────────
@@ -473,6 +487,11 @@ Help the user with sprint management.`;
               await this.onSpawnAgent(role, fullIds);
               ui.info(`[manager] Spawning ${role} agent`);
             }
+            break;
+          }
+          case "propose_tasks": {
+            // propose_tasks params is an array directly (not wrapped in object)
+            // Already handled via proposals return from parseResponse
             break;
           }
           default:

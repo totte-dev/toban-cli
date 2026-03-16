@@ -16,13 +16,19 @@ import * as ui from "./ui.js";
 
 /** Message format over WebSocket */
 interface WsMessage {
-  type: "chat" | "status" | "ping" | "pong" | "stdout" | "stderr";
+  type: "chat" | "status" | "ping" | "pong" | "stdout" | "stderr" | "revert" | "revert_result" | "proposals";
   from?: string;
   to?: string;
   content?: string;
   timestamp?: string;
   /** Agent name for stdout/stderr messages */
   agent_name?: string;
+  /** Revert-specific fields */
+  task_id?: string;
+  repo?: string;
+  commits?: string[];
+  /** Proposal-specific fields */
+  tasks?: Array<Record<string, string>>;
 }
 
 export interface WsChatServerOptions {
@@ -32,12 +38,14 @@ export interface WsChatServerOptions {
   apiKey: string;
   /** Toban API URL for registering the WS port and saving history */
   apiUrl: string;
-  /** Callback when a user message is received */
-  onMessage: (message: string) => Promise<string>;
+  /** Callback when a user message is received. Returns reply + optional proposals. */
+  onMessage: (message: string) => Promise<string | { reply: string; proposals?: Array<Record<string, string>> }>;
   /** Callback when first WS client connects */
   onClientConnected?: () => void;
   /** Callback when last WS client disconnects */
   onAllClientsDisconnected?: () => void;
+  /** Callback when a revert is requested from the UI */
+  onRevert?: (taskId: string, repo: string, commits: string[]) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export class WsChatServer {
@@ -46,9 +54,10 @@ export class WsChatServer {
   private port: number;
   private apiKey: string;
   private apiUrl: string;
-  private onMessage: (message: string) => Promise<string>;
+  private onMessage: (message: string) => Promise<string | { reply: string; proposals?: Array<Record<string, string>> }>;
   private onClientConnected?: () => void;
   private onAllClientsDisconnected?: () => void;
+  private onRevert?: (taskId: string, repo: string, commits: string[]) => Promise<{ ok: boolean; error?: string }>;
   private clients = new Set<WebSocket>();
 
   constructor(options: WsChatServerOptions) {
@@ -58,6 +67,7 @@ export class WsChatServer {
     this.onMessage = options.onMessage;
     this.onClientConnected = options.onClientConnected;
     this.onAllClientsDisconnected = options.onAllClientsDisconnected;
+    this.onRevert = options.onRevert;
   }
 
   /**
@@ -302,8 +312,10 @@ export class WsChatServer {
         });
 
         try {
-          // Generate reply
-          const reply = await this.onMessage(msg.content);
+          // Generate reply (may include proposals)
+          const result = await this.onMessage(msg.content);
+          const reply = typeof result === "string" ? result : result.reply;
+          const proposals = typeof result === "object" ? result.proposals : undefined;
 
           // Send reply via WebSocket
           const replyMsg: WsMessage = {
@@ -314,6 +326,16 @@ export class WsChatServer {
             timestamp: new Date().toISOString(),
           };
           this.broadcast(replyMsg);
+
+          // Broadcast proposals as separate message if present
+          if (proposals && proposals.length > 0) {
+            this.broadcast({
+              type: "proposals",
+              tasks: proposals,
+              timestamp: new Date().toISOString(),
+            });
+            ui.info(`[ws] Sent ${proposals.length} task proposal(s) to UI`);
+          }
 
           // Save reply to API in background
           this.saveMessageToApi("manager", "user", reply).catch(() => {});
@@ -326,6 +348,26 @@ export class WsChatServer {
             content: `Error: ${errMsg}`,
             timestamp: new Date().toISOString(),
           }));
+        }
+        break;
+      }
+
+      case "revert": {
+        if (!msg.task_id || !msg.commits?.length) {
+          ws.send(JSON.stringify({ type: "revert_result", task_id: msg.task_id, content: "Missing task_id or commits", timestamp: new Date().toISOString() }));
+          return;
+        }
+        ui.info(`[ws] Revert requested for task ${msg.task_id}: ${msg.commits.length} commit(s)`);
+        if (this.onRevert) {
+          const result = await this.onRevert(msg.task_id, msg.repo ?? "default", msg.commits);
+          this.broadcast({
+            type: "revert_result",
+            task_id: msg.task_id,
+            content: result.ok ? "Revert completed successfully" : `Revert failed: ${result.error}`,
+            timestamp: new Date().toISOString(),
+          });
+        } else {
+          ws.send(JSON.stringify({ type: "revert_result", task_id: msg.task_id, content: "Revert not supported", timestamp: new Date().toISOString() }));
         }
         break;
       }
