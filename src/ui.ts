@@ -41,19 +41,57 @@ function timestamp(): string {
 
 /**
  * Log a chat/message exchange between agents/users.
- * Normal mode: single line with arrow notation
+ * Normal mode: compact single line with timestamp
  * Debug mode: timestamped, full content preserved
  */
 export function chatMessage(from: string, to: string, content: string): void {
   if (_debug) {
-    const indent = content.split("\n").map(l => `  ${l}`).join("\n");
+    const indent = content.split("\n").map(l => `    ${l}`).join("\n");
     console.log(`[${timestamp()}] [chat] ${from} → ${to}:\n${indent}`);
   } else {
     const oneLine = content.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
-    const truncated = oneLine.length > 80 ? oneLine.slice(0, 77) + "..." : oneLine;
-    const symbol = from === "user" ? "◇" : "◆";
-    console.log(`${symbol} ${from} → ${to}: ${truncated}`);
+    const cols = process.stdout.columns ?? 80;
+    const maxLen = Math.max(40, cols - 30);
+    const truncated = oneLine.length > maxLen ? oneLine.slice(0, maxLen - 3) + "..." : oneLine;
+    const symbol = from.startsWith("user") ? "◇" : "◆";
+    const shortFrom = from.startsWith("user:") ? "user" : from;
+    console.log(`${color.dim(timestamp())} ${symbol} ${color.bold(shortFrom)}→${to}: ${truncated}`);
   }
+}
+
+/**
+ * Log a message exchange pair (inbound → reply) on two compact lines.
+ * Reduces log noise for poll-path message processing.
+ */
+export function chatExchange(
+  from: string,
+  inbound: string,
+  reply: string,
+  actionCount: number
+): void {
+  if (_debug) {
+    chatMessage(from, "manager", inbound);
+    chatMessage("manager", from, reply);
+    return;
+  }
+  const ts = timestamp();
+  const cols = process.stdout.columns ?? 80;
+  const maxLen = Math.max(30, cols - 35);
+  const inTrunc = truncateLine(inbound, maxLen);
+  const reTrunc = truncateLine(reply, maxLen);
+  const shortFrom = from.startsWith("user:") ? "user" : from;
+  const actionSuffix = actionCount > 0
+    ? color.cyan(` [${actionCount} action${actionCount > 1 ? "s" : ""}]`)
+    : "";
+  console.log(
+    `${color.dim(ts)} ◇ ${color.bold(shortFrom)}: ${inTrunc}\n` +
+    `${color.dim(ts)} ◆ ${color.bold("manager")}: ${reTrunc}${actionSuffix}`
+  );
+}
+
+function truncateLine(text: string, maxLen: number): string {
+  const oneLine = text.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+  return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 3) + "..." : oneLine;
 }
 
 /**
