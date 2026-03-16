@@ -1,7 +1,8 @@
 import { execSync, spawn, type ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { AgentConfig, RunningAgent } from "./types.js";
 import { buildBranchName } from "./spawner.js";
 import { buildCommand } from "./command-builder.js";
@@ -56,6 +57,57 @@ export function buildImage(dockerfilePath: string): void {
 /**
  * Build docker run arguments for an agent container.
  */
+/**
+ * Copy Claude auth files to a temp directory so the container can write to them.
+ * Claude Code updates .claude.json at runtime; read-only mounts cause failures.
+ */
+function prepareClaudeAuthCopy(containerName: string): string {
+  const home = homedir();
+  const tmpAuth = join(tmpdir(), `toban-claude-auth-${containerName}`);
+  mkdirSync(tmpAuth, { recursive: true });
+
+  // Copy .claude directory (contains settings, backups, etc.)
+  const claudeDir = join(home, ".claude");
+  const tmpClaudeDir = join(tmpAuth, ".claude");
+  if (existsSync(claudeDir)) {
+    cpSync(claudeDir, tmpClaudeDir, { recursive: true });
+  }
+
+  // Copy .claude.json — also restore from backup if missing
+  const claudeJson = join(home, ".claude.json");
+  const tmpClaudeJson = join(tmpAuth, ".claude.json");
+  if (existsSync(claudeJson)) {
+    copyFileSync(claudeJson, tmpClaudeJson);
+  } else if (existsSync(tmpClaudeDir)) {
+    // Try to restore from backup
+    const backupDir = join(tmpClaudeDir, "backups");
+    if (existsSync(backupDir)) {
+      try {
+        const backups = execSync(`ls -t "${backupDir}"/.claude.json.backup.* 2>/dev/null`, {
+          encoding: "utf-8",
+          timeout: 3000,
+        }).trim().split("\n").filter(Boolean);
+        if (backups.length > 0) {
+          copyFileSync(backups[0], tmpClaudeJson);
+          ui.info(`[docker] Restored .claude.json from backup`);
+        }
+      } catch {
+        // No backups found
+      }
+    }
+  }
+
+  // Copy .config/claude
+  const configClaude = join(home, ".config", "claude");
+  const tmpConfigClaude = join(tmpAuth, ".config", "claude");
+  if (existsSync(configClaude)) {
+    mkdirSync(join(tmpAuth, ".config"), { recursive: true });
+    cpSync(configClaude, tmpConfigClaude, { recursive: true });
+  }
+
+  return tmpAuth;
+}
+
 function buildDockerArgs(
   config: AgentConfig,
   worktreePath: string,
@@ -65,21 +117,24 @@ function buildDockerArgs(
   const home = homedir();
   const containerName = `toban-agent-${config.name}-${config.taskId.slice(0, 8)}`;
 
+  // Copy Claude auth files to writable temp directory
+  const tmpAuth = prepareClaudeAuthCopy(containerName);
+
   const args: string[] = [
     "run",
     "--rm",
     "--name", containerName,
     // Mount the worktree as /workspace
     "-v", `${worktreePath}:/workspace`,
-    // Mount CLI auth directories as read-only
-    ...(existsSync(join(home, ".claude"))
-      ? ["-v", `${join(home, ".claude")}:/home/agent/.claude:ro`]
+    // Mount Claude auth as writable copies (Claude updates these at runtime)
+    ...(existsSync(join(tmpAuth, ".claude"))
+      ? ["-v", `${join(tmpAuth, ".claude")}:/home/agent/.claude`]
       : []),
-    ...(existsSync(join(home, ".claude.json"))
-      ? ["-v", `${join(home, ".claude.json")}:/home/agent/.claude.json:ro`]
+    ...(existsSync(join(tmpAuth, ".claude.json"))
+      ? ["-v", `${join(tmpAuth, ".claude.json")}:/home/agent/.claude.json`]
       : []),
-    ...(existsSync(join(home, ".config", "claude"))
-      ? ["-v", `${join(home, ".config", "claude")}:/home/agent/.config/claude:ro`]
+    ...(existsSync(join(tmpAuth, ".config", "claude"))
+      ? ["-v", `${join(tmpAuth, ".config", "claude")}:/home/agent/.config/claude`]
       : []),
     // Gemini CLI auth
     ...(existsSync(join(home, ".config", "gemini"))
