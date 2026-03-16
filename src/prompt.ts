@@ -160,7 +160,8 @@ Work in this directory. When done, commit your changes with a descriptive messag
 When completing a task:
 1. Commit and push: git add -A && git commit -m "<message>" && git push origin HEAD
 2. Create PR if applicable: gh pr create --title "<task title>" --body "<summary>"
-3. Update task with PR URL: curl -s -X PATCH ${ctx.apiUrl}/api/v1/tasks/${ctx.taskId} -H "Content-Type: application/json" -H "Authorization: Bearer ${ctx.apiKey}" -d '{"branch":"<pr-url>","status":"review"}'
+3. Move task to review with a summary of what you did (key changes, files modified, PR/branch name):
+   curl -s -X PATCH ${ctx.apiUrl}/api/v1/tasks/${ctx.taskId} -H "Content-Type: application/json" -H "Authorization: Bearer ${ctx.apiKey}" -d '{"status":"review","review_comment":"<summary of changes, key files, branch/PR name>"}'
 
 Write a brief retrospective as a JSON comment to stdout on a new line in this format:
 RETRO_JSON:{"went_well":"what went well","to_improve":"what could be improved","suggested_tasks":[{"title":"task title","priority":"p1"}]}
