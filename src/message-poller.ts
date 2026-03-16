@@ -9,6 +9,7 @@
 import { writeFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ApiClient, Message } from "./api-client.js";
+import { PollLoop } from "./poll-loop.js";
 import * as ui from "./ui.js";
 
 const POLL_INTERVAL_MS = 10_000;
@@ -28,7 +29,7 @@ export class MessagePoller {
   private api: ApiClient;
   private channel: string;
   private workingDir: string;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private poller: PollLoop;
   private lastSeenTimestamp: string | null = null;
   private deliveredIds = new Set<string>();
 
@@ -36,6 +37,11 @@ export class MessagePoller {
     this.api = options.api;
     this.channel = options.channel;
     this.workingDir = options.workingDir;
+    this.poller = new PollLoop({
+      name: `msg:${this.channel}`,
+      intervalMs: POLL_INTERVAL_MS,
+      onTick: () => this.poll(),
+    });
   }
 
   /**
@@ -43,19 +49,14 @@ export class MessagePoller {
    */
   start(): void {
     ui.debug("msg", `Polling messages for "${this.channel}" every ${POLL_INTERVAL_MS / 1000}s`);
-    // Run immediately, then on interval
-    this.poll();
-    this.timer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
+    this.poller.start();
   }
 
   /**
    * Stop polling and clean up.
    */
   stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.poller.stop();
   }
 
   private async poll(): Promise<void> {

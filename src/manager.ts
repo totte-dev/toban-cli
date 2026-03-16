@@ -15,6 +15,7 @@
 import type { ApiClient, Task } from "./api-client.js";
 import type { AgentRunner } from "./runner.js";
 import { callClaudeCli, createAuthHeaders, buildConversationHistory } from "./llm-client.js";
+import { PollLoop } from "./poll-loop.js";
 import * as ui from "./ui.js";
 
 // ---------------------------------------------------------------------------
@@ -94,8 +95,7 @@ export class Manager {
   private runner: AgentRunner | null;
   private api: ApiClient | null;
   private lastSeenId: string | null = null;
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private processing = false;
+  private poller: PollLoop;
   private useClaudeCli: boolean;
 
   /** Callbacks for actions the Manager can't execute directly */
@@ -115,39 +115,35 @@ export class Manager {
     this.runner = options.runner ?? null;
     this.api = options.api ?? null;
     this.useClaudeCli = !options.llmBaseUrl || !options.llmApiKey;
+    this.poller = new PollLoop({
+      name: "manager",
+      intervalMs: this.pollIntervalMs,
+      onTick: () => this.poll(),
+    });
   }
 
   // ── Lifecycle ────────────────────────────────────────────
 
   start(): void {
     ui.info(`[manager] Started (poll every ${this.pollIntervalMs / 1000}s, model: ${this.model})`);
-    this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
-    this.poll();
+    this.poller.start();
   }
 
   stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.poller.stop();
     ui.debug("manager", "Manager stopped");
   }
 
   /** Pause polling when WS clients are connected (messages come via WS) */
   pausePolling(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-      ui.info("[manager] Polling paused (WS connected)");
-    }
+    ui.info("[manager] Polling paused (WS connected)");
+    this.poller.pause();
   }
 
   /** Resume polling when all WS clients disconnected */
   resumePolling(): void {
-    if (!this.timer) {
-      this.timer = setInterval(() => this.poll(), this.pollIntervalMs);
-      ui.info("[manager] Polling resumed (no WS clients)");
-    }
+    ui.info("[manager] Polling resumed (no WS clients)");
+    this.poller.resume();
   }
 
   // ── WebSocket entry point ────────────────────────────────
@@ -183,52 +179,43 @@ export class Manager {
   // ── Polling ──────────────────────────────────────────────
 
   private async poll(): Promise<void> {
-    if (this.processing) return;
-    this.processing = true;
+    await this.heartbeat();
 
-    try {
-      await this.heartbeat();
+    const messages = await this.fetchMessages();
+    if (!messages || messages.length === 0) return;
 
-      const messages = await this.fetchMessages();
-      if (!messages || messages.length === 0) return;
+    const newMessages = this.findNewInboundMessages(messages);
+    if (newMessages.length > 0) {
+      ui.debug("manager", `${newMessages.length} new message(s) to process`);
+    }
 
-      const newMessages = this.findNewInboundMessages(messages);
-      if (newMessages.length > 0) {
-        ui.debug("manager", `${newMessages.length} new message(s) to process`);
-      }
+    for (const msg of newMessages) {
+      const isFromUser = msg.from === "user" || msg.from.startsWith("user:");
 
-      for (const msg of newMessages) {
-        const isFromUser = msg.from === "user" || msg.from.startsWith("user:");
+      try {
+        const senderContext = isFromUser
+          ? `[Message from user: ${msg.from}]`
+          : `[Message from agent: ${msg.from}]`;
+        const enrichedContent = `${senderContext}\n${msg.content}`;
 
-        try {
-          const senderContext = isFromUser
-            ? `[Message from user: ${msg.from}]`
-            : `[Message from agent: ${msg.from}]`;
-          const enrichedContent = `${senderContext}\n${msg.content}`;
-
-          const context = await this.fetchContext();
-          const { reply, actions, proposals } = await this.think(enrichedContent, context);
-          await this.executeActions(actions, context);
-          await this.postReplyTo(msg.from, reply);
-          if (isFromUser) {
-            this.onReply?.(reply);
-            if (proposals && proposals.length > 0) {
-              this.onProposals?.(proposals);
-            }
+        const context = await this.fetchContext();
+        const { reply, actions, proposals } = await this.think(enrichedContent, context);
+        await this.executeActions(actions, context);
+        await this.postReplyTo(msg.from, reply);
+        if (isFromUser) {
+          this.onReply?.(reply);
+          if (proposals && proposals.length > 0) {
+            this.onProposals?.(proposals);
           }
-          // Compact log: inbound + reply on two lines
-          ui.chatExchange(msg.from, msg.content, reply, actions.length);
-        } catch (err) {
-          ui.chatExchange(msg.from, msg.content, `Error: ${err}`, 0);
-          await this.postReplyTo(msg.from, "Sorry, an error occurred while processing your message. Please try again.").catch(() => {});
         }
-
-        this.lastSeenId = msg.id;
+        // Compact log: inbound + reply on two lines
+        ui.chatExchange(msg.from, msg.content, reply, actions.length);
+      } catch (err) {
+        ui.chatExchange(msg.from, msg.content, `Error: ${err}`, 0);
+        await this.postReplyTo(msg.from, "Sorry, an error occurred while processing your message. Please try again.").catch(() => {});
       }
-    } catch (err) {
-      ui.debug("manager", `Poll error: ${err}`);
-    } finally {
-      this.processing = false;
+
+      this.lastSeenId = msg.id;
     }
   }
 
