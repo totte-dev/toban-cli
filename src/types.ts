@@ -29,6 +29,8 @@ export interface AgentConfig {
   commandTemplate?: string;
   /** Project secrets to inject into the agent environment */
   secrets?: Record<string, string>;
+  /** Manager WS server port (for agent HTTP messaging) */
+  managerPort?: number;
 }
 
 export type AgentStatus = "spawning" | "running" | "completed" | "failed" | "stopped";

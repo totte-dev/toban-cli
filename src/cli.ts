@@ -570,6 +570,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
           parentAgent: cliArgs.agentName,
           sprintNumber: sprintData.sprint.number,
           ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
+          ...(actualWsPort ? { managerPort: actualWsPort } : {}),
         };
 
         ui.agentSpawned({

@@ -110,6 +110,7 @@ export function spawnAgent(
       TOBAN_API_URL: config.apiUrl,
       TOBAN_AGENT_NAME: config.name,
       TOBAN_TASK_ID: config.taskId,
+      ...(config.managerPort ? { TOBAN_MANAGER_PORT: String(config.managerPort) } : {}),
       // Inject project secrets directly as env vars (no prefix in non-Docker mode)
       ...(config.secrets ?? {}),
     },
