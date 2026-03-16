@@ -82,3 +82,58 @@ export function createAuthHeaders(apiKey: string): Record<string, string> {
     Authorization: `Bearer ${apiKey}`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Shared conversation history builder
+// ---------------------------------------------------------------------------
+
+export interface ConversationMessage {
+  from: string;
+  content: string;
+  id?: string;
+  created_at?: string;
+}
+
+/**
+ * Build OpenAI-compatible conversation history from raw messages.
+ * Merges consecutive same-role messages, ensures user-first ordering.
+ */
+export function buildConversationHistory(
+  messages: ConversationMessage[],
+  opts?: { maxTurns?: number; upToId?: string }
+): Array<{ role: "user" | "assistant"; content: string }> {
+  const maxTurns = opts?.maxTurns ?? 20;
+
+  let relevant = messages;
+  if (opts?.upToId) {
+    const sorted = [...messages].sort(
+      (a, b) => new Date(a.created_at ?? "").getTime() - new Date(b.created_at ?? "").getTime()
+    );
+    const upToIdx = sorted.findIndex((m) => m.id === opts.upToId);
+    relevant = upToIdx === -1 ? sorted.slice(-maxTurns) : sorted.slice(Math.max(0, upToIdx - maxTurns + 1), upToIdx + 1);
+  }
+
+  const history: Array<{ role: "user" | "assistant"; content: string }> = [];
+
+  for (const msg of relevant) {
+    const role: "user" | "assistant" =
+      (msg.from === "user" || msg.from.startsWith("user:")) ? "user" : "assistant";
+    if (history.length > 0 && history[history.length - 1].role === role) {
+      history[history.length - 1].content += "\n" + msg.content;
+    } else {
+      history.push({ role, content: msg.content });
+    }
+  }
+
+  // OpenAI-compatible APIs require starting with "user"
+  while (history.length > 0 && history[0].role !== "user") {
+    history.shift();
+  }
+
+  if (history.length === 0 && messages.length > 0) {
+    const last = messages[messages.length - 1];
+    history.push({ role: "user", content: last.content });
+  }
+
+  return opts?.upToId ? history : history.slice(-maxTurns);
+}

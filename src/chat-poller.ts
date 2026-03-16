@@ -6,7 +6,7 @@
  * or any OpenAI-compatible API endpoint (Anthropic, Google, OpenAI, etc.).
  */
 
-import { callClaudeCli, createAuthHeaders } from "./llm-client.js";
+import { callClaudeCli, createAuthHeaders, buildConversationHistory } from "./llm-client.js";
 import * as ui from "./ui.js";
 
 interface Message {
@@ -218,7 +218,7 @@ export class ChatPoller {
     userMessage: Message,
     allMessages: Message[]
   ): Promise<string> {
-    const history = this.buildConversationHistory(allMessages, userMessage);
+    const history = this.buildPollerConversationHistory(allMessages, userMessage);
 
     // Detect if this is a continuation or first contact
     const priorManagerReplies = allMessages.filter((m) => m.from === "manager" && m.to === "user");
@@ -248,7 +248,7 @@ export class ChatPoller {
     const priorManagerReplies = allMessages.filter((m) => m.from === "manager" && m.to === "user");
     const isFirstContact = priorManagerReplies.length <= 1;
     const systemPrompt = await this.buildSystemPrompt(isFirstContact);
-    const conversationHistory = this.buildConversationHistory(allMessages, userMessage);
+    const conversationHistory = this.buildPollerConversationHistory(allMessages, userMessage);
 
     // Build OpenAI-compatible messages array with system prompt
     const messages = [
@@ -412,43 +412,11 @@ Help the user with sprint management. Propose the next action based on task stat
     }
   }
 
-  private buildConversationHistory(
+  private buildPollerConversationHistory(
     allMessages: Message[],
     upToMessage: Message
   ): Array<{ role: "user" | "assistant"; content: string }> {
-    const sorted = [...allMessages].sort(
-      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
-
-    // Take the last 20 messages for context, up to and including the current message
-    const upToIdx = sorted.findIndex((m) => m.id === upToMessage.id);
-    const relevant = upToIdx === -1 ? sorted.slice(-20) : sorted.slice(Math.max(0, upToIdx - 19), upToIdx + 1);
-
-    const history: Array<{ role: "user" | "assistant"; content: string }> = [];
-
-    for (const msg of relevant) {
-      const role: "user" | "assistant" =
-        msg.from === "user" ? "user" : "assistant";
-
-      // Merge consecutive same-role messages
-      if (history.length > 0 && history[history.length - 1].role === role) {
-        history[history.length - 1].content += "\n" + msg.content;
-      } else {
-        history.push({ role, content: msg.content });
-      }
-    }
-
-    // OpenAI-compatible APIs require messages to start with "user" role
-    while (history.length > 0 && history[0].role !== "user") {
-      history.shift();
-    }
-
-    // Must have at least one message
-    if (history.length === 0) {
-      history.push({ role: "user", content: upToMessage.content });
-    }
-
-    return history;
+    return buildConversationHistory(allMessages, { maxTurns: 20, upToId: upToMessage.id });
   }
 
   private async postReply(content: string): Promise<void> {

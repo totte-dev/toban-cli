@@ -13,11 +13,12 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { createAuthHeaders } from "./llm-client.js";
+import { WS_MSG, type WsMsgType } from "./ws-types.js";
 import * as ui from "./ui.js";
 
 /** Message format over WebSocket */
 interface WsMessage {
-  type: "chat" | "status" | "ping" | "pong" | "stdout" | "stderr" | "revert" | "revert_result" | "proposals";
+  type: WsMsgType;
   from?: string;
   to?: string;
   content?: string;
@@ -110,7 +111,7 @@ export class WsChatServer {
           } catch (err) {
             ui.warn(`[ws] Invalid message: ${err}`);
             ws.send(JSON.stringify({
-              type: "status",
+              type: WS_MSG.STATUS,
               content: "Invalid message format",
             }));
           }
@@ -129,7 +130,7 @@ export class WsChatServer {
 
         // Send welcome
         ws.send(JSON.stringify({
-          type: "status",
+          type: WS_MSG.STATUS,
           content: "connected",
           timestamp: new Date().toISOString(),
         }));
@@ -279,7 +280,7 @@ export class WsChatServer {
     ui.info(`[ws] Agent message: ${from} → ${to}`);
     this.saveMessageToApi(from, to, content).catch(() => {});
     this.broadcast({
-      type: "chat",
+      type: WS_MSG.CHAT,
       from,
       to,
       content,
@@ -289,11 +290,11 @@ export class WsChatServer {
 
   private async handleMessage(ws: WebSocket, msg: WsMessage): Promise<void> {
     switch (msg.type) {
-      case "ping":
-        ws.send(JSON.stringify({ type: "pong", timestamp: new Date().toISOString() }));
+      case WS_MSG.PING:
+        ws.send(JSON.stringify({ type: WS_MSG.PONG, timestamp: new Date().toISOString() }));
         break;
 
-      case "chat": {
+      case WS_MSG.CHAT: {
         if (!msg.content) return;
 
         // Save incoming message to API in background
@@ -301,7 +302,7 @@ export class WsChatServer {
 
         // Send typing indicator
         this.broadcast({
-          type: "status",
+          type: WS_MSG.STATUS,
           content: "typing",
           timestamp: new Date().toISOString(),
         });
@@ -314,7 +315,7 @@ export class WsChatServer {
 
           // Send reply via WebSocket
           const replyMsg: WsMessage = {
-            type: "chat",
+            type: WS_MSG.CHAT,
             from: "manager",
             to: "user",
             content: reply,
@@ -325,7 +326,7 @@ export class WsChatServer {
           // Broadcast proposals as separate message if present
           if (proposals && proposals.length > 0) {
             this.broadcast({
-              type: "proposals",
+              type: WS_MSG.PROPOSALS,
               tasks: proposals,
               timestamp: new Date().toISOString(),
             });
@@ -337,7 +338,7 @@ export class WsChatServer {
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : "Unknown error";
           ws.send(JSON.stringify({
-            type: "chat",
+            type: WS_MSG.CHAT,
             from: "manager",
             to: "user",
             content: `Error: ${errMsg}`,
@@ -347,22 +348,22 @@ export class WsChatServer {
         break;
       }
 
-      case "revert": {
+      case WS_MSG.REVERT: {
         if (!msg.task_id || !msg.commits?.length) {
-          ws.send(JSON.stringify({ type: "revert_result", task_id: msg.task_id, content: "Missing task_id or commits", timestamp: new Date().toISOString() }));
+          ws.send(JSON.stringify({ type: WS_MSG.REVERT_RESULT, task_id: msg.task_id, content: "Missing task_id or commits", timestamp: new Date().toISOString() }));
           return;
         }
         ui.info(`[ws] Revert requested for task ${msg.task_id}: ${msg.commits.length} commit(s)`);
         if (this.onRevert) {
           const result = await this.onRevert(msg.task_id, msg.repo ?? "default", msg.commits);
           this.broadcast({
-            type: "revert_result",
+            type: WS_MSG.REVERT_RESULT,
             task_id: msg.task_id,
             content: result.ok ? "Revert completed successfully" : `Revert failed: ${result.error}`,
             timestamp: new Date().toISOString(),
           });
         } else {
-          ws.send(JSON.stringify({ type: "revert_result", task_id: msg.task_id, content: "Revert not supported", timestamp: new Date().toISOString() }));
+          ws.send(JSON.stringify({ type: WS_MSG.REVERT_RESULT, task_id: msg.task_id, content: "Revert not supported", timestamp: new Date().toISOString() }));
         }
         break;
       }
