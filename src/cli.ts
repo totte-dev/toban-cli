@@ -352,12 +352,18 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     }
   }
 
-  let sprintData: SprintStartResult | null = null;
+  let sprintData: SprintStartResult;
   try {
     sprintData = await api.startSprint();
     ui.sprintInfo(sprintData.sprint.number, sprintData.agents.length, sprintData.tasks.length);
   } catch (err) {
-    ui.warn(`Sprint API unavailable, falling back to task fetch`);
+    ui.error(`Failed to start sprint: ${err}`);
+    await api.updateAgent({
+      name: cliArgs.agentName,
+      status: "error",
+      activity: `No active sprint: ${err}`,
+    });
+    process.exit(1);
   }
 
   // Start the manager chat system
@@ -399,25 +405,10 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     llmProvider: cliArgs.llmBaseUrl || "Claude Code CLI",
   });
 
-  let tasks: Task[];
-  if (sprintData?.tasks && sprintData.tasks.length > 0) {
-    tasks = sprintData.tasks;
-  } else {
-    try {
-      tasks = await api.fetchTasks();
-    } catch (err) {
-      ui.error(`Failed to fetch tasks: ${err}`);
-      await api.updateAgent({
-        name: cliArgs.agentName,
-        status: "error",
-        activity: `Failed to fetch tasks: ${err}`,
-      });
-      process.exit(1);
-    }
-  }
+  const tasks: Task[] = sprintData.tasks;
 
   const todoTasks = tasks
-    .filter((t) => t.status === "todo" || t.status === "in_progress")
+    .filter((t) => (t.status === "todo" || t.status === "in_progress") && t.owner !== "user")
     .sort((a, b) => {
       const pa = typeof a.priority === "string" ? parseInt(a.priority.replace("p", ""), 10) : (a.priority ?? 99);
       const pb = typeof b.priority === "string" ? parseInt(b.priority.replace("p", ""), 10) : (b.priority ?? 99);
@@ -544,7 +535,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         apiUrl: cliArgs.apiUrl,
         prompt,
         parentAgent: cliArgs.agentName,
-        sprintNumber: sprintData?.sprint.number,
+        sprintNumber: sprintData.sprint.number,
         ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
       };
 
