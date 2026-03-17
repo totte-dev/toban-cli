@@ -366,6 +366,42 @@ export async function executeActions(
             // Build review summary with commit description + file stats
             const lines = diffContent.split("\n").length;
             const filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
+
+            // LLM review: ask Claude to review the diff against the task requirements
+            let llmReview = "";
+            try {
+              const { spawn: reviewSpawn } = await import("node:child_process");
+              const diffForReview = diffContent.slice(0, 8000); // Limit diff size for prompt
+              const reviewPrompt = `You are reviewing code changes made by an AI agent.
+
+Task: ${ctx.task.title}
+Description: ${ctx.task.description || "No description"}
+
+Git diff:
+${diffForReview}
+
+Write a brief code review (3-5 bullet points) covering:
+1. Does the change match the task requirements?
+2. Code quality concerns (if any)
+3. Missing tests or edge cases
+4. Overall verdict: APPROVE or NEEDS_CHANGES
+
+Keep it concise. Reply in the same language as the task title.`;
+
+              const env = { ...process.env };
+              delete env.CLAUDECODE;
+              llmReview = await new Promise<string>((resolve) => {
+                const child = reviewSpawn("claude", ["--print", "--model", "claude-sonnet-4-20250514", reviewPrompt], {
+                  env, stdio: ["ignore", "pipe", "pipe"], timeout: 60_000,
+                });
+                let out = "";
+                child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
+                child.on("close", () => resolve(out.trim()));
+                child.on("error", () => resolve(""));
+                setTimeout(() => { try { child.kill(); } catch {} resolve(""); }, 60_000);
+              });
+            } catch { /* LLM review failed — continue with stats only */ }
+
             const review = [
               `Agent: ${ctx.agentName}`,
               `Commit: ${lastCommit}`,
@@ -373,10 +409,11 @@ export async function executeActions(
               `\nFiles changed: ${filesChanged.length}`,
               diffStat,
               lines > 200 ? `(${lines} lines of diff)` : "",
+              llmReview ? `\n--- Code Review ---\n${llmReview}` : "",
             ].filter(Boolean).join("\n").slice(0, 4000);
 
             await ctx.api.updateTask(ctx.task.id, { review_comment: review } as Partial<Task>);
-            ui.info( `[${phase}] ${label}: ${filesChanged.length} files`);
+            ui.info( `[${phase}] ${label}: ${filesChanged.length} files${llmReview ? " + LLM review" : ""}`);
           } catch (revErr) {
             const msg = revErr instanceof Error ? revErr.message : String(revErr);
             ui.warn(`[template] review_changes failed: ${msg}`);
