@@ -129,6 +129,8 @@ export class Manager {
   onStreamChunk?: (chunk: string) => void;
   /** Callback when a spawn_agent needs user approval */
   onApprovalRequest?: (approval: PendingApproval) => void;
+  /** Callback when Manager activity changes (for WS broadcast) */
+  onActivityChange?: (activity: string) => void;
 
   constructor(options: ManagerOptions) {
     this.apiUrl = options.apiUrl;
@@ -249,6 +251,7 @@ export class Manager {
   }
 
   private async updateActivity(activity: string): Promise<void> {
+    this.onActivityChange?.(activity);
     try {
       await fetch(`${this.apiUrl}/api/v1/agents`, {
         method: "PUT",
