@@ -27,6 +27,11 @@ export function createWorktree(
 ): string {
   const worktreeDir = path.join(repoDir, ".worktrees", branchName.replace(/\//g, "-"));
 
+  // Clean up stale worktree/branch from previous runs
+  try { execSync(`git worktree remove "${worktreeDir}" --force`, { cwd: repoDir, stdio: "pipe" }); } catch { /* may not exist */ }
+  try { execSync(`git branch -D "${branchName}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* may not exist */ }
+  try { execSync("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+
   execSync(
     `git worktree add -b "${branchName}" "${worktreeDir}" "${baseBranch}"`,
     { cwd: repoDir, stdio: "pipe" }
