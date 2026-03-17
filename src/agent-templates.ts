@@ -79,7 +79,8 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
-      completion: `Focus on files relevant to your task. Do not explore the entire codebase.
+      completion: `IMPORTANT: Work ONLY on the assigned task described above. Do NOT fix other issues you discover, do NOT refactor unrelated code, do NOT add features not requested. If you find other issues, mention them in your RETRO_JSON suggested_tasks instead.
+Focus on files relevant to your task. Do not explore the entire codebase.
 Do NOT run git push — the CLI will handle pushing after you finish.
 
 When completing a task:
