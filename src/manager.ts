@@ -45,6 +45,15 @@ interface ManagerContext {
     type: string | null;
     target_repo: string | null;
   }>;
+  backlog_tasks?: Array<{
+    id: string;
+    title: string;
+    description: string | null;
+    priority: string;
+    owner: string | null;
+    type: string | null;
+  }>;
+  retro_comments?: string[];
   agents: Array<{
     name: string;
     status: string;
@@ -406,6 +415,17 @@ export class Manager {
         }).join("\n")
       : "  (no agents)";
 
+    const backlogLines = ctx.backlog_tasks?.length
+      ? ctx.backlog_tasks.map((t) => {
+          const owner = t.owner ? ` @${t.owner}` : "";
+          return `  - ${t.priority} ${t.title}${owner} (id: ${t.id.slice(0, 8)})`;
+        }).join("\n")
+      : "";
+
+    const retroLines = ctx.retro_comments?.length
+      ? ctx.retro_comments.map((c) => `  - ${c}`).join("\n")
+      : "";
+
     const phaseInstructions = loadPhaseInstructions(ctx.sprint?.status ?? "unknown");
 
     // Build repo access section (only if repos are configured)
@@ -430,6 +450,8 @@ export class Manager {
       sprintInfo,
       repoAccess,
       tasks: taskLines,
+      backlog: backlogLines ? `\n### Backlog (not in sprint)\n${backlogLines}` : "",
+      retro: retroLines ? `\n### Previous Sprint Retro\n${retroLines}` : "",
       agents: agentLines,
       phaseInstructions,
     });
