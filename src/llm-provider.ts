@@ -152,8 +152,7 @@ export class ClaudeCliProvider implements LlmProvider {
                 onChunk?.(event.result);
               }
             } catch {
-              // Not JSON — treat as raw text
-              onChunk?.(line);
+              // Not valid JSON in stream-json mode — skip (do not send to chat)
             }
           }
         } else {
