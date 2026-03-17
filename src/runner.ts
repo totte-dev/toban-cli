@@ -8,6 +8,7 @@ import {
   spawnAgentInTerminal,
   tryMerge,
 } from "./spawner.js";
+import { getEngine, extractTextFromStreamJson } from "./agent-engine.js";
 import {
   isDockerAvailable,
   isImageAvailable,
@@ -143,8 +144,8 @@ export class AgentRunner {
     this.agents.set(config.name, managed);
 
     // Stream stdout/stderr to WebSocket clients
-    // For Claude agents with stream-json output, parse structured events
-    const isClaude = config.type === "claude";
+    // Use engine provider for structured output parsing
+    const engine = getEngine(config.type);
     if (this.onStdout || this.onActivity) {
       const stdoutCb = this.onStdout;
       const activityCb = this.onActivity;
@@ -152,27 +153,21 @@ export class AgentRunner {
       let stdoutBuffer = "";
 
       child.stdout?.on("data", (data: Buffer) => {
-        if (isClaude && activityCb) {
-          // Parse stream-json JSONL: each line is a JSON object
+        if (engine.supportsStructuredOutput && engine.parseOutputLine && activityCb) {
+          // Structured output: parse JSONL lines into activity events
           stdoutBuffer += data.toString();
           const lines = stdoutBuffer.split("\n");
           stdoutBuffer = lines.pop() ?? ""; // keep incomplete last line
 
           for (const line of lines) {
             if (!line.trim()) continue;
-            try {
-              const event = JSON.parse(line);
-              const activities = parseStreamJsonEvents(event);
-              for (const act of activities) {
-                activityCb(agentName, act);
-              }
-            } catch {
-              // Not JSON — forward as raw text activity
-              activityCb(agentName, { kind: "text", summary: line, timestamp: new Date().toISOString() });
+            const activities = engine.parseOutputLine(line);
+            for (const act of activities) {
+              activityCb(agentName, act);
             }
           }
         } else {
-          // Non-Claude agents: forward raw stdout
+          // Plain text output: forward as raw stdout
           const lines = data.toString().split("\n").filter(Boolean);
           if (lines.length > 0 && stdoutCb) stdoutCb(agentName, lines, "stdout");
         }
@@ -471,117 +466,7 @@ export function mergeAgentBranch(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Stream-JSON parsing helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Parse a stream-json event and extract all meaningful activities.
- * Claude CLI stream-json emits JSONL with events like:
- *   {"type":"assistant","message":{"content":[{"type":"text","text":"..."},{"type":"tool_use",...}]}}
- *   {"type":"content_block_start","content_block":{"type":"tool_use","name":"Read",...}}
- *   {"type":"result","subtype":"success","result":"...","cost_usd":0.05}
- */
-function parseStreamJsonEvents(event: Record<string, unknown>): AgentActivity[] {
-  const now = new Date().toISOString();
-  const activities: AgentActivity[] = [];
-
-  // content_block_start with tool_use
-  if (event.type === "content_block_start") {
-    const block = event.content_block as Record<string, unknown> | undefined;
-    if (block?.type === "tool_use" && typeof block.name === "string") {
-      activities.push({
-        kind: "tool",
-        tool: block.name,
-        summary: summarizeToolInput(block.name, block.input as Record<string, unknown> | undefined),
-        timestamp: now,
-      });
-    }
-  }
-
-  // assistant message — text blocks + tool_use blocks
-  if (event.type === "assistant") {
-    const message = event.message as Record<string, unknown> | undefined;
-    const content = message?.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
-          activities.push({ kind: "text", summary: block.text.trim(), timestamp: now });
-        }
-        if (block?.type === "tool_use" && typeof block.name === "string") {
-          activities.push({
-            kind: "tool",
-            tool: block.name,
-            summary: summarizeToolInput(block.name, block.input as Record<string, unknown> | undefined),
-            timestamp: now,
-          });
-        }
-      }
-    }
-  }
-
-  // result event — final output
-  if (event.type === "result" && typeof event.result === "string" && event.result.trim()) {
-    activities.push({ kind: "result", summary: event.result.trim(), timestamp: now });
-  }
-
-  return activities;
-}
-
-/**
- * Extract displayable text content from a stream-json event.
- * Used by extractRetroComment for backward compat.
- */
-function extractTextFromStreamJson(event: Record<string, unknown>): string | null {
-  if (event.type === "result" && typeof event.result === "string") {
-    return event.result;
-  }
-  if (event.type === "assistant") {
-    const message = event.message as Record<string, unknown> | undefined;
-    const content = message?.content;
-    if (Array.isArray(content)) {
-      const texts = content
-        .filter((b: Record<string, unknown>) => b.type === "text" && typeof b.text === "string")
-        .map((b: Record<string, unknown>) => b.text as string);
-      if (texts.length > 0) return texts.join("");
-    }
-  }
-  return null;
-}
-
-/**
- * Create a brief human-readable summary of a tool invocation.
- */
-function summarizeToolInput(toolName: string, input?: Record<string, unknown>): string {
-  if (!input) return toolName;
-
-  switch (toolName) {
-    case "Read":
-      return input.file_path ? `Read ${shortenPath(input.file_path as string)}` : "Read";
-    case "Write":
-      return input.file_path ? `Write ${shortenPath(input.file_path as string)}` : "Write";
-    case "Edit":
-      return input.file_path ? `Edit ${shortenPath(input.file_path as string)}` : "Edit";
-    case "Glob":
-      return input.pattern ? `Glob ${input.pattern}` : "Glob";
-    case "Grep":
-      return input.pattern ? `Grep "${input.pattern}"` : "Grep";
-    case "Bash": {
-      const cmd = input.command as string | undefined;
-      return cmd ? `Bash: ${cmd.length > 60 ? cmd.slice(0, 60) + "..." : cmd}` : "Bash";
-    }
-    case "Agent":
-      return input.description ? `Agent: ${input.description}` : "Agent";
-    default:
-      return toolName;
-  }
-}
-
-/** Shorten a file path to the last 2 segments */
-function shortenPath(p: string): string {
-  const parts = p.split("/");
-  return parts.length > 2 ? parts.slice(-2).join("/") : p;
-}
+// Stream-JSON parsing helpers moved to agent-engine.ts
 
 /**
  * Clean up a Docker worktree branch and prune stale worktree references.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AgentConfig, RunningAgent } from "./types.js";
 import { buildBranchName } from "./spawner.js";
-import { buildCommand } from "./command-builder.js";
+import { buildCommand } from "./agent-engine.js";
 import * as ui from "./ui.js";
 
 /** Docker image name for the agent container */
