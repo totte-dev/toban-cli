@@ -429,7 +429,15 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         if (existsSync(join(repoDir, ".git"))) {
           s.start(`Pulling latest for ${ws.github_repo}...`);
           try {
-            execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
+            execSync("git fetch origin", { cwd: repoDir, stdio: "pipe" });
+            try {
+              execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
+            } catch {
+              // ff-only failed (diverged from agent merges) — reset to remote
+              execSync("git reset --hard origin/main 2>/dev/null || git reset --hard origin/master", {
+                cwd: repoDir, stdio: "pipe", shell: "/bin/sh",
+              });
+            }
             s.stop(`Repo updated: ${ws.github_repo}`);
           } catch (pullErr) {
             const pullMsg = pullErr instanceof Error ? pullErr.message : String(pullErr);
