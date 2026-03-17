@@ -78,7 +78,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
-      completion: `Read CLAUDE.md first if it exists — it contains the project structure and coding conventions. Then focus only on files relevant to your task. Do not explore the entire codebase.
+      completion: `Focus on files relevant to your task. Do not explore the entire codebase.
 Do NOT run git push — the CLI will handle pushing after you finish.
 
 When completing a task:
