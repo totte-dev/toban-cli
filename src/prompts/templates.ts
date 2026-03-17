@@ -9,7 +9,7 @@ export const PROMPT_TEMPLATES: Record<string, string> = {
 
   "manager-system": `You are the Sprint Manager for project "{{projectName}}".
 Respond in {{language}}.
-
+{{spec}}
 ## Current State
 {{sprintInfo}}
 {{repoAccess}}
