@@ -23,6 +23,12 @@ export function callClaudeCli(opts: ClaudeCliOptions): Promise<string> {
 export interface ClaudeCliStreamOptions extends ClaudeCliOptions {
   /** Called with each text chunk as it arrives from stdout */
   onChunk?: (chunk: string) => void;
+  /** Working directory for the Claude CLI process */
+  cwd?: string;
+  /** Enable tool access with --dangerously-skip-permissions */
+  enableTools?: boolean;
+  /** Restrict to specific tools (requires enableTools) */
+  allowedTools?: string[];
 }
 
 /**
@@ -30,7 +36,7 @@ export interface ClaudeCliStreamOptions extends ClaudeCliOptions {
  * Returns the full response text on completion.
  */
 export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<string> {
-  const { systemPrompt, history, userMessage, model, timeoutMs = 300_000, onChunk } = opts;
+  const { systemPrompt, history, userMessage, model, timeoutMs = 300_000, onChunk, cwd, enableTools, allowedTools } = opts;
 
   const contextLines = history.slice(-6).map((m) => {
     const label = m.role === "user" ? "User" : "Manager";
@@ -44,16 +50,25 @@ export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<strin
   const env = { ...process.env };
   delete env.CLAUDECODE;
 
+  const args = [
+    "--print",
+    "--system-prompt", systemPrompt,
+    "--model", model,
+  ];
+  if (enableTools) {
+    args.push("--dangerously-skip-permissions");
+    if (allowedTools?.length) {
+      args.push("--allowedTools", allowedTools.join(","));
+    }
+  }
+  args.push(fullPrompt);
+
   return new Promise<string>((resolve, reject) => {
-    const child = spawn("claude", [
-      "--print",
-      "--system-prompt", systemPrompt,
-      "--model", model,
-      fullPrompt,
-    ], {
+    const child = spawn("claude", args, {
       env,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
+      ...(cwd ? { cwd } : {}),
     });
 
     let stdout = "";
