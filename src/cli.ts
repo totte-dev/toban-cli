@@ -31,7 +31,7 @@ import { WsChatServer } from "./ws-server.js";
 import { WS_MSG } from "./ws-types.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -199,12 +199,35 @@ async function executeRevert(
  *
  * Structure: .toban/<agent-name>/<repo-name>/
  */
+/**
+ * Create a git credential helper script that fetches fresh tokens from the Toban API.
+ * GitHub App installation tokens expire after 1 hour, so we need to refresh on each git operation.
+ */
+function setupGitCredentialHelper(tobanHome: string, apiUrl: string, apiKey: string): string {
+  const helperPath = join(tobanHome, "git-credential-helper.sh");
+  const script = `#!/bin/sh
+# Toban git credential helper — fetches fresh GitHub App token on demand
+if [ "$1" = "get" ]; then
+  TOKEN=$(curl -sf -H "Authorization: Bearer ${apiKey}" "${apiUrl}/api/v1/workspace/git-token" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
+  if [ -n "$TOKEN" ]; then
+    echo "protocol=https"
+    echo "host=github.com"
+    echo "username=x-access-token"
+    echo "password=$TOKEN"
+  fi
+fi
+`;
+  writeFileSync(helperPath, script, { mode: 0o700 });
+  return helperPath;
+}
+
 function ensureAgentRepo(
   tobanHome: string,
   agentName: string,
   repo: WorkspaceRepository,
   gitToken?: string,
-  gitUser?: { name: string; email: string }
+  gitUser?: { name: string; email: string },
+  credentialHelperPath?: string
 ): string {
   const agentDir = join(tobanHome, agentName);
   const repoDir = join(agentDir, repo.repo_name);
@@ -227,17 +250,15 @@ function ensureAgentRepo(
       ui.warn(`git pull failed for ${repo.repo_name}: ${msg}`);
     }
   } else {
-    // Clone the repo
+    // Clone the repo — use token for initial clone only
     let cloneUrl = repo.repo_url || repo.repo_path;
     if (gitToken && cloneUrl.includes("github.com")) {
-      // Use token-authenticated URL
       const repoPath = cloneUrl
         .replace(/^https?:\/\/github\.com\//, "")
         .replace(/\.git$/, "");
       cloneUrl = `https://x-access-token:${gitToken}@github.com/${repoPath}.git`;
       ui.info(`Cloning ${repo.repo_name} (authenticated)`);
     } else if (!cloneUrl.startsWith("http") && !cloneUrl.startsWith("git@")) {
-      // Assume GitHub org/repo format
       if (gitToken) {
         cloneUrl = `https://x-access-token:${gitToken}@github.com/${cloneUrl}.git`;
       } else {
@@ -249,6 +270,25 @@ function ensureAgentRepo(
     }
 
     execSync(`git clone "${cloneUrl}" "${repoDir}"`, { stdio: "pipe" });
+
+    // After clone, replace token-embedded URL with clean URL so credential helper is used
+    try {
+      const cleanUrl = (repo.repo_url || repo.repo_path)
+        .replace(/^https?:\/\/github\.com\//, "")
+        .replace(/\.git$/, "");
+      execSync(`git remote set-url origin "https://github.com/${cleanUrl}.git"`, { cwd: repoDir, stdio: "pipe" });
+    } catch {
+      // Non-fatal — keep the original URL
+    }
+  }
+
+  // Configure credential helper for fresh token on every git auth
+  if (credentialHelperPath) {
+    try {
+      execSync(`git config credential.helper "'${credentialHelperPath}''"`, { cwd: repoDir, stdio: "pipe" });
+    } catch {
+      // Non-fatal
+    }
   }
 
   // Set git user from GitHub App login (overrides global config)
@@ -276,7 +316,8 @@ function resolveTaskWorkingDir(
   agentName: string,
   defaultWorkingDir: string,
   gitToken?: string,
-  gitUser?: { name: string; email: string }
+  gitUser?: { name: string; email: string },
+  credHelper?: string
 ): string {
   if (!task.target_repo) return defaultWorkingDir;
 
@@ -289,7 +330,7 @@ function resolveTaskWorkingDir(
   }
 
   try {
-    return ensureAgentRepo(tobanHome, agentName, repo, gitToken, gitUser);
+    return ensureAgentRepo(tobanHome, agentName, repo, gitToken, gitUser, credHelper);
   } catch (err) {
     ui.error(`Failed to setup repo ${repo.repo_name}: ${err}`);
     return defaultWorkingDir;
@@ -448,6 +489,29 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   }
 
   const tobanHome = join(homedir(), ".toban");
+  mkdirSync(tobanHome, { recursive: true });
+
+  // Set up credential helper for fresh token on every git auth (tokens expire after 1 hour)
+  let credentialHelperPath: string | undefined;
+  if (gitToken) {
+    credentialHelperPath = setupGitCredentialHelper(tobanHome, cliArgs.apiUrl, cliArgs.apiKey);
+    ui.debug("git", `Credential helper: ${credentialHelperPath}`);
+
+    // Also configure the main workspace repo (cloned at startup)
+    if (existsSync(join(workingDir, ".git"))) {
+      try {
+        execSync(`git config credential.helper "'${credentialHelperPath}'"`, { cwd: workingDir, stdio: "pipe" });
+        // Replace token-embedded URL with clean URL
+        const remoteUrl = execSync("git remote get-url origin", { cwd: workingDir, stdio: "pipe" }).toString().trim();
+        if (remoteUrl.includes("x-access-token")) {
+          const cleanPath = remoteUrl.replace(/https:\/\/x-access-token:[^@]+@github\.com\//, "").replace(/\.git$/, "");
+          execSync(`git remote set-url origin "https://github.com/${cleanPath}.git"`, { cwd: workingDir, stdio: "pipe" });
+        }
+      } catch {
+        // Non-fatal
+      }
+    }
+  }
 
   // Clone all repos for Manager read-only access (main repo + sub repos)
   let managerReposDir: string | undefined;
@@ -477,7 +541,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       mkdirSync(reposParent, { recursive: true });
       for (const repo of allRepos) {
         try {
-          const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken, gitUserInfo);
+          const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken, gitUserInfo, credentialHelperPath);
           managerRepoInfos.push({
             name: repo.repo_name,
             path: repoPath,
@@ -656,7 +720,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         cliArgs.agentName,
         workingDir,
         gitToken,
-        gitUserInfo
+        gitUserInfo,
+        credentialHelperPath
       );
 
       // Build repository info for prompt
