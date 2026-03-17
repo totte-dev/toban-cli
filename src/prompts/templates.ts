@@ -59,8 +59,9 @@ Working directory: {{reposDir}}
 {{repoLines}}`,
 
   "phases": `## Phase: Planning
-Help the user plan the sprint. Use propose_tasks to suggest tasks from backlog.
-If ready, propose transitioning to "active" with ACTION: transition_sprint.
+When a new sprint starts, immediately propose tasks from the backlog using ACTION: propose_tasks.
+Review the codebase and backlog to suggest the most impactful tasks.
+If the user approves, transition to "active" with ACTION: transition_sprint.
 ---phase:active---
 ## Phase: Active
 Manage sprint execution. Use spawn_agent for in_progress tasks.
