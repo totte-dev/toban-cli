@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execSync } from "node:child_process";
+import { rmSync, existsSync } from "node:fs";
 import path from "node:path";
 import type { AgentConfig, RunningAgent } from "./types.js";
 import { getTerminal, buildShellCommand, type TerminalInfo } from "./terminal.js";
@@ -28,9 +29,11 @@ export function createWorktree(
   const worktreeDir = path.join(repoDir, ".worktrees", branchName.replace(/\//g, "-"));
 
   // Clean up stale worktree/branch from previous runs
-  try { execSync(`git worktree remove "${worktreeDir}" --force`, { cwd: repoDir, stdio: "pipe" }); } catch { /* may not exist */ }
-  try { execSync(`git branch -D "${branchName}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* may not exist */ }
+  if (existsSync(worktreeDir)) {
+    try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+  }
   try { execSync("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+  try { execSync(`git branch -D "${branchName}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* may not exist */ }
 
   execSync(
     `git worktree add -b "${branchName}" "${worktreeDir}" "${baseBranch}"`,
