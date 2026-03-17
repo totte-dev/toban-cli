@@ -2,6 +2,7 @@
  * Shared LLM client utilities — Claude CLI spawn and auth headers.
  */
 import { spawn } from "node:child_process";
+import * as ui from "./ui.js";
 
 export interface ClaudeCliOptions {
   systemPrompt: string;
@@ -81,7 +82,13 @@ export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<strin
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      if (stderr.trim()) {
+        ui.debug("llm", `Claude CLI stderr: ${stderr.trim().slice(0, 300)}`);
+      }
       if (code === 0) {
+        if (!stdout.trim()) {
+          ui.warn(`[llm] Claude CLI returned empty response (stderr: ${stderr.trim().slice(0, 200) || "none"})`);
+        }
         resolve(stdout.trim() || "(no response)");
       } else {
         reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 200)}`));

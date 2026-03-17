@@ -31,6 +31,8 @@ export interface AgentConfig {
   secrets?: Record<string, string>;
   /** Manager WS server port (for agent HTTP messaging) */
   managerPort?: number;
+  /** Read-only mode: restrict to read tools only (for research/investigation tasks) */
+  readOnly?: boolean;
 }
 
 export type AgentStatus = "spawning" | "running" | "completed" | "failed" | "stopped";
