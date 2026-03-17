@@ -285,7 +285,7 @@ function ensureAgentRepo(
   // Configure credential helper for fresh token on every git auth
   if (credentialHelperPath) {
     try {
-      execSync(`git config credential.helper "'${credentialHelperPath}''"`, { cwd: repoDir, stdio: "pipe" });
+      execSync(`git config credential.helper "${credentialHelperPath}"`, { cwd: repoDir, stdio: "pipe" });
     } catch {
       // Non-fatal
     }
@@ -500,7 +500,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     // Also configure the main workspace repo (cloned at startup)
     if (existsSync(join(workingDir, ".git"))) {
       try {
-        execSync(`git config credential.helper "'${credentialHelperPath}'"`, { cwd: workingDir, stdio: "pipe" });
+        execSync(`git config credential.helper "${credentialHelperPath}"`, { cwd: workingDir, stdio: "pipe" });
         // Replace token-embedded URL with clean URL
         const remoteUrl = execSync("git remote get-url origin", { cwd: workingDir, stdio: "pipe" }).toString().trim();
         if (remoteUrl.includes("x-access-token")) {
