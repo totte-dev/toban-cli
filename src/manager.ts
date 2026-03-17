@@ -234,12 +234,28 @@ export class Manager {
   async handleWsMessage(content: string): Promise<{ reply: string; proposals?: Array<Record<string, string>> }> {
     this.lastUserMessage = content;
     ui.chatMessage("user", "manager", content, "ws");
-    const context = await this.fetchContext();
-    const { reply, actions, proposals } = await this.think(content, context);
-    await this.executeActions(actions, context);
-    ui.chatMessage("manager", "user", reply, "ws");
-    await this.advanceLastSeen();
-    return { reply, proposals };
+    // Update activity immediately so UI shows "thinking"
+    await this.updateActivity("thinking...");
+    try {
+      const context = await this.fetchContext();
+      const { reply, actions, proposals } = await this.think(content, context);
+      await this.executeActions(actions, context);
+      ui.chatMessage("manager", "user", reply, "ws");
+      await this.advanceLastSeen();
+      return { reply, proposals };
+    } finally {
+      await this.updateActivity("listening");
+    }
+  }
+
+  private async updateActivity(activity: string): Promise<void> {
+    try {
+      await fetch(`${this.apiUrl}/api/v1/agents`, {
+        method: "PUT",
+        headers: this.authHeaders(),
+        body: JSON.stringify({ name: "manager", status: "active", activity }),
+      });
+    } catch { /* non-fatal */ }
   }
 
   /** Sync lastSeenId with API to skip messages already handled via WS */
