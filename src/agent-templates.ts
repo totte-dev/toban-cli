@@ -340,15 +340,15 @@ export async function executeActions(
             const diffStat = revExec("git diff HEAD~1 --stat", { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
             const diffContent = revExec("git diff HEAD~1 --no-color", { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
 
-            // Build review summary
+            // Build review summary (keep it compact for API)
             const lines = diffContent.split("\n").length;
             const filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
             const review = [
-              `**Commit:** ${lastCommit}`,
-              `**Files changed:** ${filesChanged.length}`,
+              `Commit: ${lastCommit}`,
+              `Files changed: ${filesChanged.length}`,
               diffStat,
-              lines > 200 ? `\n(${lines} lines of diff — showing stat only)` : "",
-            ].filter(Boolean).join("\n");
+              lines > 200 ? `(${lines} lines of diff)` : "",
+            ].filter(Boolean).join("\n").slice(0, 4000); // Limit size
 
             await ctx.api.updateTask(ctx.task.id, { review_comment: review } as Partial<Task>);
             ui.info( `[${phase}] ${label}: ${filesChanged.length} files`);
