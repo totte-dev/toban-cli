@@ -177,7 +177,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         taskDescription: fullDescription,
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
         taskType, apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey,
-        playbookRules: ctx.playbookRules, targetRepo: task.target_repo ?? undefined,
+        language: ctx.language, playbookRules: ctx.playbookRules, targetRepo: task.target_repo ?? undefined,
         apiDocs: apiDocs || undefined,
       });
 
