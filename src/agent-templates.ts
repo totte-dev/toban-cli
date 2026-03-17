@@ -328,11 +328,24 @@ export async function executeActions(
         }
         case "review_changes": {
           const { execSync: revExec } = await import("node:child_process");
+          const { existsSync: revExists } = await import("node:fs");
+          // workingDir may be a deleted worktree after git_merge — resolve repo root
           const revRepoDir = (() => {
-            try {
-              return revExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
-                .toString().trim().replace(/\/.git$/, "");
-            } catch { return ctx.config.workingDir; }
+            // Try workingDir first (may be worktree or repo root)
+            if (revExists(ctx.config.workingDir)) {
+              try {
+                return revExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
+                  .toString().trim().replace(/\/.git$/, "");
+              } catch { /* fall through */ }
+            }
+            // Worktree deleted — walk up to find the repo root
+            const { dirname } = require("node:path");
+            let dir = ctx.config.workingDir;
+            for (let i = 0; i < 5; i++) {
+              dir = dirname(dir);
+              if (revExists(dir + "/.git")) return dir;
+            }
+            return ctx.config.workingDir;
           })();
           try {
             // Get the merge commit (most recent) and its diff
