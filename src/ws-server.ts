@@ -75,6 +75,8 @@ export class WsChatServer {
   private onApprovalResponse?: (approvalId: string, approved: boolean) => void;
   private getPendingApprovals?: () => Array<{ id: string; role: string; taskIds: string[]; createdAt: number }>;
   private clients = new Set<WebSocket>();
+  /** Lock to prevent concurrent LLM calls from multiple WS clients */
+  private chatProcessing = false;
 
   /** Whether any browser clients are connected */
   get hasClients(): boolean {
@@ -335,6 +337,17 @@ export class WsChatServer {
       case WS_MSG.CHAT: {
         if (!msg.content) return;
 
+        // Prevent concurrent LLM calls from multiple tabs
+        if (this.chatProcessing) {
+          ws.send(JSON.stringify({
+            type: WS_MSG.STATUS,
+            content: "busy",
+            timestamp: new Date().toISOString(),
+          }));
+          return;
+        }
+        this.chatProcessing = true;
+
         // Save incoming message to API in background
         this.saveMessageToApi(msg.from ?? "user", "manager", msg.content).catch(() => {});
 
@@ -383,6 +396,8 @@ export class WsChatServer {
             content: `Error: ${errMsg}`,
             timestamp: new Date().toISOString(),
           }));
+        } finally {
+          this.chatProcessing = false;
         }
         break;
       }
