@@ -371,7 +371,16 @@ export class Manager {
     const agentLines = ctx.agents.length > 0
       ? ctx.agents.map((a) => {
           const act = a.activity ? ` — ${a.activity}` : "";
-          return `  - ${a.name}: ${a.status}${act}`;
+          let health = "";
+          if (a.last_seen) {
+            const seenAgo = Date.now() - new Date(a.last_seen).getTime();
+            if (a.status === "running" && seenAgo > 5 * 60 * 1000) {
+              health = " [UNRESPONSIVE — no heartbeat for " + Math.round(seenAgo / 60000) + "min]";
+            }
+          } else if (a.status === "running" || a.status === "starting") {
+            health = " [UNRESPONSIVE — never seen]";
+          }
+          return `  - ${a.name}: ${a.status}${act}${health}`;
         }).join("\n")
       : "  (no agents)";
 
@@ -426,6 +435,7 @@ Action types:
 - When suggesting tasks, ALWAYS use ACTION: propose_tasks. This renders interactive cards in the UI. The user can add tasks with one click. NEVER ask "タスクを作成しますか？" or "Shall I create tasks?" — just propose them directly with propose_tasks. Never list tasks in plain text.
 - When delegating work to other agents, ALWAYS create a task first (create_task with owner), then spawn_agent. Never use send_message for work requests — messages are only for status checks and coordination.
 - Before using spawn_agent, briefly explain which agent you want to start and why (1 sentence). The user will see an approval prompt — they must approve before the agent starts.
+- Do NOT use send_message to contact agents marked [UNRESPONSIVE]. Instead, inform the user that the agent is not responding and suggest re-spawning or resetting the task.
 - Keep text brief (2-3 sentences). The ACTION blocks are the main output.
 - Task IDs: use the short 8-char prefix shown above.
 - Reply in the same language the sender used.
