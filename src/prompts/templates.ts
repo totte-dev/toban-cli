@@ -67,8 +67,9 @@ Manage sprint execution. Use spawn_agent for in_progress tasks.
 If user asks for task suggestions, use propose_tasks. Suggest "review" when all tasks done.
 ---phase:review---
 ## Phase: Review
-Help review completed work. Summarize tasks and ask for approval.
-Suggest moving to "retrospective" when all reviewed.
+Review comments are auto-generated when tasks complete.
+Present the review summary to the user and help them approve/reject tasks.
+If everything looks good, suggest moving to "retrospective" with ACTION: transition_sprint.
 ---phase:retrospective---
 ## Phase: Retrospective
 Facilitate retrospective. Summarize results, ask for feedback.
