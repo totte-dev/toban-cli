@@ -32,6 +32,8 @@ export interface PromptContext {
   apiUrl: string;
   /** API key for authentication */
   apiKey: string;
+  /** Workspace language (e.g. "ja", "en") */
+  language?: string;
   /** Pre-built playbook rules block */
   playbookRules?: string;
   /** Target repository name for this task */
@@ -125,6 +127,9 @@ export function buildAgentPrompt(ctx: PromptContext): string {
     ROLE_DESCRIPTIONS[ctx.role] ??
     `You are the ${ctx.role} agent.`;
 
+  const lang = ctx.language === "ja" ? "Japanese" : ctx.language === "en" ? "English" : null;
+  const langLine = lang ? `\nRespond in ${lang}.` : "";
+
   const projectLine = ctx.projectName
     ? `\nProject: ${ctx.projectName}`
     : "";
@@ -172,7 +177,7 @@ export function buildAgentPrompt(ctx: PromptContext): string {
 
   const completionInstructions = interpolate(template.prompt.completion, vars);
 
-  return `${roleDesc}${projectLine}${specBlock}
+  return `${roleDesc}${langLine}${projectLine}${specBlock}
 ${securityRules}${playbookBlock}${repoBlock}${modeHeader}${extraRules}
 Your task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descriptionBlock}
 ${apiDocsBlock}

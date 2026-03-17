@@ -60,6 +60,7 @@ export interface SetupResult {
   workspaceName: string | undefined;
   workspaceSpec: string | undefined;
   playbookRules: string | undefined;
+  language: string | undefined;
 }
 
 export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<SetupResult> {
@@ -81,6 +82,7 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
   let workspaceName: string | undefined;
   let playbookRules: string | undefined;
   let mainGithubRepo: string | undefined;
+  let wsLanguage: string | undefined;
   let gitUserInfo: { name: string; email: string } | undefined;
 
   s.start("Fetching workspace...");
@@ -89,6 +91,7 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
     workspaceSpec = (ws as unknown as Record<string, unknown>).spec as string | undefined || undefined;
     workspaceName = ws.name || undefined;
     mainGithubRepo = ws.github_repo || undefined;
+    wsLanguage = ws.language || undefined;
     if (ws.github_login) {
       gitUserInfo = { name: ws.github_login, email: `${ws.github_login}@users.noreply.github.com` };
     }
@@ -263,6 +266,6 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
   return {
     api, mgr, wsServer, wsPort: actualWsPort, workingDir, tobanHome,
     repos, gitToken, gitUserInfo, credentialHelperPath, sprintData: sprintData!,
-    workspaceName, workspaceSpec, playbookRules,
+    workspaceName, workspaceSpec, playbookRules, language: wsLanguage,
   };
 }
