@@ -78,7 +78,7 @@ Options:
   --llm-base-url <url>  OpenAI-compatible API base URL (or LLM_BASE_URL env)
   --llm-api-key <key>   LLM provider API key (or LLM_API_KEY env)
   --engine <type>       Agent engine: claude, codex, gemini, mock, custom (default: claude)
-  --no-docker           Disable Docker isolation (run agents directly on host)
+  --docker              Enable Docker isolation for agents (default: off)
   --ws-port <port>      WebSocket server port for direct chat (default: 4000, 0=auto)
   --push                Push the sprint tag to origin (sprint complete only)
   --debug               Enable verbose debug output (or DEBUG=1 env)
@@ -142,7 +142,7 @@ function parseArgs(argv: string[]): CliArgs {
     model: getFlag("--model") ?? "claude-sonnet-4-20250514",
     llmBaseUrl: getFlag("--llm-base-url") ?? process.env.LLM_BASE_URL,
     llmApiKey: getFlag("--llm-api-key") ?? process.env.LLM_API_KEY,
-    noDocker: args.includes("--no-docker"),
+    noDocker: !args.includes("--docker"),
     wsPort: parseInt(getFlag("--ws-port") ?? "4000", 10),
     debug: args.includes("--debug") || process.env.DEBUG === "1",
     engine: (getFlag("--engine") ?? "claude") as AgentType,
