@@ -63,3 +63,13 @@ export interface AgentStatusReport {
   lastStdout: string[];
   lastStderr: string[];
 }
+
+/** Structured activity event from agent */
+export interface AgentActivity {
+  /** Event kind: tool_use, text (agent reasoning), result (final output) */
+  kind: "tool" | "text" | "result";
+  tool?: string;
+  /** Brief summary of what's happening */
+  summary: string;
+  timestamp: string;
+}

@@ -32,15 +32,9 @@ interface ManagedAgent {
 /** Callback for agent stdout/stderr streaming */
 export type StdoutCallback = (agentName: string, lines: string[], stream: "stdout" | "stderr") => void;
 
-/** Structured activity event from agent */
-export interface AgentActivity {
-  /** Event kind: tool_use, text (agent reasoning), result (final output) */
-  kind: "tool" | "text" | "result";
-  tool?: string;
-  /** Brief summary of what's happening */
-  summary: string;
-  timestamp: string;
-}
+// Re-export AgentActivity from types for backward compat
+export type { AgentActivity } from "./types.js";
+import type { AgentActivity } from "./types.js";
 
 /** Callback for structured agent activity events */
 export type ActivityCallback = (agentName: string, activity: AgentActivity) => void;
@@ -146,6 +140,7 @@ export class AgentRunner {
     // Stream stdout/stderr to WebSocket clients
     // Use engine provider for structured output parsing
     const engine = getEngine(config.type);
+    ui.debug("runner", `Engine: ${engine.id}, structured: ${engine.supportsStructuredOutput}, hasParser: ${!!engine.parseOutputLine}, hasActivityCb: ${!!this.onActivity}`);
     if (this.onStdout || this.onActivity) {
       const stdoutCb = this.onStdout;
       const activityCb = this.onActivity;
