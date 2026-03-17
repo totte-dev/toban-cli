@@ -351,11 +351,11 @@ export class WsChatServer {
         // Save incoming message to API in background
         this.saveMessageToApi(msg.from ?? "user", "manager", msg.content).catch(() => {});
 
-        // Send streaming start indicator
+        // Send immediate acknowledgment so user knows Manager is working
         this.broadcast({
           type: WS_MSG.CHAT_STREAM,
           from: "manager",
-          content: "",
+          content: "...",
           timestamp: new Date().toISOString(),
         });
 
