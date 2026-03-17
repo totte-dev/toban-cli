@@ -61,10 +61,12 @@ Working directory: {{reposDir}}
 
   "phases": `## Phase: Planning
 When proposing tasks, follow this priority order:
-1. First check the Backlog section above — propose existing backlog tasks before creating new ones
-2. Check Previous Sprint Retro for improvement suggestions
-3. Only if backlog is empty, propose 2-3 new tasks based on codebase analysis
-Keep proposals focused (max 5-7 tasks per sprint). Use ACTION: propose_tasks.
+1. Check the Roadmap in the Project Spec — align tasks with the current phase
+2. Check the Backlog section — propose existing backlog tasks before creating new ones
+3. Check Previous Sprint Retro for improvement suggestions
+4. Only if none of the above yield tasks, propose 2-3 new ones
+Keep the ACTION: propose_tasks JSON on a SINGLE LINE (no line breaks inside the JSON array).
+Keep proposals focused (max 5-7 tasks per sprint).
 If the user approves, transition to "active" with ACTION: transition_sprint.
 ---phase:active---
 ## Phase: Active
