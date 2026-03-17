@@ -494,22 +494,53 @@ export class Manager {
     const replyLines: string[] = [];
     let proposals: Array<Record<string, string>> | undefined;
 
-    for (const line of response.split("\n")) {
-      const actionMatch = line.match(/^ACTION:\s*(\w+)\s+(.+)$/);
-      if (actionMatch) {
-        try {
-          const type = actionMatch[1] as ManagerAction["type"];
-          const raw = JSON.parse(actionMatch[2]);
-          if (type === "propose_tasks" && Array.isArray(raw)) {
-            proposals = raw as Array<Record<string, string>>;
-            actions.push({ type, params: { tasks: raw } });
-          } else {
-            actions.push({ type, params: raw as Record<string, unknown> });
-          }
-        } catch {
-          replyLines.push(line);
+    // First pass: extract multi-line ACTION blocks (LLM sometimes formats JSON across lines)
+    const actionRegex = /^ACTION:\s*(\w+)\s+([\s\S]*?)(?=\n(?:ACTION:|\S)|$)/gm;
+    const cleaned = response.replace(actionRegex, (match, type: string, jsonPart: string) => {
+      // Try to extract valid JSON from the captured content
+      const jsonStr = jsonPart.trim();
+      // Find the complete JSON (array or object) by bracket matching
+      const startChar = jsonStr[0];
+      if (startChar === "[" || startChar === "{") {
+        const endChar = startChar === "[" ? "]" : "}";
+        let depth = 0;
+        let end = -1;
+        for (let i = 0; i < jsonStr.length; i++) {
+          if (jsonStr[i] === startChar) depth++;
+          if (jsonStr[i] === endChar) depth--;
+          if (depth === 0) { end = i + 1; break; }
         }
-      } else {
+        if (end > 0) {
+          try {
+            const raw = JSON.parse(jsonStr.slice(0, end));
+            if (type === "propose_tasks" && Array.isArray(raw)) {
+              proposals = raw as Array<Record<string, string>>;
+              actions.push({ type: type as ManagerAction["type"], params: { tasks: raw } });
+            } else {
+              actions.push({ type: type as ManagerAction["type"], params: raw as Record<string, unknown> });
+            }
+            return ""; // Remove from reply text
+          } catch { /* fall through */ }
+        }
+      }
+      // Single-line fallback
+      try {
+        const raw = JSON.parse(jsonStr);
+        if (type === "propose_tasks" && Array.isArray(raw)) {
+          proposals = raw as Array<Record<string, string>>;
+          actions.push({ type: type as ManagerAction["type"], params: { tasks: raw } });
+        } else {
+          actions.push({ type: type as ManagerAction["type"], params: raw as Record<string, unknown> });
+        }
+        return "";
+      } catch {
+        return match; // Keep as reply text
+      }
+    });
+
+    for (const line of cleaned.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("ACTION:")) {
         replyLines.push(line);
       }
     }
