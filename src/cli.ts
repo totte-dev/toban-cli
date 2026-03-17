@@ -208,21 +208,14 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         const succeeded = runningAgent.status === "completed";
         ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`);
 
+        // All post-completion logic (merge, push, retro, notify, status) is in template
         actionCtx.exitCode = exitCode;
         await executeActions(agentTemplate.post_actions, actionCtx, "post");
-
-        if (!succeeded) {
-          const stderrSnippet = runningAgent.stderr.slice(-3).join("\n");
-          await api.sendMessage("manager", "user",
-            `⚠️ Task "${task.title}" failed (exit code: ${exitCode}).\n\n${stderrSnippet ? `Error: ${stderrSnippet.slice(0, 300)}` : "Check CLI logs for details."}`
-          );
-        }
       } catch (err) {
         ui.error(`Error spawning agent for task ${task.id}: ${err}`);
-        await api.updateTask(task.id, { status: "todo" });
-        await api.sendMessage("manager", "user",
-          `⚠️ Failed to spawn agent for task "${task.title}".\n\nError: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`
-        );
+        // Use failure post_actions to reset task and notify user
+        actionCtx.exitCode = 1;
+        await executeActions(agentTemplate.post_actions, actionCtx, "post");
       }
     }
 

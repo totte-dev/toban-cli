@@ -16,7 +16,7 @@ import * as ui from "./ui.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "submit_retro" | "shell";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "submit_retro" | "notify_user" | "shell";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -71,7 +71,9 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "git_push", when: "success", label: "Push main to remote" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
+      { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
+      { type: "notify_user", params: { message: "⚠️ Task \"{{taskTitle}}\" {{status}}" }, when: "failure", label: "Notify user of failure" },
       { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
@@ -98,7 +100,9 @@ When completing a task:
     ],
     post_actions: [
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
+      { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
+      { type: "notify_user", params: { message: "⚠️ Task \"{{taskTitle}}\" {{status}}" }, when: "failure", label: "Notify user of failure" },
       { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
@@ -311,6 +315,19 @@ export async function executeActions(
             await ctx.onRetro();
             ui.debug("template", `[${phase}] ${label}`);
           }
+          break;
+        }
+        case "notify_user": {
+          const template = (action.params?.message as string) ?? "Task {{taskTitle}} {{status}}";
+          const status = ctx.exitCode === 0 ? "completed" : `failed (exit code: ${ctx.exitCode})`;
+          const message = template
+            .replace("{{taskTitle}}", ctx.task.title)
+            .replace("{{taskId}}", ctx.task.id.slice(0, 8))
+            .replace("{{status}}", status);
+          try {
+            await ctx.api.sendMessage("manager", "user", message);
+            ui.debug("template", `[${phase}] ${label}`);
+          } catch { /* non-fatal */ }
           break;
         }
         case "shell": {
