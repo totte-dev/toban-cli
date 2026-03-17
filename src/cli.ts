@@ -218,6 +218,48 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
         // All post-completion logic (merge, push, retro, notify, status) is in template
         actionCtx.exitCode = exitCode;
+        actionCtx.onRetro = async () => {
+          // Extract RETRO_JSON from agent stdout and submit to API
+          for (const line of runningAgent.stdout) {
+            if (line.startsWith("RETRO_JSON:")) {
+              try {
+                const json = JSON.parse(line.slice("RETRO_JSON:".length));
+                await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprintData.sprint.number}/retro`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
+                  body: JSON.stringify({
+                    agent_name: agentConfig.name,
+                    went_well: json.went_well || undefined,
+                    to_improve: json.to_improve || undefined,
+                    suggested_tasks: json.suggested_tasks || undefined,
+                  }),
+                });
+                return;
+              } catch { /* skip */ }
+            }
+            // Also try parsing stream-json events for RETRO_JSON
+            try {
+              const event = JSON.parse(line);
+              if (event.type === "result" && typeof event.result === "string") {
+                const match = event.result.match(/RETRO_JSON:(\{[\s\S]*\})/);
+                if (match) {
+                  const json = JSON.parse(match[1]);
+                  await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprintData.sprint.number}/retro`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
+                    body: JSON.stringify({
+                      agent_name: agentConfig.name,
+                      went_well: json.went_well || undefined,
+                      to_improve: json.to_improve || undefined,
+                      suggested_tasks: json.suggested_tasks || undefined,
+                    }),
+                  });
+                  return;
+                }
+              }
+            } catch { /* not JSON */ }
+          }
+        };
         await executeActions(agentTemplate.post_actions, actionCtx, "post");
       } catch (err) {
         ui.error(`Error spawning agent for task ${task.id}: ${err}`);
