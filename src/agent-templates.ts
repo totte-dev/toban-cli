@@ -209,9 +209,10 @@ export async function executeActions(
 ): Promise<void> {
   const isSuccess = ctx.exitCode === 0 || ctx.exitCode === undefined;
 
+  ui.info(`[template] Executing ${phase}_actions (${actions.length} actions, exitCode=${ctx.exitCode})`);
   for (const action of actions) {
     // Check `when` condition
-    if (action.when === "success" && !isSuccess) continue;
+    if (action.when === "success" && !isSuccess) { ui.info(`[template]   skip: ${action.label} (when=success, but failed)`); continue; }
     if (action.when === "failure" && isSuccess) continue;
 
     const label = action.label ?? `${action.type}`;
@@ -220,7 +221,7 @@ export async function executeActions(
         case "update_task": {
           const updates = action.params ?? {};
           await ctx.api.updateTask(ctx.task.id, updates as Partial<Task>);
-          ui.debug("template", `[${phase}] ${label}`);
+          ui.info( `[${phase}] ${label}`);
           break;
         }
         case "update_agent": {
@@ -240,7 +241,7 @@ export async function executeActions(
               activity: activity ?? `Task ${ctx.task.id}: ${ctx.task.title}`,
             }),
           });
-          ui.debug("template", `[${phase}] ${label}`);
+          ui.info( `[${phase}] ${label}`);
           break;
         }
         case "git_merge": {
@@ -267,7 +268,7 @@ export async function executeActions(
 
               gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
               gitExec(`git merge --no-ff "${worktreeBranch}" -m "merge: ${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
-              ui.debug("template", `[${phase}] ${label}: merged ${worktreeBranch}`);
+              ui.info( `[${phase}] ${label}: merged ${worktreeBranch}`);
 
               // Clean up worktree
               if (gitExists(worktreeDir)) {
@@ -277,7 +278,7 @@ export async function executeActions(
               try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
               try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
             } else {
-              ui.debug("template", `[${phase}] ${label}: no agent branch found, skipping`);
+              ui.info( `[${phase}] ${label}: no agent branch found, skipping`);
             }
           } catch (mergeErr) {
             const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
@@ -294,7 +295,7 @@ export async function executeActions(
               stdio: "pipe",
               timeout: 15_000,
             });
-            ui.debug("template", `[${phase}] ${label}: ok`);
+            ui.info( `[${phase}] ${label}: ok`);
           } catch (authErr) {
             const msg = authErr instanceof Error ? authErr.message : String(authErr);
             throw new Error(`Git auth check failed — push will not work. Fix credentials before spawning agent.\n${msg.slice(0, 200)}`);
@@ -311,7 +312,7 @@ export async function executeActions(
               cwd: pushRepoDir,
               stdio: "pipe",
             });
-            ui.debug("template", `[${phase}] ${label}: pushed ${ctx.config.baseBranch}`);
+            ui.info( `[${phase}] ${label}: pushed ${ctx.config.baseBranch}`);
           } catch (pushErr) {
             const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
             ui.warn(`[template] git_push failed: ${msg}`);
@@ -321,7 +322,7 @@ export async function executeActions(
         case "submit_retro": {
           if (ctx.onRetro) {
             await ctx.onRetro();
-            ui.debug("template", `[${phase}] ${label}`);
+            ui.info( `[${phase}] ${label}`);
           }
           break;
         }
@@ -350,7 +351,7 @@ export async function executeActions(
             ].filter(Boolean).join("\n");
 
             await ctx.api.updateTask(ctx.task.id, { review_comment: review } as Partial<Task>);
-            ui.debug("template", `[${phase}] ${label}: ${filesChanged.length} files`);
+            ui.info( `[${phase}] ${label}: ${filesChanged.length} files`);
           } catch (revErr) {
             const msg = revErr instanceof Error ? revErr.message : String(revErr);
             ui.warn(`[template] review_changes failed: ${msg}`);
@@ -370,7 +371,7 @@ export async function executeActions(
             .replace("{{status}}", status);
           try {
             await ctx.api.sendMessage("manager", "user", message);
-            ui.debug("template", `[${phase}] ${label}`);
+            ui.info( `[${phase}] ${label}`);
           } catch { /* non-fatal */ }
           break;
         }
@@ -379,7 +380,7 @@ export async function executeActions(
           if (cmd) {
             const { execSync } = await import("node:child_process");
             execSync(cmd, { cwd: ctx.config.workingDir, stdio: "pipe" });
-            ui.debug("template", `[${phase}] ${label}`);
+            ui.info( `[${phase}] ${label}`);
           }
           break;
         }
