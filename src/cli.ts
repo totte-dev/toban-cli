@@ -203,7 +203,8 @@ function ensureAgentRepo(
   tobanHome: string,
   agentName: string,
   repo: WorkspaceRepository,
-  gitToken?: string
+  gitToken?: string,
+  gitUser?: { name: string; email: string }
 ): string {
   const agentDir = join(tobanHome, agentName);
   const repoDir = join(agentDir, repo.repo_name);
@@ -250,6 +251,16 @@ function ensureAgentRepo(
     execSync(`git clone "${cloneUrl}" "${repoDir}"`, { stdio: "pipe" });
   }
 
+  // Set git user from GitHub App login (overrides global config)
+  if (gitUser) {
+    try {
+      execSync(`git config user.name "${gitUser.name}"`, { cwd: repoDir, stdio: "pipe" });
+      execSync(`git config user.email "${gitUser.email}"`, { cwd: repoDir, stdio: "pipe" });
+    } catch {
+      // Non-fatal
+    }
+  }
+
   return repoDir;
 }
 
@@ -264,7 +275,8 @@ function resolveTaskWorkingDir(
   tobanHome: string,
   agentName: string,
   defaultWorkingDir: string,
-  gitToken?: string
+  gitToken?: string,
+  gitUser?: { name: string; email: string }
 ): string {
   if (!task.target_repo) return defaultWorkingDir;
 
@@ -277,7 +289,7 @@ function resolveTaskWorkingDir(
   }
 
   try {
-    return ensureAgentRepo(tobanHome, agentName, repo, gitToken);
+    return ensureAgentRepo(tobanHome, agentName, repo, gitToken, gitUser);
   } catch (err) {
     ui.error(`Failed to setup repo ${repo.repo_name}: ${err}`);
     return defaultWorkingDir;
@@ -309,6 +321,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   let workspaceName: string | undefined;
   let playbookRules: string | undefined;
   let mainGithubRepo: string | undefined;
+  let gitUserInfo: { name: string; email: string } | undefined;
 
   s.start("Fetching workspace...");
   try {
@@ -316,6 +329,9 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     workspaceSpec = (ws as unknown as Record<string, unknown>).spec as string | undefined || undefined;
     workspaceName = ws.name || undefined;
     mainGithubRepo = ws.github_repo || undefined;
+    if (ws.github_login) {
+      gitUserInfo = { name: ws.github_login, email: `${ws.github_login}@users.noreply.github.com` };
+    }
     s.stop(workspaceName ? `Workspace: ${workspaceName}` : "Workspace loaded");
 
     // Fetch playbook rules (includes git strategy rules + security rules)
@@ -461,7 +477,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       mkdirSync(reposParent, { recursive: true });
       for (const repo of allRepos) {
         try {
-          const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken);
+          const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken, gitUserInfo);
           managerRepoInfos.push({
             name: repo.repo_name,
             path: repoPath,
@@ -639,7 +655,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         tobanHome,
         cliArgs.agentName,
         workingDir,
-        gitToken
+        gitToken,
+        gitUserInfo
       );
 
       // Build repository info for prompt

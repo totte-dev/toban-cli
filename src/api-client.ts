@@ -33,6 +33,7 @@ export interface WorkspaceInfo {
   name: string;
   github_repo: string | null;
   github_org: string | null;
+  github_login: string | null;
   language: string | null;
   terminal_emulator: string | null;
 }
