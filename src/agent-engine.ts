@@ -43,6 +43,9 @@ export interface AgentEngineProvider {
   /** Parse a single stdout line into structured activity events (if supported) */
   parseOutputLine?(line: string): AgentActivity[];
 
+  /** Extra prompt instructions specific to this engine (e.g. "read CLAUDE.md") */
+  readonly promptHint?: string;
+
   /** Run any pre-spawn setup (e.g. ensure config files exist) */
   ensureConfig?(): void;
 
@@ -62,6 +65,7 @@ const READ_ONLY_TOOLS = "Read,Grep,Glob,Bash,Agent";
 const claudeEngine: AgentEngineProvider = {
   id: "claude",
   supportsStructuredOutput: true,
+  promptHint: "CLAUDE.md is auto-loaded by the CLI. Focus on task-relevant files only.",
 
   buildCommand(config) {
     return {

@@ -12,6 +12,7 @@ import { AgentRunner } from "./runner.js";
 import type { AgentType } from "./types.js";
 import { createApiClient, type Task } from "./api-client.js";
 import { buildAgentPrompt } from "./prompt.js";
+import { getEngine } from "./agent-engine.js";
 import { matchTemplate, executeActions, type ActionContext } from "./agent-templates.js";
 import { ChatPoller } from "./chat-poller.js";
 import { MessagePoller } from "./message-poller.js";
@@ -178,7 +179,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
         taskType, apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey,
         language: ctx.language, playbookRules: ctx.playbookRules, targetRepo: task.target_repo ?? undefined,
-        apiDocs: apiDocs || undefined,
+        apiDocs: apiDocs || undefined, engineHint: getEngine(cliArgs.engine).promptHint,
       });
 
       try {

@@ -42,6 +42,8 @@ export interface PromptContext {
   repositories?: RepoInfo[];
   /** Pre-fetched API documentation for the agent */
   apiDocs?: string;
+  /** Engine-specific prompt hint (e.g. "CLAUDE.md is auto-loaded") */
+  engineHint?: string;
 }
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -179,8 +181,10 @@ export function buildAgentPrompt(ctx: PromptContext): string {
 
   const completionInstructions = interpolate(template.prompt.completion, vars);
 
+  const engineHintLine = ctx.engineHint ? `\n${ctx.engineHint}` : "";
+
   return `${roleDesc}${langLine}${projectLine}${specBlock}
-${securityRules}${playbookBlock}${repoBlock}${modeHeader}${extraRules}
+${securityRules}${playbookBlock}${repoBlock}${modeHeader}${extraRules}${engineHintLine}
 Your task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descriptionBlock}
 ${apiDocsBlock}
 ${completionInstructions}
