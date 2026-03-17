@@ -44,6 +44,21 @@ export function createWorktree(
 }
 
 /**
+ * Ensure git user config is set on a repo (for correct commit author).
+ * Call on the main repo — worktrees inherit the config automatically.
+ */
+export function ensureGitUser(repoDir: string, name: string, email: string): void {
+  try {
+    const current = execSync("git config user.name", { cwd: repoDir, stdio: "pipe" }).toString().trim();
+    if (current === name) return; // Already set correctly
+  } catch { /* not set */ }
+  try {
+    execSync(`git config user.name "${name}"`, { cwd: repoDir, stdio: "pipe" });
+    execSync(`git config user.email "${email}"`, { cwd: repoDir, stdio: "pipe" });
+  } catch { /* non-fatal */ }
+}
+
+/**
  * Remove a git worktree.
  */
 export function removeWorktree(repoDir: string, worktreePath: string, branchName: string): void {
