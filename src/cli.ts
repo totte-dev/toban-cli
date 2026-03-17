@@ -23,6 +23,7 @@ import {
   type WorkspaceRepository,
 } from "./api-client.js";
 import { buildAgentPrompt, type RepoInfo } from "./prompt.js";
+import { matchTemplate, executeActions, type ActionContext } from "./agent-templates.js";
 import { ChatPoller } from "./chat-poller.js";
 import { Manager } from "./manager.js";
 import { MessagePoller } from "./message-poller.js";
@@ -582,19 +583,6 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
       ui.step(`Starting task: ${task.title}`);
 
-      try {
-        await api.updateTask(task.id, { status: "in_progress" });
-      } catch (err) {
-        ui.error(`Failed to update task ${task.id}: ${err}`);
-        continue;
-      }
-
-      await api.updateAgent({
-        name: cliArgs.agentName,
-        status: "working",
-        activity: `Task ${task.id}: ${task.title}`,
-      });
-
       // Resolve the working directory for this task
       const taskWorkingDir = resolveTaskWorkingDir(
         task,
@@ -620,6 +608,31 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       const agentName = task.owner ?? "builder";
       const apiDocs = await api.fetchApiDocs(agentName);
 
+      const taskType = (task as Record<string, unknown>).type as string | undefined;
+      const agentTemplate = matchTemplate(taskType, agentName);
+      const isReadOnly = agentTemplate.tools !== "all";
+      ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
+
+      // Execute pre-actions from template
+      const actionCtx: ActionContext = {
+        api,
+        task,
+        agentName: cliArgs.agentName,
+        config: {
+          apiUrl: cliArgs.apiUrl,
+          apiKey: cliArgs.apiKey,
+          workingDir: taskWorkingDir,
+          baseBranch: cliArgs.baseBranch,
+          sprintNumber: sprintData.sprint.number,
+        },
+      };
+      try {
+        await executeActions(agentTemplate.pre_actions, actionCtx, "pre");
+      } catch (err) {
+        ui.error(`[task] Pre-actions failed: ${err}`);
+        continue;
+      }
+
       const prompt = buildAgentPrompt({
         role: agentName,
         projectName: workspaceName,
@@ -628,6 +641,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         taskTitle: task.title,
         taskDescription: task.description || undefined,
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
+        taskType,
         apiUrl: cliArgs.apiUrl,
         apiKey: cliArgs.apiKey,
         playbookRules,
@@ -662,6 +676,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
           sprintNumber: sprintData.sprint.number,
           ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
           ...(actualWsPort ? { managerPort: actualWsPort } : {}),
+          ...(isReadOnly ? { readOnly: true } : {}),
         };
 
         ui.agentSpawned({
@@ -901,6 +916,8 @@ if (cliArgs.command === "sprint") {
           type: WS_MSG.AGENT_ACTIVITY,
           agent_name: agentName,
           content: activity.summary,
+          kind: activity.kind,
+          tool: activity.tool,
           timestamp: activity.timestamp,
         });
       }

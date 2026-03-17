@@ -31,10 +31,12 @@ interface ManagedAgent {
 /** Callback for agent stdout/stderr streaming */
 export type StdoutCallback = (agentName: string, lines: string[], stream: "stdout" | "stderr") => void;
 
-/** Structured activity event from agent's tool_use */
+/** Structured activity event from agent */
 export interface AgentActivity {
-  tool: string;
-  /** Brief summary of what the tool is doing */
+  /** Event kind: tool_use, text (agent reasoning), result (final output) */
+  kind: "tool" | "text" | "result";
+  tool?: string;
+  /** Brief summary of what's happening */
   summary: string;
   timestamp: string;
 }
@@ -156,25 +158,18 @@ export class AgentRunner {
           const lines = stdoutBuffer.split("\n");
           stdoutBuffer = lines.pop() ?? ""; // keep incomplete last line
 
-          const textLines: string[] = [];
           for (const line of lines) {
             if (!line.trim()) continue;
             try {
               const event = JSON.parse(line);
-              const activity = parseStreamJsonActivity(event);
-              if (activity) {
-                activityCb(agentName, activity);
+              const activities = parseStreamJsonEvents(event);
+              for (const act of activities) {
+                activityCb(agentName, act);
               }
-              // Extract text content for regular stdout display
-              const text = extractTextFromStreamJson(event);
-              if (text) textLines.push(text);
             } catch {
-              // Not JSON — forward as raw text
-              textLines.push(line);
+              // Not JSON — forward as raw text activity
+              activityCb(agentName, { kind: "text", summary: line, timestamp: new Date().toISOString() });
             }
-          }
-          if (textLines.length > 0 && stdoutCb) {
-            stdoutCb(agentName, textLines, "stdout");
           }
         } else {
           // Non-Claude agents: forward raw stdout
@@ -481,54 +476,66 @@ export function mergeAgentBranch(
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a stream-json event and extract tool_use activity if present.
- * Claude CLI stream-json emits events like:
- *   {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{...}}]}}
+ * Parse a stream-json event and extract all meaningful activities.
+ * Claude CLI stream-json emits JSONL with events like:
+ *   {"type":"assistant","message":{"content":[{"type":"text","text":"..."},{"type":"tool_use",...}]}}
  *   {"type":"content_block_start","content_block":{"type":"tool_use","name":"Read",...}}
+ *   {"type":"result","subtype":"success","result":"...","cost_usd":0.05}
  */
-function parseStreamJsonActivity(event: Record<string, unknown>): AgentActivity | null {
+function parseStreamJsonEvents(event: Record<string, unknown>): AgentActivity[] {
+  const now = new Date().toISOString();
+  const activities: AgentActivity[] = [];
+
   // content_block_start with tool_use
   if (event.type === "content_block_start") {
     const block = event.content_block as Record<string, unknown> | undefined;
     if (block?.type === "tool_use" && typeof block.name === "string") {
-      return {
+      activities.push({
+        kind: "tool",
         tool: block.name,
         summary: summarizeToolInput(block.name, block.input as Record<string, unknown> | undefined),
-        timestamp: new Date().toISOString(),
-      };
+        timestamp: now,
+      });
     }
   }
 
-  // assistant message with tool_use content blocks
+  // assistant message — text blocks + tool_use blocks
   if (event.type === "assistant") {
     const message = event.message as Record<string, unknown> | undefined;
     const content = message?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
+        if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
+          activities.push({ kind: "text", summary: block.text.trim(), timestamp: now });
+        }
         if (block?.type === "tool_use" && typeof block.name === "string") {
-          return {
+          activities.push({
+            kind: "tool",
             tool: block.name,
             summary: summarizeToolInput(block.name, block.input as Record<string, unknown> | undefined),
-            timestamp: new Date().toISOString(),
-          };
+            timestamp: now,
+          });
         }
       }
     }
   }
 
-  return null;
+  // result event — final output
+  if (event.type === "result" && typeof event.result === "string" && event.result.trim()) {
+    activities.push({ kind: "result", summary: event.result.trim(), timestamp: now });
+  }
+
+  return activities;
 }
 
 /**
  * Extract displayable text content from a stream-json event.
+ * Used by extractRetroComment for backward compat.
  */
 function extractTextFromStreamJson(event: Record<string, unknown>): string | null {
-  // result event contains final output
   if (event.type === "result" && typeof event.result === "string") {
     return event.result;
   }
-
-  // assistant message text blocks
   if (event.type === "assistant") {
     const message = event.message as Record<string, unknown> | undefined;
     const content = message?.content;
@@ -539,7 +546,6 @@ function extractTextFromStreamJson(event: Record<string, unknown>): string | nul
       if (texts.length > 0) return texts.join("");
     }
   }
-
   return null;
 }
 

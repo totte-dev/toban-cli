@@ -36,6 +36,9 @@ interface WsMessage {
   approved?: boolean;
   role?: string;
   task_ids?: string[];
+  /** Activity-specific fields */
+  kind?: string;
+  tool?: string;
 }
 
 export interface WsChatServerOptions {

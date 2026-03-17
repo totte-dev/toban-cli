@@ -5,6 +5,9 @@ export interface CommandSpec {
   args: string[];
 }
 
+/** Tools allowed in read-only mode */
+const READ_ONLY_TOOLS = "Read,Grep,Glob,Bash,Agent";
+
 /**
  * Build a mock agent command that simulates work without calling an LLM.
  * Creates a small file, commits it, and outputs a retro comment.
@@ -56,6 +59,7 @@ export function buildCommand(config: AgentConfig): CommandSpec {
           "--dangerously-skip-permissions",
           "--print",
           "--output-format", "stream-json",
+          ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
           ...(config.prompt ? [config.prompt] : []),
         ],
       };
@@ -98,6 +102,7 @@ export function buildCommand(config: AgentConfig): CommandSpec {
           "--dangerously-skip-permissions",
           "--print",
           "--output-format", "stream-json",
+          ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
           ...(config.prompt ? [config.prompt] : []),
         ],
       };
