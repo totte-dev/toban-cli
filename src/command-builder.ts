@@ -58,6 +58,7 @@ export function buildCommand(config: AgentConfig): CommandSpec {
           ...templateArgs,
           "--dangerously-skip-permissions",
           "--print",
+          "--verbose",
           "--output-format", "stream-json",
           ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
           ...(config.prompt ? [config.prompt] : []),
@@ -101,6 +102,7 @@ export function buildCommand(config: AgentConfig): CommandSpec {
         args: [
           "--dangerously-skip-permissions",
           "--print",
+          "--verbose",
           "--output-format", "stream-json",
           ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
           ...(config.prompt ? [config.prompt] : []),
