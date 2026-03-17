@@ -16,7 +16,7 @@ import * as ui from "./ui.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "submit_retro" | "notify_user" | "shell";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "submit_retro" | "notify_user" | "shell";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -70,6 +70,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
     post_actions: [
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "git_push", when: "success", label: "Push main to remote" },
+      { type: "review_changes", when: "success", label: "Auto-review code changes" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
       { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
@@ -321,6 +322,42 @@ export async function executeActions(
           if (ctx.onRetro) {
             await ctx.onRetro();
             ui.debug("template", `[${phase}] ${label}`);
+          }
+          break;
+        }
+        case "review_changes": {
+          const { execSync: revExec } = await import("node:child_process");
+          const revRepoDir = (() => {
+            try {
+              return revExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
+                .toString().trim().replace(/\/.git$/, "");
+            } catch { return ctx.config.workingDir; }
+          })();
+          try {
+            // Get the merge commit (most recent) and its diff
+            const lastCommit = revExec("git log --oneline -1", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
+            const diffStat = revExec("git diff HEAD~1 --stat", { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
+            const diffContent = revExec("git diff HEAD~1 --no-color", { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
+
+            // Build review summary
+            const lines = diffContent.split("\n").length;
+            const filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
+            const review = [
+              `**Commit:** ${lastCommit}`,
+              `**Files changed:** ${filesChanged.length}`,
+              diffStat,
+              lines > 200 ? `\n(${lines} lines of diff — showing stat only)` : "",
+            ].filter(Boolean).join("\n");
+
+            await ctx.api.updateTask(ctx.task.id, { review_comment: review } as Partial<Task>);
+            ui.debug("template", `[${phase}] ${label}: ${filesChanged.length} files`);
+          } catch (revErr) {
+            const msg = revErr instanceof Error ? revErr.message : String(revErr);
+            ui.warn(`[template] review_changes failed: ${msg}`);
+            // Still set a basic comment
+            try {
+              await ctx.api.updateTask(ctx.task.id, { review_comment: "Auto-review failed. Please review manually." } as Partial<Task>);
+            } catch { /* non-fatal */ }
           }
           break;
         }
