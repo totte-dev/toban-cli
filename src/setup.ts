@@ -146,12 +146,14 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
   }
 
   // --- Sprint ---
+  // Use fetchSprintData (GET) instead of startSprint (POST) to avoid
+  // auto-transitioning planning → active on CLI connect
   let sprintData: SprintStartResult;
   try {
-    sprintData = await api.startSprint();
+    sprintData = await api.fetchSprintData();
     ui.sprintInfo(sprintData.sprint.number, sprintData.agents.length, sprintData.tasks.length);
   } catch (err) {
-    ui.error(`Failed to start sprint: ${err}`);
+    ui.error(`Failed to fetch sprint: ${err}`);
     await api.updateAgent({ name: cliArgs.agentName, status: "error", activity: `No active sprint: ${err}` });
     process.exit(1);
   }
