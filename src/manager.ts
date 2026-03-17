@@ -12,6 +12,7 @@
  * On event: fetch enriched context → build prompt → call LLM → parse actions → execute.
  */
 
+import { execSync } from "node:child_process";
 import type { ApiClient, Task } from "./api-client.js";
 import type { AgentRunner } from "./runner.js";
 import { callClaudeCli, callClaudeCliStream, createAuthHeaders, buildConversationHistory } from "./llm-client.js";
@@ -193,6 +194,22 @@ export class Manager {
     }
   }
 
+  /** Pull latest changes in Manager's repo clones (runs on poll tick) */
+  private pullRepos(): void {
+    for (const repo of this.repositories) {
+      try {
+        execSync("git pull --ff-only 2>/dev/null", {
+          cwd: repo.path,
+          stdio: "pipe",
+          timeout: 10_000,
+          shell: "/bin/sh",
+        });
+      } catch {
+        // Non-fatal — repo may not have a remote or network may be down
+      }
+    }
+  }
+
   /** Pause polling when WS clients are connected (messages come via WS) */
   pausePolling(): void {
     ui.info("[manager] Polling paused (WS connected)");
@@ -240,6 +257,7 @@ export class Manager {
 
   private async poll(): Promise<void> {
     this.cleanExpiredApprovals();
+    this.pullRepos();
     await this.heartbeat();
 
     const messages = await this.fetchMessages();
