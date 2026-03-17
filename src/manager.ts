@@ -14,7 +14,7 @@
 
 import type { ApiClient, Task } from "./api-client.js";
 import type { AgentRunner } from "./runner.js";
-import { callClaudeCli, createAuthHeaders, buildConversationHistory } from "./llm-client.js";
+import { callClaudeCli, callClaudeCliStream, createAuthHeaders, buildConversationHistory } from "./llm-client.js";
 import { PollLoop } from "./poll-loop.js";
 import * as ui from "./ui.js";
 
@@ -65,6 +65,16 @@ interface ManagerAction {
   params: Record<string, unknown>;
 }
 
+/** Pending spawn_agent approval */
+export interface PendingApproval {
+  id: string;
+  role: string;
+  taskIds: string[];
+  createdAt: number;
+}
+
+const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export interface ManagerOptions {
   apiUrl: string;
   apiKey: string;
@@ -98,12 +108,19 @@ export class Manager {
   private poller: PollLoop;
   private useClaudeCli: boolean;
 
+  /** Pending spawn_agent approvals waiting for user confirmation */
+  private pendingApprovals = new Map<string, PendingApproval>();
+
   /** Callbacks for actions the Manager can't execute directly */
   onSpawnAgent?: (role: string, taskIds: string[]) => Promise<void>;
   /** Callback to broadcast reply via WebSocket (for poll-path messages) */
   onReply?: (reply: string) => void;
   /** Callback to broadcast proposals via WebSocket */
   onProposals?: (proposals: Array<Record<string, string>>) => void;
+  /** Callback to stream text chunks via WebSocket */
+  onStreamChunk?: (chunk: string) => void;
+  /** Callback when a spawn_agent needs user approval */
+  onApprovalRequest?: (approval: PendingApproval) => void;
 
   constructor(options: ManagerOptions) {
     this.apiUrl = options.apiUrl;
@@ -134,6 +151,40 @@ export class Manager {
     ui.debug("manager", "Manager stopped");
   }
 
+  /** Resolve a pending approval (approve or reject) */
+  async resolveApproval(approvalId: string, approved: boolean): Promise<void> {
+    const approval = this.pendingApprovals.get(approvalId);
+    if (!approval) {
+      ui.warn(`[manager] Approval ${approvalId} not found (expired or already resolved)`);
+      return;
+    }
+    this.pendingApprovals.delete(approvalId);
+
+    if (approved && this.onSpawnAgent) {
+      ui.info(`[manager] Approval granted — spawning ${approval.role} agent`);
+      await this.onSpawnAgent(approval.role, approval.taskIds);
+    } else {
+      ui.info(`[manager] Approval rejected — ${approval.role} agent not spawned`);
+    }
+  }
+
+  /** Get all pending approvals (for re-sending on WS reconnect) */
+  getPendingApprovals(): PendingApproval[] {
+    this.cleanExpiredApprovals();
+    return Array.from(this.pendingApprovals.values());
+  }
+
+  /** Remove approvals older than 5 minutes */
+  private cleanExpiredApprovals(): void {
+    const now = Date.now();
+    for (const [id, approval] of this.pendingApprovals) {
+      if (now - approval.createdAt > APPROVAL_TIMEOUT_MS) {
+        this.pendingApprovals.delete(id);
+        ui.info(`[manager] Approval ${id} expired (${approval.role})`);
+      }
+    }
+  }
+
   /** Pause polling when WS clients are connected (messages come via WS) */
   pausePolling(): void {
     ui.info("[manager] Polling paused (WS connected)");
@@ -150,14 +201,14 @@ export class Manager {
 
   /**
    * Handle a message received via WebSocket.
-   * Fetches context, calls LLM, executes actions, returns reply.
+   * Streams response chunks via onStreamChunk, then executes actions.
    */
   async handleWsMessage(content: string): Promise<{ reply: string; proposals?: Array<Record<string, string>> }> {
-    ui.chatMessage("user", "manager", content);
+    ui.chatMessage("user", "manager", content, "ws");
     const context = await this.fetchContext();
     const { reply, actions, proposals } = await this.think(content, context);
     await this.executeActions(actions, context);
-    ui.chatMessage("manager", "user", reply);
+    ui.chatMessage("manager", "user", reply, "ws");
     await this.advanceLastSeen();
     return { reply, proposals };
   }
@@ -180,6 +231,7 @@ export class Manager {
   // ── Polling ──────────────────────────────────────────────
 
   private async poll(): Promise<void> {
+    this.cleanExpiredApprovals();
     await this.heartbeat();
 
     const messages = await this.fetchMessages();
@@ -194,7 +246,7 @@ export class Manager {
       const isFromUser = msg.from === "user" || msg.from.startsWith("user:");
 
       // Show inbound message immediately before processing
-      ui.chatMessage(msg.from, "manager", msg.content);
+      ui.chatMessage(msg.from, "manager", msg.content, "api");
 
       try {
         const senderContext = isFromUser
@@ -212,9 +264,9 @@ export class Manager {
             this.onProposals?.(proposals);
           }
         }
-        ui.chatMessage("manager", msg.from, reply);
+        ui.chatMessage("manager", msg.from, reply, "api");
       } catch (err) {
-        ui.chatMessage("manager", msg.from, `Error: ${err}`);
+        ui.chatMessage("manager", msg.from, `Error: ${err}`, "api");
         await this.postReplyTo(msg.from, "Sorry, an error occurred while processing your message. Please try again.").catch(() => {});
       }
 
@@ -237,7 +289,13 @@ export class Manager {
 
     let llmResponse: string;
     if (this.useClaudeCli) {
-      llmResponse = await this.callClaudeCliLocal(systemPrompt, conversationHistory, userMessage);
+      llmResponse = await callClaudeCliStream({
+        systemPrompt,
+        history: conversationHistory,
+        userMessage,
+        model: this.model,
+        onChunk: this.onStreamChunk,
+      });
     } else {
       llmResponse = await this.callLlmApi(systemPrompt, conversationHistory, userMessage);
     }
@@ -324,6 +382,7 @@ Action types:
 - ALWAYS include at least one ACTION block in your response. Responses without ACTION blocks are useless.
 - When suggesting tasks, ALWAYS use ACTION: propose_tasks. This renders cards in the UI that the user can add with one click. Never just list tasks in text.
 - When delegating work to other agents, ALWAYS create a task first (create_task with owner), then spawn_agent. Never use send_message for work requests — messages are only for status checks and coordination.
+- Before using spawn_agent, briefly explain which agent you want to start and why (1 sentence). The user will see an approval prompt — they must approve before the agent starts.
 - Keep text brief (2-3 sentences). The ACTION blocks are the main output.
 - Task IDs: use the short 8-char prefix shown above.
 - Reply in the same language the sender used.
@@ -396,7 +455,14 @@ Help the user with sprint management.`;
       }
     }
 
-    const reply = replyLines.join("\n").trim() || "(no response)";
+    let reply = replyLines.join("\n").trim();
+    if (!reply && actions.length > 0) {
+      // LLM returned only ACTION lines — summarize what was done
+      const summaries = actions.map((a) => `${a.type}`);
+      reply = `(${summaries.join(", ")})`;
+    } else if (!reply) {
+      reply = "(no response)";
+    }
     return { reply, actions, proposals };
   }
 
@@ -410,9 +476,18 @@ Help the user with sprint management.`;
       try {
         switch (action.type) {
           case "update_task": {
-            const { id, ...updates } = action.params as { id: string; [k: string]: unknown };
+            const { id, ...rawUpdates } = action.params as { id: string; [k: string]: unknown };
             if (id && this.api) {
-              // Resolve short ID to full ID from context
+              // Only send fields the API accepts
+              const allowedFields = ["title", "description", "owner", "priority", "status", "type", "sprint", "branch", "labels", "blocks", "blocked_by", "context_notes", "target_repo", "parent_task", "review_comment", "commits"];
+              const updates: Record<string, unknown> = {};
+              for (const [k, v] of Object.entries(rawUpdates)) {
+                if (allowedFields.includes(k)) updates[k] = v;
+              }
+              if (Object.keys(updates).length === 0) {
+                ui.warn(`[manager] update_task ${id}: no valid fields`);
+                break;
+              }
               const fullId = this.resolveTaskId(id, _context);
               await this.api.updateTask(fullId, updates as Partial<Task>);
               ui.info(`[manager] Updated task ${id}`);
@@ -456,10 +531,17 @@ Help the user with sprint management.`;
           }
           case "spawn_agent": {
             const { role, task_ids } = action.params as { role: string; task_ids: string[] };
-            if (role && this.onSpawnAgent) {
+            if (role) {
               const fullIds = (task_ids ?? []).map((id) => this.resolveTaskId(id, _context));
-              await this.onSpawnAgent(role, fullIds);
-              ui.info(`[manager] Spawning ${role} agent`);
+              const approval: PendingApproval = {
+                id: `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                role,
+                taskIds: fullIds,
+                createdAt: Date.now(),
+              };
+              this.pendingApprovals.set(approval.id, approval);
+              ui.info(`[manager] spawn_agent awaiting approval: ${role} (${approval.id})`);
+              this.onApprovalRequest?.(approval);
             }
             break;
           }
@@ -504,14 +586,6 @@ Help the user with sprint management.`;
   }
 
   // ── LLM backends ────────────────────────────────────────
-
-  private callClaudeCliLocal(
-    systemPrompt: string,
-    history: Array<{ role: string; content: string }>,
-    userMessage: string
-  ): Promise<string> {
-    return callClaudeCli({ systemPrompt, history, userMessage, model: this.model });
-  }
 
   private async callLlmApi(
     systemPrompt: string,

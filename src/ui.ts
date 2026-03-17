@@ -52,11 +52,13 @@ function log(msg: string): void {
 
 /**
  * Log a chat message between agents/users.
+ * @param via - transport: "ws" or "api" (shown as suffix tag)
  */
-export function chatMessage(from: string, to: string, content: string): void {
+export function chatMessage(from: string, to: string, content: string, via?: "ws" | "api"): void {
+  const tag = via ? color.dim(` [${via}]`) : "";
   if (_debug) {
     const indent = content.split("\n").map(l => `              ${l}`).join("\n");
-    log(`[chat] ${from} → ${to}:\n${indent}`);
+    log(`[chat] ${from} → ${to}${tag}:\n${indent}`);
   } else {
     const oneLine = content.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
     const cols = process.stdout.columns ?? 80;
@@ -64,7 +66,7 @@ export function chatMessage(from: string, to: string, content: string): void {
     const truncated = oneLine.length > maxLen ? oneLine.slice(0, maxLen - 3) + "..." : oneLine;
     const symbol = from.startsWith("user") ? "◇" : "◆";
     const shortFrom = from.startsWith("user:") ? "user" : from;
-    log(`${symbol} ${color.bold(shortFrom)}→${to}: ${truncated}`);
+    log(`${symbol} ${color.bold(shortFrom)}→${to}${tag}: ${truncated}`);
   }
 }
 

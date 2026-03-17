@@ -16,7 +16,20 @@ export interface ClaudeCliOptions {
  * Handles timeout, ENOENT, and non-zero exit codes.
  */
 export function callClaudeCli(opts: ClaudeCliOptions): Promise<string> {
-  const { systemPrompt, history, userMessage, model, timeoutMs = 180_000 } = opts;
+  return callClaudeCliStream({ ...opts });
+}
+
+export interface ClaudeCliStreamOptions extends ClaudeCliOptions {
+  /** Called with each text chunk as it arrives from stdout */
+  onChunk?: (chunk: string) => void;
+}
+
+/**
+ * Spawn Claude CLI with --print and stream output via onChunk callback.
+ * Returns the full response text on completion.
+ */
+export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<string> {
+  const { systemPrompt, history, userMessage, model, timeoutMs = 300_000, onChunk } = opts;
 
   const contextLines = history.slice(-6).map((m) => {
     const label = m.role === "user" ? "User" : "Manager";
@@ -45,7 +58,11 @@ export function callClaudeCli(opts: ClaudeCliOptions): Promise<string> {
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stdout.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      stdout += text;
+      if (onChunk && text) onChunk(text);
+    });
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
     const timer = setTimeout(() => {

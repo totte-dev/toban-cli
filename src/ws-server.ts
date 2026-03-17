@@ -31,6 +31,11 @@ interface WsMessage {
   commits?: string[];
   /** Proposal-specific fields */
   tasks?: Array<Record<string, string>>;
+  /** Approval-specific fields */
+  approval_id?: string;
+  approved?: boolean;
+  role?: string;
+  task_ids?: string[];
 }
 
 export interface WsChatServerOptions {
@@ -48,6 +53,10 @@ export interface WsChatServerOptions {
   onAllClientsDisconnected?: () => void;
   /** Callback when a revert is requested from the UI */
   onRevert?: (taskId: string, repo: string, commits: string[]) => Promise<{ ok: boolean; error?: string }>;
+  /** Callback when an approval response is received from the UI */
+  onApprovalResponse?: (approvalId: string, approved: boolean) => void;
+  /** Callback to get pending approvals for re-sending on reconnect */
+  getPendingApprovals?: () => Array<{ id: string; role: string; taskIds: string[]; createdAt: number }>;
 }
 
 export class WsChatServer {
@@ -60,6 +69,8 @@ export class WsChatServer {
   private onClientConnected?: () => void;
   private onAllClientsDisconnected?: () => void;
   private onRevert?: (taskId: string, repo: string, commits: string[]) => Promise<{ ok: boolean; error?: string }>;
+  private onApprovalResponse?: (approvalId: string, approved: boolean) => void;
+  private getPendingApprovals?: () => Array<{ id: string; role: string; taskIds: string[]; createdAt: number }>;
   private clients = new Set<WebSocket>();
 
   /** Whether any browser clients are connected */
@@ -75,6 +86,8 @@ export class WsChatServer {
     this.onClientConnected = options.onClientConnected;
     this.onAllClientsDisconnected = options.onAllClientsDisconnected;
     this.onRevert = options.onRevert;
+    this.onApprovalResponse = options.onApprovalResponse;
+    this.getPendingApprovals = options.getPendingApprovals;
   }
 
   /**
@@ -139,6 +152,23 @@ export class WsChatServer {
           content: "connected",
           timestamp: new Date().toISOString(),
         }));
+
+        // Re-send pending approvals to newly connected client
+        if (this.getPendingApprovals) {
+          const pending = this.getPendingApprovals();
+          for (const approval of pending) {
+            ws.send(JSON.stringify({
+              type: WS_MSG.APPROVAL_REQUEST,
+              approval_id: approval.id,
+              role: approval.role,
+              task_ids: approval.taskIds,
+              timestamp: new Date(approval.createdAt).toISOString(),
+            }));
+          }
+          if (pending.length > 0) {
+            ui.info(`[ws] Re-sent ${pending.length} pending approval(s) to new client`);
+          }
+        }
       });
 
       this.httpServer.on("error", (err) => {
@@ -305,10 +335,11 @@ export class WsChatServer {
         // Save incoming message to API in background
         this.saveMessageToApi(msg.from ?? "user", "manager", msg.content).catch(() => {});
 
-        // Send typing indicator
+        // Send streaming start indicator
         this.broadcast({
-          type: WS_MSG.STATUS,
-          content: "typing",
+          type: WS_MSG.CHAT_STREAM,
+          from: "manager",
+          content: "",
           timestamp: new Date().toISOString(),
         });
 
@@ -318,7 +349,7 @@ export class WsChatServer {
           const reply = typeof result === "string" ? result : result.reply;
           const proposals = typeof result === "object" ? result.proposals : undefined;
 
-          // Send reply via WebSocket
+          // Send final complete reply (signals stream end)
           const replyMsg: WsMessage = {
             type: WS_MSG.CHAT,
             from: "manager",
@@ -350,6 +381,16 @@ export class WsChatServer {
             timestamp: new Date().toISOString(),
           }));
         }
+        break;
+      }
+
+      case WS_MSG.APPROVAL_RESPONSE: {
+        if (!msg.approval_id || typeof msg.approved !== "boolean") {
+          ws.send(JSON.stringify({ type: WS_MSG.STATUS, content: "Missing approval_id or approved field", timestamp: new Date().toISOString() }));
+          return;
+        }
+        ui.info(`[ws] Approval response: ${msg.approval_id} → ${msg.approved ? "approved" : "rejected"}`);
+        this.onApprovalResponse?.(msg.approval_id, msg.approved);
         break;
       }
 
