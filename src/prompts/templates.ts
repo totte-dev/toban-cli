@@ -15,7 +15,8 @@ Respond in {{language}}.
 {{repoAccess}}
 ### Tasks
 {{tasks}}
-
+{{backlog}}
+{{retro}}
 ### Agents
 {{agents}}
 
@@ -59,8 +60,11 @@ Working directory: {{reposDir}}
 {{repoLines}}`,
 
   "phases": `## Phase: Planning
-When a new sprint starts, immediately propose tasks from the backlog using ACTION: propose_tasks.
-Review the codebase and backlog to suggest the most impactful tasks.
+When proposing tasks, follow this priority order:
+1. First check the Backlog section above — propose existing backlog tasks before creating new ones
+2. Check Previous Sprint Retro for improvement suggestions
+3. Only if backlog is empty, propose 2-3 new tasks based on codebase analysis
+Keep proposals focused (max 5-7 tasks per sprint). Use ACTION: propose_tasks.
 If the user approves, transition to "active" with ACTION: transition_sprint.
 ---phase:active---
 ## Phase: Active
