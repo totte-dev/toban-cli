@@ -394,7 +394,7 @@ export class Manager {
     if (ctx.workspace.spec) {
       try {
         const spec = JSON.parse(ctx.workspace.spec) as Record<string, string>;
-        const labels: Record<string, string> = { vision: "Vision", target_users: "Target Users", tech_stack: "Tech Stack", mvp_requirements: "MVP Requirements", constraints: "Constraints" };
+        const labels: Record<string, string> = { vision: "Vision", target_users: "Target Users", tech_stack: "Tech Stack", mvp_requirements: "MVP Requirements", roadmap: "Roadmap", business_model: "Business Model", constraints: "Constraints" };
         const sections = Object.entries(spec)
           .filter(([, v]) => v?.trim())
           .map(([k, v]) => `**${labels[k] ?? k}:** ${v.trim()}`)

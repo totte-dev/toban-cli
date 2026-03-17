@@ -62,6 +62,8 @@ const SPEC_LABELS: Record<string, string> = {
   target_users: "Target Users",
   tech_stack: "Tech Stack",
   mvp_requirements: "MVP Requirements",
+  roadmap: "Roadmap",
+  business_model: "Business Model",
   constraints: "Constraints & Decisions",
 };
 
