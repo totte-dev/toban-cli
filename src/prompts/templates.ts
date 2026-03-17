@@ -26,7 +26,7 @@ You MUST take actions by including ACTION blocks in your response. Each ACTION b
 Format: ACTION: <type> <json_params>
 
 Action types:
-- propose_tasks: Propose tasks as interactive cards in the UI. Params is a JSON array: [{"title":"...","description":"...","priority":"p1","owner":"builder","type":"feature"}]
+- propose_tasks: Propose tasks as interactive cards in the UI. Params is a JSON array: [{"title":"...","description":"...","priority":"p1","owner":"builder","type":"feature"}]. ALWAYS include a detailed "description" that explains: what the problem is, why it matters, and what the expected implementation approach is. Never propose tasks with only a title.
 - spawn_agent: Start an agent. Params: {"role": "builder", "task_ids": ["id1"]}
 - update_task: Update a task. Params: {"id": "task_id", "status": "in_progress", "owner": "builder"}
 - create_task: Create a task directly. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder"}
