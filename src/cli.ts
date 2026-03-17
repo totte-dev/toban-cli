@@ -18,6 +18,7 @@ import { ChatPoller } from "./chat-poller.js";
 import { MessagePoller } from "./message-poller.js";
 import { WS_MSG } from "./ws-types.js";
 import { resolveTaskWorkingDir } from "./git-ops.js";
+import { ensureGitUser } from "./spawner.js";
 import { setup, type CliArgs, type SetupResult } from "./setup.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
@@ -188,6 +189,9 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
           secrets = await api.fetchMySecrets();
           if (Object.keys(secrets).length > 0) ui.info(`Injected ${Object.keys(secrets).length} secrets`);
         } catch (err) { ui.warn(`Could not fetch secrets: ${err}`); }
+
+        // Ensure git user is set before worktree creation
+        if (ctx.gitUserInfo) ensureGitUser(taskWorkingDir, ctx.gitUserInfo.name, ctx.gitUserInfo.email);
 
         const agentConfig = {
           name: `${agentName}-${task.id.slice(0, 8)}`,
