@@ -68,6 +68,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
     ],
     post_actions: [
+      { type: "git_push", when: "success", label: "Push branch to remote" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
