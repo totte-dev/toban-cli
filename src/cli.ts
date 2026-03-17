@@ -730,7 +730,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         }
 
         const agentConfig = {
-          name: `${cliArgs.agentName}-${task.id.slice(0, 8)}`,
+          name: `${agentName}-${task.id.slice(0, 8)}`,
           type: cliArgs.engine,
           taskId: task.id,
           workingDir: taskWorkingDir,
