@@ -724,17 +724,9 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         credentialHelperPath
       );
 
-      // Build repository info for prompt
-      const repoInfoList: RepoInfo[] = repos
-        .filter((r) => {
-          const agents = r.access_agents ?? [];
-          return agents.length === 0 || agents.includes(task.owner ?? cliArgs.agentName);
-        })
-        .map((r) => ({
-          name: r.repo_name,
-          path: join(tobanHome, cliArgs.agentName, r.repo_name),
-          description: r.description,
-        }));
+      // Note: Worker agents operate in a worktree (single repo) so we don't
+      // inject "Available Repositories" into their prompt. They should only
+      // work within their assigned worktree directory.
 
       const agentName = task.owner ?? "builder";
       const apiDocs = await api.fetchApiDocs(agentName);
@@ -777,7 +769,6 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         apiKey: cliArgs.apiKey,
         playbookRules,
         targetRepo: task.target_repo ?? undefined,
-        repositories: repoInfoList.length > 0 ? repoInfoList : undefined,
         apiDocs: apiDocs || undefined,
       });
 
