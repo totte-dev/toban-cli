@@ -110,6 +110,7 @@ export class Manager {
   private runner: AgentRunner | null;
   private api: ApiClient | null;
   private lastSeenId: string | null = null;
+  private lastUserMessage: string | undefined;
   private poller: PollLoop;
   private llmProvider: LlmProvider;
   private reposDir?: string;
@@ -231,6 +232,7 @@ export class Manager {
    * Streams response chunks via onStreamChunk, then executes actions.
    */
   async handleWsMessage(content: string): Promise<{ reply: string; proposals?: Array<Record<string, string>> }> {
+    this.lastUserMessage = content;
     ui.chatMessage("user", "manager", content, "ws");
     const context = await this.fetchContext();
     const { reply, actions, proposals } = await this.think(content, context);
@@ -499,7 +501,7 @@ export class Manager {
               title: string; description?: string; priority?: string; owner?: string;
             };
             if (title) {
-              await this.createTask(title, description, priority, owner, _context);
+              await this.createTask(title, description, priority, owner, _context, this.lastUserMessage);
               ui.info(`[manager] Created task: ${title}`);
             }
             break;
@@ -570,13 +572,16 @@ export class Manager {
     description?: string,
     priority?: string,
     owner?: string,
-    ctx?: ManagerContext
+    ctx?: ManagerContext,
+    userMessage?: string
   ): Promise<void> {
     const body: Record<string, unknown> = { title };
     if (description) body.description = description;
     if (priority) body.priority = priority;
     if (owner) body.owner = owner;
     if (ctx?.sprint) body.sprint = ctx.sprint.number;
+    body.labels = ["ai-generated"];
+    if (userMessage) body.context_notes = `User request: ${userMessage}`;
 
     await fetch(`${this.apiUrl}/api/v1/tasks`, {
       method: "POST",

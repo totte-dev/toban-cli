@@ -168,10 +168,13 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       try { await executeActions(agentTemplate.pre_actions, actionCtx, "pre"); }
       catch (err) { ui.error(`[task] Pre-actions failed: ${err}`); continue; }
 
+      const contextNotes = (task as Record<string, unknown>).context_notes as string | undefined;
+      const fullDescription = [task.description, contextNotes].filter(Boolean).join("\n\n") || undefined;
+
       const prompt = buildAgentPrompt({
         role: agentName, projectName: ctx.workspaceName, projectSpec: ctx.workspaceSpec,
         taskId: task.id, taskTitle: task.title,
-        taskDescription: task.description || undefined,
+        taskDescription: fullDescription,
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
         taskType, apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey,
         playbookRules: ctx.playbookRules, targetRepo: task.target_repo ?? undefined,
