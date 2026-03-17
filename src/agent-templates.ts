@@ -68,23 +68,21 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
     ],
     post_actions: [
-      { type: "git_push", when: "success", label: "Push branch to remote" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
+      { type: "git_push", when: "success", label: "Push main to remote" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
       { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
       completion: `Work in this directory. When done, commit your changes with a descriptive message.
+Do NOT run git push — the CLI will handle pushing after you finish.
 
 When completing a task:
-1. Commit and push: git add -A && git commit -m "<message>" && git push origin HEAD
+1. Commit: git add -A && git commit -m "<message>"
 2. Collect your commit hashes: COMMITS=$(git log --format="%H" origin/HEAD..HEAD | tr '\\n' ',' | sed 's/,$//')
 3. Move task to review with summary and commit hashes:
-   curl -s -X PATCH {{apiUrl}}/api/v1/tasks/{{taskId}} -H "Content-Type: application/json" -H "Authorization: Bearer {{apiKey}}" -d "{\\\"status\\\":\\\"review\\\",\\\"review_comment\\\":\\\"<summary of changes, key files>\\\",\\\"commits\\\":\\\"$COMMITS\\\"}"
-
-If git push fails (e.g. auth error), still move the task to review with a note:
-   curl -s -X PATCH {{apiUrl}}/api/v1/tasks/{{taskId}} -H "Content-Type: application/json" -H "Authorization: Bearer {{apiKey}}" -d "{\\\"status\\\":\\\"review\\\",\\\"review_comment\\\":\\\"Changes committed locally but push failed. Commits need manual push.\\\"}"`,
+   curl -s -X PATCH {{apiUrl}}/api/v1/tasks/{{taskId}} -H "Content-Type: application/json" -H "Authorization: Bearer {{apiKey}}" -d "{\\\"status\\\":\\\"review\\\",\\\"review_comment\\\":\\\"<summary of changes, key files>\\\",\\\"commits\\\":\\\"$COMMITS\\\"}"`,
     },
   },
   {
@@ -241,9 +239,41 @@ export async function executeActions(
           break;
         }
         case "git_merge": {
-          if (ctx.onMerge) {
-            const merged = ctx.onMerge();
-            ui.debug("template", `[${phase}] ${label}: ${merged ? "ok" : "conflict"}`);
+          const { execSync: gitExec } = await import("node:child_process");
+          const { existsSync: gitExists } = await import("node:fs");
+          const { join: gitJoin } = await import("node:path");
+          const repoDir = ctx.config.workingDir;
+          const baseBranch = ctx.config.baseBranch;
+
+          // Find the agent's worktree branch
+          try {
+            const branches = gitExec("git branch", { cwd: repoDir, stdio: "pipe" }).toString();
+            const worktreeBranch = branches.split("\n")
+              .map((b) => b.trim().replace("* ", ""))
+              .find((b) => b.startsWith("agent/"));
+
+            if (worktreeBranch) {
+              // Find worktree path for cleanup
+              const worktreeDir = gitJoin(repoDir, ".worktrees", worktreeBranch.replace(/\//g, "-"));
+
+              gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
+              gitExec(`git merge --no-ff "${worktreeBranch}" -m "merge: ${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
+              ui.debug("template", `[${phase}] ${label}: merged ${worktreeBranch}`);
+
+              // Clean up worktree
+              if (gitExists(worktreeDir)) {
+                const { rmSync } = await import("node:fs");
+                try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+              }
+              try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+              try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+            } else {
+              ui.debug("template", `[${phase}] ${label}: no agent branch found, skipping`);
+            }
+          } catch (mergeErr) {
+            const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
+            ui.warn(`[template] git_merge failed: ${msg}`);
+            try { gitExec("git merge --abort", { cwd: repoDir, stdio: "pipe" }); } catch { /* already clean */ }
           }
           break;
         }
@@ -263,12 +293,17 @@ export async function executeActions(
           break;
         }
         case "git_push": {
-          const { execSync } = await import("node:child_process");
-          execSync("git push origin HEAD", {
-            cwd: ctx.config.workingDir,
-            stdio: "pipe",
-          });
-          ui.debug("template", `[${phase}] ${label}`);
+          const { execSync: pushExec } = await import("node:child_process");
+          try {
+            pushExec(`git push origin ${ctx.config.baseBranch}`, {
+              cwd: ctx.config.workingDir,
+              stdio: "pipe",
+            });
+            ui.debug("template", `[${phase}] ${label}: pushed ${ctx.config.baseBranch}`);
+          } catch (pushErr) {
+            const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
+            ui.warn(`[template] git_push failed: ${msg}`);
+          }
           break;
         }
         case "submit_retro": {

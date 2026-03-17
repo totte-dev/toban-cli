@@ -184,48 +184,9 @@ export class AgentRunner {
       agent.exitCode = code;
       agent.stoppedAt = new Date();
 
-      if (code === 0) {
-        if (useDocker) {
-          // Docker mode: the entrypoint created a worktree branch inside the container.
-          // The branch persists on the host via the bind mount.
-          const dockerBranch = buildDockerBranchName(config.name, config.taskId);
-          ui.debug("git", `Merging branch ${dockerBranch} → ${baseBranch}`);
-          const merged = mergeAgentBranch(config.workingDir, dockerBranch, baseBranch);
-          if (merged) {
-            ui.debug("git", `Branch ${dockerBranch} merged successfully`);
-            await this.reportStatus(config, "completed", "Branch merged successfully");
-          } else {
-            ui.debug("git", `Merge conflict on branch ${dockerBranch}`);
-            await this.reportStatus(
-              config,
-              "completed",
-              `Merge conflict on branch ${dockerBranch} - manual resolution needed`
-            );
-          }
-        } else {
-          ui.debug("git", `Merging branch ${branchName} → ${baseBranch}`);
-          const merged = tryMerge(config.workingDir, branchName, baseBranch);
-          if (merged) {
-            ui.debug("git", `Branch ${branchName} merged successfully`);
-            removeWorktree(config.workingDir, worktreePath, branchName);
-            await this.reportStatus(config, "completed", "Branch merged successfully");
-          } else {
-            ui.debug("git", `Merge conflict on branch ${branchName}`);
-            await this.reportStatus(
-              config,
-              "completed",
-              `Merge conflict on branch ${branchName} - manual resolution needed`
-            );
-          }
-        }
-
-        if (config.sprintNumber) {
-          const retro = this.extractRetroComment(agent, config);
-          if (retro) {
-            await this.submitRetro(config, retro);
-          }
-        }
-      } else {
+      // Merge, push, retro, and status updates are handled by template
+      // post_actions in cli.ts — runner only tracks agent status.
+      if (code !== 0) {
         const reason = signal ? `killed by signal ${signal}` : `exited with code ${code}`;
         await this.reportStatus(config, "failed", reason);
       }
