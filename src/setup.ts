@@ -254,6 +254,7 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
     mgr.onProposals = (proposals) => { wsServer?.broadcast({ type: WS_MSG.PROPOSALS, tasks: proposals, timestamp: new Date().toISOString() }); };
     mgr.onStreamChunk = (chunk) => { wsServer?.broadcast({ type: WS_MSG.CHAT_STREAM, from: "manager", content: chunk, timestamp: new Date().toISOString() }); };
     mgr.onApprovalRequest = (approval) => { wsServer?.broadcast({ type: WS_MSG.APPROVAL_REQUEST, approval_id: approval.id, role: approval.role, task_ids: approval.taskIds, timestamp: new Date().toISOString() }); };
+    mgr.onActivityChange = (activity) => { wsServer?.broadcast({ type: WS_MSG.STATUS, from: "manager", content: activity, timestamp: new Date().toISOString() }); };
   } catch (err) { ui.warn(`WebSocket server failed to start: ${err}`); }
 
   mgr.start();
