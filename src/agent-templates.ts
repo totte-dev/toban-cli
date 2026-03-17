@@ -357,6 +357,7 @@ export async function executeActions(
             const lines = diffContent.split("\n").length;
             const filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
             const review = [
+              `Agent: ${ctx.agentName}`,
               `Commit: ${lastCommit}`,
               `Files changed: ${filesChanged.length}`,
               diffStat,
