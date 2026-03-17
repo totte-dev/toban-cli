@@ -16,7 +16,7 @@ import * as ui from "./ui.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "submit_retro" | "shell";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "submit_retro" | "shell";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -63,6 +63,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
     match: {},
     tools: "all",
     pre_actions: [
+      { type: "git_auth_check", label: "Verify git push credentials" },
       { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
       { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
     ],
@@ -242,6 +243,21 @@ export async function executeActions(
           if (ctx.onMerge) {
             const merged = ctx.onMerge();
             ui.debug("template", `[${phase}] ${label}: ${merged ? "ok" : "conflict"}`);
+          }
+          break;
+        }
+        case "git_auth_check": {
+          const { execSync: exec } = await import("node:child_process");
+          try {
+            exec("git ls-remote --exit-code origin HEAD", {
+              cwd: ctx.config.workingDir,
+              stdio: "pipe",
+              timeout: 15_000,
+            });
+            ui.debug("template", `[${phase}] ${label}: ok`);
+          } catch (authErr) {
+            const msg = authErr instanceof Error ? authErr.message : String(authErr);
+            throw new Error(`Git auth check failed — push will not work. Fix credentials before spawning agent.\n${msg.slice(0, 200)}`);
           }
           break;
         }
