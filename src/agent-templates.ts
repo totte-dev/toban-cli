@@ -246,14 +246,18 @@ export async function executeActions(
           const { execSync: gitExec } = await import("node:child_process");
           const { existsSync: gitExists } = await import("node:fs");
           const { join: gitJoin } = await import("node:path");
-          const repoDir = ctx.config.workingDir;
+          // workingDir is the worktree path — we need the main repo root
+          // Worktree is at <repo>/.worktrees/<branch>/, so repo root is 2 levels up
+          const worktreePath = ctx.config.workingDir;
+          const repoDir = gitExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: worktreePath, stdio: "pipe" })
+            .toString().trim().replace(/\/.git$/, "");
           const baseBranch = ctx.config.baseBranch;
 
           // Find the agent's worktree branch
           try {
             const branches = gitExec("git branch", { cwd: repoDir, stdio: "pipe" }).toString();
             const worktreeBranch = branches.split("\n")
-              .map((b) => b.trim().replace("* ", ""))
+              .map((b) => b.trim().replace(/^[*+]\s+/, ""))
               .find((b) => b.startsWith("agent/"));
 
             if (worktreeBranch) {
@@ -298,9 +302,12 @@ export async function executeActions(
         }
         case "git_push": {
           const { execSync: pushExec } = await import("node:child_process");
+          // Resolve repo root (workingDir may be a worktree)
+          const pushRepoDir = pushExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
+            .toString().trim().replace(/\/.git$/, "");
           try {
             pushExec(`git push origin ${ctx.config.baseBranch}`, {
-              cwd: ctx.config.workingDir,
+              cwd: pushRepoDir,
               stdio: "pipe",
             });
             ui.debug("template", `[${phase}] ${label}: pushed ${ctx.config.baseBranch}`);
