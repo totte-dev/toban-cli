@@ -173,6 +173,13 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
     ui.debug("git", `Credential helper: ${credentialHelperPath}`);
     if (existsSync(join(workingDir, ".git"))) {
       try { cleanRepoAuth(workingDir, credentialHelperPath); } catch { /* non-fatal */ }
+      // Set git user on workspace clone (used by agent worktrees)
+      if (gitUserInfo) {
+        try {
+          execSync(`git config user.name "${gitUserInfo.name}"`, { cwd: workingDir, stdio: "pipe" });
+          execSync(`git config user.email "${gitUserInfo.email}"`, { cwd: workingDir, stdio: "pipe" });
+        } catch { /* non-fatal */ }
+      }
     }
   }
 
