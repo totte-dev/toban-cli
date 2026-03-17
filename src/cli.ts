@@ -437,6 +437,10 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       onRevert: async (taskId, repoName, commits) => {
         return executeRevert(repoName, commits, repos);
       },
+      onApprovalResponse: (approvalId, approved) => {
+        mgr.resolveApproval(approvalId, approved);
+      },
+      getPendingApprovals: () => mgr.getPendingApprovals(),
     });
     actualWsPort = await wsServer.start();
     await wsServer.registerPort();
@@ -456,6 +460,23 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       wsServer?.broadcast({
         type: WS_MSG.PROPOSALS,
         tasks: proposals,
+        timestamp: new Date().toISOString(),
+      });
+    };
+    mgr.onStreamChunk = (chunk) => {
+      wsServer?.broadcast({
+        type: WS_MSG.CHAT_STREAM,
+        from: "manager",
+        content: chunk,
+        timestamp: new Date().toISOString(),
+      });
+    };
+    mgr.onApprovalRequest = (approval) => {
+      wsServer?.broadcast({
+        type: WS_MSG.APPROVAL_REQUEST,
+        approval_id: approval.id,
+        role: approval.role,
+        task_ids: approval.taskIds,
         timestamp: new Date().toISOString(),
       });
     };
@@ -872,6 +893,16 @@ if (cliArgs.command === "sprint") {
     onStdout: (agentName, lines, stream) => {
       if (activeWsServer && activeWsServer.clientCount > 0) {
         activeWsServer.broadcastStdout(agentName, lines, stream);
+      }
+    },
+    onActivity: (agentName, activity) => {
+      if (activeWsServer && activeWsServer.clientCount > 0) {
+        activeWsServer.broadcast({
+          type: WS_MSG.AGENT_ACTIVITY,
+          agent_name: agentName,
+          content: activity.summary,
+          timestamp: activity.timestamp,
+        });
       }
     },
   });

@@ -55,6 +55,7 @@ export function buildCommand(config: AgentConfig): CommandSpec {
           ...templateArgs,
           "--dangerously-skip-permissions",
           "--print",
+          "--output-format", "stream-json",
           ...(config.prompt ? [config.prompt] : []),
         ],
       };
@@ -96,6 +97,7 @@ export function buildCommand(config: AgentConfig): CommandSpec {
         args: [
           "--dangerously-skip-permissions",
           "--print",
+          "--output-format", "stream-json",
           ...(config.prompt ? [config.prompt] : []),
         ],
       };

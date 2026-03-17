@@ -31,6 +31,17 @@ interface ManagedAgent {
 /** Callback for agent stdout/stderr streaming */
 export type StdoutCallback = (agentName: string, lines: string[], stream: "stdout" | "stderr") => void;
 
+/** Structured activity event from agent's tool_use */
+export interface AgentActivity {
+  tool: string;
+  /** Brief summary of what the tool is doing */
+  summary: string;
+  timestamp: string;
+}
+
+/** Callback for structured agent activity events */
+export type ActivityCallback = (agentName: string, activity: AgentActivity) => void;
+
 export interface AgentRunnerOptions {
   /** Use Docker containers for agent isolation (default: auto-detect) */
   useDocker?: boolean;
@@ -38,6 +49,8 @@ export interface AgentRunnerOptions {
   dockerfilePath?: string;
   /** Callback for streaming agent stdout/stderr to WebSocket clients */
   onStdout?: StdoutCallback;
+  /** Callback for structured tool_use activity events */
+  onActivity?: ActivityCallback;
 }
 
 export class AgentRunner {
@@ -46,11 +59,13 @@ export class AgentRunner {
   private dockerfilePath?: string;
   private dockerChecked = false;
   private onStdout?: StdoutCallback;
+  private onActivity?: ActivityCallback;
 
   constructor(options?: AgentRunnerOptions) {
     this.useDocker = options?.useDocker ?? true; // default: try Docker
     this.dockerfilePath = options?.dockerfilePath;
     this.onStdout = options?.onStdout;
+    this.onActivity = options?.onActivity;
   }
 
   /**
@@ -126,16 +141,50 @@ export class AgentRunner {
     this.agents.set(config.name, managed);
 
     // Stream stdout/stderr to WebSocket clients
-    if (this.onStdout) {
-      const cb = this.onStdout;
+    // For Claude agents with stream-json output, parse structured events
+    const isClaude = config.type === "claude";
+    if (this.onStdout || this.onActivity) {
+      const stdoutCb = this.onStdout;
+      const activityCb = this.onActivity;
       const agentName = config.name;
+      let stdoutBuffer = "";
+
       child.stdout?.on("data", (data: Buffer) => {
-        const lines = data.toString().split("\n").filter(Boolean);
-        if (lines.length > 0) cb(agentName, lines, "stdout");
+        if (isClaude && activityCb) {
+          // Parse stream-json JSONL: each line is a JSON object
+          stdoutBuffer += data.toString();
+          const lines = stdoutBuffer.split("\n");
+          stdoutBuffer = lines.pop() ?? ""; // keep incomplete last line
+
+          const textLines: string[] = [];
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const event = JSON.parse(line);
+              const activity = parseStreamJsonActivity(event);
+              if (activity) {
+                activityCb(agentName, activity);
+              }
+              // Extract text content for regular stdout display
+              const text = extractTextFromStreamJson(event);
+              if (text) textLines.push(text);
+            } catch {
+              // Not JSON — forward as raw text
+              textLines.push(line);
+            }
+          }
+          if (textLines.length > 0 && stdoutCb) {
+            stdoutCb(agentName, textLines, "stdout");
+          }
+        } else {
+          // Non-Claude agents: forward raw stdout
+          const lines = data.toString().split("\n").filter(Boolean);
+          if (lines.length > 0 && stdoutCb) stdoutCb(agentName, lines, "stdout");
+        }
       });
       child.stderr?.on("data", (data: Buffer) => {
         const lines = data.toString().split("\n").filter(Boolean);
-        if (lines.length > 0) cb(agentName, lines, "stderr");
+        if (lines.length > 0 && stdoutCb) stdoutCb(agentName, lines, "stderr");
       });
     }
 
@@ -289,7 +338,9 @@ export class AgentRunner {
     agent: RunningAgent,
     config: AgentConfig
   ): RetroCommentInput | null {
+    // Search all stdout lines — may be raw text or stream-json JSONL
     for (const line of agent.stdout) {
+      // Direct match (non-stream-json or already extracted text)
       if (line.startsWith("RETRO_JSON:")) {
         try {
           const json = JSON.parse(line.slice("RETRO_JSON:".length));
@@ -302,6 +353,26 @@ export class AgentRunner {
         } catch {
           // skip
         }
+      }
+
+      // Stream-json: check inside result or assistant text blocks
+      try {
+        const event = JSON.parse(line);
+        const text = extractTextFromStreamJson(event);
+        if (text) {
+          const retroMatch = text.match(/RETRO_JSON:(\{[\s\S]*\})/);
+          if (retroMatch) {
+            const json = JSON.parse(retroMatch[1]);
+            return {
+              agent_name: config.name,
+              went_well: json.went_well || undefined,
+              to_improve: json.to_improve || undefined,
+              suggested_tasks: json.suggested_tasks || undefined,
+            };
+          }
+        }
+      } catch {
+        // not JSON, skip
       }
     }
     return null;
@@ -403,6 +474,107 @@ export function mergeAgentBranch(
     cleanupDockerBranch(repoDir, branchName);
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stream-JSON parsing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a stream-json event and extract tool_use activity if present.
+ * Claude CLI stream-json emits events like:
+ *   {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{...}}]}}
+ *   {"type":"content_block_start","content_block":{"type":"tool_use","name":"Read",...}}
+ */
+function parseStreamJsonActivity(event: Record<string, unknown>): AgentActivity | null {
+  // content_block_start with tool_use
+  if (event.type === "content_block_start") {
+    const block = event.content_block as Record<string, unknown> | undefined;
+    if (block?.type === "tool_use" && typeof block.name === "string") {
+      return {
+        tool: block.name,
+        summary: summarizeToolInput(block.name, block.input as Record<string, unknown> | undefined),
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  // assistant message with tool_use content blocks
+  if (event.type === "assistant") {
+    const message = event.message as Record<string, unknown> | undefined;
+    const content = message?.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === "tool_use" && typeof block.name === "string") {
+          return {
+            tool: block.name,
+            summary: summarizeToolInput(block.name, block.input as Record<string, unknown> | undefined),
+            timestamp: new Date().toISOString(),
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract displayable text content from a stream-json event.
+ */
+function extractTextFromStreamJson(event: Record<string, unknown>): string | null {
+  // result event contains final output
+  if (event.type === "result" && typeof event.result === "string") {
+    return event.result;
+  }
+
+  // assistant message text blocks
+  if (event.type === "assistant") {
+    const message = event.message as Record<string, unknown> | undefined;
+    const content = message?.content;
+    if (Array.isArray(content)) {
+      const texts = content
+        .filter((b: Record<string, unknown>) => b.type === "text" && typeof b.text === "string")
+        .map((b: Record<string, unknown>) => b.text as string);
+      if (texts.length > 0) return texts.join("");
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Create a brief human-readable summary of a tool invocation.
+ */
+function summarizeToolInput(toolName: string, input?: Record<string, unknown>): string {
+  if (!input) return toolName;
+
+  switch (toolName) {
+    case "Read":
+      return input.file_path ? `Read ${shortenPath(input.file_path as string)}` : "Read";
+    case "Write":
+      return input.file_path ? `Write ${shortenPath(input.file_path as string)}` : "Write";
+    case "Edit":
+      return input.file_path ? `Edit ${shortenPath(input.file_path as string)}` : "Edit";
+    case "Glob":
+      return input.pattern ? `Glob ${input.pattern}` : "Glob";
+    case "Grep":
+      return input.pattern ? `Grep "${input.pattern}"` : "Grep";
+    case "Bash": {
+      const cmd = input.command as string | undefined;
+      return cmd ? `Bash: ${cmd.length > 60 ? cmd.slice(0, 60) + "..." : cmd}` : "Bash";
+    }
+    case "Agent":
+      return input.description ? `Agent: ${input.description}` : "Agent";
+    default:
+      return toolName;
+  }
+}
+
+/** Shorten a file path to the last 2 segments */
+function shortenPath(p: string): string {
+  const parts = p.split("/");
+  return parts.length > 2 ? parts.slice(-2).join("/") : p;
 }
 
 /**

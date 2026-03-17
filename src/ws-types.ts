@@ -6,6 +6,7 @@
 
 export const WS_MSG = {
   CHAT: "chat",
+  CHAT_STREAM: "chat_stream",
   STATUS: "status",
   PING: "ping",
   PONG: "pong",
@@ -14,6 +15,9 @@ export const WS_MSG = {
   PROPOSALS: "proposals",
   REVERT: "revert",
   REVERT_RESULT: "revert_result",
+  APPROVAL_REQUEST: "approval_request",
+  APPROVAL_RESPONSE: "approval_response",
+  AGENT_ACTIVITY: "agent_activity",
 } as const;
 
 export type WsMsgType = typeof WS_MSG[keyof typeof WS_MSG];
