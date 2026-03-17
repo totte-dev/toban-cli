@@ -235,8 +235,30 @@ function ensureAgentRepo(
   mkdirSync(agentDir, { recursive: true });
 
   if (existsSync(join(repoDir, ".git"))) {
-    // Existing repo: fetch + reset to main
+    // Existing repo: clean auth + fetch + reset to remote main
     ui.info(`Updating ${repo.repo_name} for ${agentName}`);
+
+    // Clean up stale token-embedded URLs
+    try {
+      const remoteUrl = execSync("git remote get-url origin", { cwd: repoDir, stdio: "pipe" }).toString().trim();
+      if (remoteUrl.includes("x-access-token")) {
+        const cleanPath = remoteUrl.replace(/https:\/\/x-access-token:[^@]+@github\.com\//, "").replace(/\.git$/, "");
+        execSync(`git remote set-url origin "https://github.com/${cleanPath}.git"`, { cwd: repoDir, stdio: "pipe" });
+      }
+    } catch { /* non-fatal */ }
+
+    // Reset credential helper
+    if (credentialHelperPath) {
+      try {
+        execSync("git config --unset-all credential.helper", { cwd: repoDir, stdio: "pipe" });
+      } catch { /* may not exist */ }
+      try {
+        execSync(`git config --add credential.helper ""`, { cwd: repoDir, stdio: "pipe" });
+        execSync(`git config --add credential.helper "${credentialHelperPath}"`, { cwd: repoDir, stdio: "pipe" });
+      } catch { /* non-fatal */ }
+    }
+
+    // Fetch and reset to remote (handles diverged local branches from agent merges)
     try {
       execSync("git fetch origin", { cwd: repoDir, stdio: "pipe" });
       execSync("git checkout main 2>/dev/null || git checkout master", {
@@ -244,10 +266,19 @@ function ensureAgentRepo(
         stdio: "pipe",
         shell: "/bin/sh",
       });
-      execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
+      try {
+        execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
+      } catch {
+        // ff-only failed (diverged) — hard reset to remote
+        execSync("git reset --hard origin/main 2>/dev/null || git reset --hard origin/master", {
+          cwd: repoDir,
+          stdio: "pipe",
+          shell: "/bin/sh",
+        });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      ui.warn(`git pull failed for ${repo.repo_name}: ${msg}`);
+      ui.warn(`git update failed for ${repo.repo_name}: ${msg}`);
     }
   } else {
     // Clone the repo — use token for initial clone only
