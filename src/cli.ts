@@ -409,6 +409,52 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     process.exit(1);
   }
 
+  // Fetch workspace repositories early (needed for Manager repo access + per-task resolution)
+  let repos: WorkspaceRepository[] = [];
+  try {
+    repos = await api.fetchRepositories();
+    if (repos.length > 0) {
+      ui.info(`${repos.length} workspace repositor${repos.length === 1 ? "y" : "ies"} found`);
+    }
+  } catch (err) {
+    ui.warn(`Could not fetch repositories: ${err}`);
+  }
+
+  // Get git token for repo cloning
+  let gitToken: string | undefined;
+  try {
+    const creds = await api.fetchGitToken();
+    if (creds?.token) gitToken = creds.token;
+  } catch {
+    // Non-fatal
+  }
+
+  const tobanHome = join(homedir(), ".toban");
+
+  // Clone all repos for Manager read-only access
+  let managerReposDir: string | undefined;
+  const managerRepoInfos: Array<{ name: string; path: string; description?: string }> = [];
+  if (repos.length > 0) {
+    const reposParent = join(tobanHome, "manager-repos");
+    mkdirSync(reposParent, { recursive: true });
+    for (const repo of repos) {
+      try {
+        const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken);
+        managerRepoInfos.push({
+          name: repo.repo_name,
+          path: repoPath,
+          description: repo.description || undefined,
+        });
+      } catch (err) {
+        ui.warn(`Could not clone ${repo.repo_name} for Manager: ${err}`);
+      }
+    }
+    if (managerRepoInfos.length > 0) {
+      managerReposDir = join(reposParent, "shared");
+      ui.step(`Manager has read access to ${managerRepoInfos.length} repo(s)`);
+    }
+  }
+
   // Start the Manager (replaces ChatPoller with action-capable LLM manager)
   const mgr = new Manager({
     apiUrl: cliArgs.apiUrl,
@@ -418,6 +464,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     model: cliArgs.model,
     runner,
     api,
+    reposDir: managerReposDir,
+    repositories: managerRepoInfos,
   });
   activeManager = mgr;
 
@@ -509,28 +557,6 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     wsPort: actualWsPort,
     llmProvider: cliArgs.llmBaseUrl || "Claude Code CLI",
   });
-
-  // Fetch workspace repositories for per-task repo resolution
-  let repos: WorkspaceRepository[] = [];
-  try {
-    repos = await api.fetchRepositories();
-    if (repos.length > 0) {
-      ui.info(`${repos.length} workspace repositor${repos.length === 1 ? "y" : "ies"} found`);
-    }
-  } catch (err) {
-    ui.warn(`Could not fetch repositories: ${err}`);
-  }
-
-  // Get git token for repo cloning
-  let gitToken: string | undefined;
-  try {
-    const creds = await api.fetchGitToken();
-    if (creds?.token) gitToken = creds.token;
-  } catch {
-    // Non-fatal
-  }
-
-  const tobanHome = join(homedir(), ".toban");
 
   const POLL_INTERVAL_MS = 30_000; // 30 seconds
 

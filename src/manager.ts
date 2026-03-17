@@ -89,6 +89,10 @@ export interface ManagerOptions {
   runner?: AgentRunner;
   /** Reference to the API client */
   api?: ApiClient;
+  /** Working directory containing all cloned repos for read access */
+  reposDir?: string;
+  /** Repository info for system prompt injection */
+  repositories?: Array<{ name: string; path: string; description?: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +111,8 @@ export class Manager {
   private lastSeenId: string | null = null;
   private poller: PollLoop;
   private useClaudeCli: boolean;
+  private reposDir?: string;
+  private repositories: Array<{ name: string; path: string; description?: string }>;
 
   /** Pending spawn_agent approvals waiting for user confirmation */
   private pendingApprovals = new Map<string, PendingApproval>();
@@ -132,6 +138,8 @@ export class Manager {
     this.runner = options.runner ?? null;
     this.api = options.api ?? null;
     this.useClaudeCli = !options.llmBaseUrl || !options.llmApiKey;
+    this.reposDir = options.reposDir;
+    this.repositories = options.repositories ?? [];
     this.poller = new PollLoop({
       name: "manager",
       intervalMs: this.pollIntervalMs,
@@ -295,6 +303,9 @@ export class Manager {
         userMessage,
         model: this.model,
         onChunk: this.onStreamChunk,
+        cwd: this.reposDir,
+        enableTools: !!this.reposDir,
+        allowedTools: this.reposDir ? ["Read", "Grep", "Glob", "Bash", "Agent"] : undefined,
       });
     } else {
       llmResponse = await this.callLlmApi(systemPrompt, conversationHistory, userMessage);
@@ -352,12 +363,30 @@ export class Manager {
 
     const phaseInstructions = this.getPhaseInstructions(ctx.sprint?.status ?? "unknown");
 
+    const repoLines = this.repositories.length > 0
+      ? this.repositories.map((r) => {
+          const desc = r.description ? ` — ${r.description}` : "";
+          return `  - ${r.name}: ${r.path}${desc}`;
+        }).join("\n")
+      : "  (no repositories configured)";
+
+    const repoAccessNote = this.reposDir
+      ? `\n## Repository Access
+You have READ-ONLY access to all project repositories via Read, Grep, Glob, and Bash tools.
+**Before creating tasks or proposing plans, read the relevant code** to understand the current implementation.
+Working directory: ${this.reposDir}
+
+### Repositories
+${repoLines}
+`
+      : "";
+
     return `You are the Sprint Manager for project "${ctx.workspace.name}".
 Respond in ${lang}.
 
 ## Current State
 ${sprintInfo}
-
+${repoAccessNote}
 ### Tasks
 ${taskLines}
 
