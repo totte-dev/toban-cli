@@ -25,8 +25,10 @@ export interface ClaudeCliStreamOptions extends ClaudeCliOptions {
   onChunk?: (chunk: string) => void;
   /** Working directory for the Claude CLI process */
   cwd?: string;
-  /** Enable tool access with --dangerously-skip-permissions */
+  /** Enable tool access */
   enableTools?: boolean;
+  /** Permission mode: "plan" (read-only), "dontAsk" (full access), etc. */
+  permissionMode?: "plan" | "acceptEdits" | "dontAsk" | "bypassPermissions" | "auto";
   /** Restrict to specific tools (requires enableTools) */
   allowedTools?: string[];
 }
@@ -36,7 +38,7 @@ export interface ClaudeCliStreamOptions extends ClaudeCliOptions {
  * Returns the full response text on completion.
  */
 export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<string> {
-  const { systemPrompt, history, userMessage, model, timeoutMs = 300_000, onChunk, cwd, enableTools, allowedTools } = opts;
+  const { systemPrompt, history, userMessage, model, timeoutMs = 300_000, onChunk, cwd, enableTools, permissionMode, allowedTools } = opts;
 
   const contextLines = history.slice(-6).map((m) => {
     const label = m.role === "user" ? "User" : "Manager";
@@ -60,7 +62,8 @@ export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<strin
     "--model", model,
   ];
   if (enableTools) {
-    args.push("--dangerously-skip-permissions");
+    const mode = permissionMode ?? "plan";
+    args.push("--permission-mode", mode);
     if (allowedTools?.length) {
       args.push("--allowedTools", allowedTools.join(","));
     }
