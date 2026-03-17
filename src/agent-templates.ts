@@ -78,7 +78,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
-      completion: `Work in this directory. When done, commit your changes with a descriptive message.
+      completion: `Start implementing immediately. Do not spend time exploring the entire codebase — focus only on files relevant to your task. If the task description mentions specific files, start there.
 Do NOT run git push — the CLI will handle pushing after you finish.
 
 When completing a task:
