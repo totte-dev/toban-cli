@@ -25,6 +25,8 @@ export interface LlmCallOptions {
   timeoutMs?: number;
   /** Called with each text chunk for streaming */
   onChunk?: (chunk: string) => void;
+  /** Called when the LLM executes a tool (Read, Grep, etc.) */
+  onToolUse?: (tool: string, summary: string) => void;
   /** Working directory for CLI-based providers */
   cwd?: string;
   /** Enable tool access (provider-specific) */
@@ -48,7 +50,7 @@ export class ClaudeCliProvider implements LlmProvider {
   readonly id = "claude-cli";
 
   async call(opts: LlmCallOptions): Promise<string> {
-    const { systemPrompt, history, userMessage, model, timeoutMs = 300_000, onChunk, cwd, enableTools, allowedTools } = opts;
+    const { systemPrompt, history, userMessage, model, timeoutMs = 300_000, onChunk, onToolUse, cwd, enableTools, allowedTools } = opts;
 
     const contextLines = history.slice(-6).map((m) => {
       const label = m.role === "user" ? "User" : "Manager";
@@ -62,11 +64,18 @@ export class ClaudeCliProvider implements LlmProvider {
     const env = { ...process.env };
     delete env.CLAUDECODE;
 
+    // Use stream-json when tools are enabled (allows parsing tool_use events)
+    const useStreamJson = !!enableTools;
+
     const args = [
       "--print",
       "--system-prompt", systemPrompt,
       "--model", model,
     ];
+
+    if (useStreamJson) {
+      args.push("--verbose", "--output-format", "stream-json");
+    }
 
     if (enableTools) {
       args.push("--permission-mode", "plan");
@@ -98,11 +107,58 @@ export class ClaudeCliProvider implements LlmProvider {
 
       let stdout = "";
       let stderr = "";
+      let resultText = "";
+      let stdoutBuffer = "";
 
       child.stdout?.on("data", (chunk: Buffer) => {
-        const text = chunk.toString();
-        stdout += text;
-        if (onChunk && text) onChunk(text);
+        const raw = chunk.toString();
+        stdout += raw;
+
+        if (useStreamJson) {
+          // Parse stream-json JSONL for tool_use events and text
+          stdoutBuffer += raw;
+          const lines = stdoutBuffer.split("\n");
+          stdoutBuffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const event = JSON.parse(line) as Record<string, unknown>;
+
+              // Extract tool_use events
+              if (event.type === "content_block_start") {
+                const block = event.content_block as Record<string, unknown> | undefined;
+                if (block?.type === "tool_use" && typeof block.name === "string") {
+                  onToolUse?.(block.name, summarizeTool(block.name, block.input as Record<string, unknown>));
+                }
+              }
+              if (event.type === "assistant") {
+                const content = (event.message as Record<string, unknown>)?.content;
+                if (Array.isArray(content)) {
+                  for (const b of content) {
+                    if (b.type === "tool_use" && typeof b.name === "string") {
+                      onToolUse?.(b.name, summarizeTool(b.name, b.input as Record<string, unknown>));
+                    }
+                    if (b.type === "text" && typeof b.text === "string") {
+                      onChunk?.(b.text);
+                    }
+                  }
+                }
+              }
+
+              // Capture final result
+              if (event.type === "result" && typeof event.result === "string") {
+                resultText = event.result;
+                onChunk?.(event.result);
+              }
+            } catch {
+              // Not JSON — treat as raw text
+              onChunk?.(line);
+            }
+          }
+        } else {
+          if (onChunk && raw) onChunk(raw);
+        }
       });
       child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
@@ -126,10 +182,12 @@ export class ClaudeCliProvider implements LlmProvider {
           ui.debug("llm", `Claude CLI stderr: ${stderr.trim().slice(0, 300)}`);
         }
         if (code === 0) {
-          if (!stdout.trim()) {
+          // stream-json: use parsed resultText; plain: use raw stdout
+          const response = useStreamJson ? (resultText || stdout.trim()) : stdout.trim();
+          if (!response) {
             ui.warn(`[llm] Claude CLI returned empty response (stderr: ${stderr.trim().slice(0, 200) || "none"})`);
           }
-          resolve(stdout.trim() || "(no response)");
+          resolve(response || "(no response)");
         } else {
           reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 200)}`));
         }
@@ -191,6 +249,18 @@ export class OpenAiApiProvider implements LlmProvider {
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
+
+/** Brief summary of a tool invocation for UI display */
+function summarizeTool(name: string, input?: Record<string, unknown>): string {
+  if (!input) return name;
+  switch (name) {
+    case "Read": return input.file_path ? `Read ${String(input.file_path).split("/").slice(-2).join("/")}` : "Read";
+    case "Grep": return input.pattern ? `Grep "${input.pattern}"` : "Grep";
+    case "Glob": return input.pattern ? `Glob ${input.pattern}` : "Glob";
+    case "Bash": { const cmd = input.command as string | undefined; return cmd ? `Bash: ${cmd.slice(0, 50)}` : "Bash"; }
+    default: return name;
+  }
+}
 
 /**
  * Create the appropriate LLM provider based on configuration.

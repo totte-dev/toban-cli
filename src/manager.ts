@@ -137,6 +137,8 @@ export class Manager {
   onProposals?: (proposals: Array<Record<string, string>>) => void;
   /** Callback to stream text chunks via WebSocket */
   onStreamChunk?: (chunk: string) => void;
+  /** Callback when Manager executes a tool (Read, Grep, etc.) */
+  onToolUse?: (tool: string, summary: string) => void;
   /** Callback when a spawn_agent needs user approval */
   onApprovalRequest?: (approval: PendingApproval) => void;
   /** Callback when Manager activity changes (for WS broadcast) */
@@ -352,6 +354,7 @@ export class Manager {
       userMessage,
       model: this.model,
       onChunk: this.onStreamChunk,
+      onToolUse: this.onToolUse,
       cwd: this.reposDir,
       enableTools: !!this.reposDir,
       allowedTools: this.reposDir ? ["Read", "Grep", "Glob", "Bash", "Agent"] : undefined,
