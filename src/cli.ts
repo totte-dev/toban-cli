@@ -862,26 +862,23 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         // Stop message poller after agent completes
         messagePoller.stop();
 
-        const status = runner.status();
-        const agentReport = status.find((s) => s.name === agentConfig.name);
+        const exitCode = runningAgent.exitCode;
+        const succeeded = runningAgent.status === "completed";
+        ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed",
+          succeeded ? undefined : `exit code: ${exitCode}`);
 
-        if (!agentReport) {
-          if (runningAgent.status === "completed") {
-            ui.taskResult(task.id, task.title, "completed");
-            await api.updateTask(task.id, { status: "review" });
-          } else if (runningAgent.status === "failed") {
-            ui.taskResult(task.id, task.title, "failed", `exit code: ${runningAgent.exitCode}`);
-            await api.updateTask(task.id, { status: "todo" });
-            const stderrSnippet = runningAgent.stderr.slice(-3).join("\n");
-            await api.sendMessage(
-              "manager",
-              "user",
-              `⚠️ Task "${task.title}" failed (exit code: ${runningAgent.exitCode}).\n\n${stderrSnippet ? `Error: ${stderrSnippet.slice(0, 300)}` : "Check CLI logs for details."}`
-            );
-          } else {
-            ui.taskResult(task.id, task.title, "completed", `status: ${runningAgent.status}`);
-            await api.updateTask(task.id, { status: "review" });
-          }
+        // Execute post-actions from template
+        actionCtx.exitCode = exitCode;
+        await executeActions(agentTemplate.post_actions, actionCtx, "post");
+
+        // Notify user on failure
+        if (!succeeded) {
+          const stderrSnippet = runningAgent.stderr.slice(-3).join("\n");
+          await api.sendMessage(
+            "manager",
+            "user",
+            `⚠️ Task "${task.title}" failed (exit code: ${exitCode}).\n\n${stderrSnippet ? `Error: ${stderrSnippet.slice(0, 300)}` : "Check CLI logs for details."}`
+          );
         }
       } catch (err) {
         ui.error(`Error spawning agent for task ${task.id}: ${err}`);

@@ -69,6 +69,8 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
     post_actions: [
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
+      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
+      { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
       completion: `Work in this directory. When done, commit your changes with a descriptive message.
@@ -77,7 +79,10 @@ When completing a task:
 1. Commit and push: git add -A && git commit -m "<message>" && git push origin HEAD
 2. Collect your commit hashes: COMMITS=$(git log --format="%H" origin/HEAD..HEAD | tr '\\n' ',' | sed 's/,$//')
 3. Move task to review with summary and commit hashes:
-   curl -s -X PATCH {{apiUrl}}/api/v1/tasks/{{taskId}} -H "Content-Type: application/json" -H "Authorization: Bearer {{apiKey}}" -d "{\\\"status\\\":\\\"review\\\",\\\"review_comment\\\":\\\"<summary of changes, key files>\\\",\\\"commits\\\":\\\"$COMMITS\\\"}"`,
+   curl -s -X PATCH {{apiUrl}}/api/v1/tasks/{{taskId}} -H "Content-Type: application/json" -H "Authorization: Bearer {{apiKey}}" -d "{\\\"status\\\":\\\"review\\\",\\\"review_comment\\\":\\\"<summary of changes, key files>\\\",\\\"commits\\\":\\\"$COMMITS\\\"}"
+
+If git push fails (e.g. auth error), still move the task to review with a note:
+   curl -s -X PATCH {{apiUrl}}/api/v1/tasks/{{taskId}} -H "Content-Type: application/json" -H "Authorization: Bearer {{apiKey}}" -d "{\\\"status\\\":\\\"review\\\",\\\"review_comment\\\":\\\"Changes committed locally but push failed. Commits need manual push.\\\"}"`,
     },
   },
   {
@@ -93,6 +98,8 @@ When completing a task:
     ],
     post_actions: [
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
+      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
+      { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
       mode_header: "## READ-ONLY MODE — Do NOT modify any files, create commits, or push code.",
