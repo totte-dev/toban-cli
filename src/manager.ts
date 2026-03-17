@@ -348,16 +348,25 @@ export class Manager {
     const systemPrompt = this.buildSystemPrompt(context);
     const conversationHistory = this.buildManagerConversationHistory(context);
 
+    // Only enable tools when the user asks about code/implementation details.
+    // For sprint management (proposals, status, phase changes), use context data only — much faster.
+    const needsCodeAccess = /code|implement|file|bug|fix|debug|look at|read|check the|investigate|調査|確認|コード|ファイル|実装/i.test(userMessage);
+    const useTools = !!this.reposDir && needsCodeAccess;
+
+    if (useTools) {
+      ui.debug("manager", "Tools enabled (code-related request)");
+    }
+
     const llmResponse = await this.llmProvider.call({
       systemPrompt,
       history: conversationHistory,
       userMessage,
       model: this.model,
       onChunk: this.onStreamChunk,
-      onToolUse: this.onToolUse,
-      cwd: this.reposDir,
-      enableTools: !!this.reposDir,
-      allowedTools: this.reposDir ? ["Read", "Grep", "Glob", "Bash", "Agent"] : undefined,
+      onToolUse: useTools ? this.onToolUse : undefined,
+      cwd: useTools ? this.reposDir : undefined,
+      enableTools: useTools,
+      allowedTools: useTools ? ["Read", "Grep", "Glob", "Bash", "Agent"] : undefined,
     });
 
     const { reply, actions, proposals } = this.parseResponse(llmResponse);
