@@ -88,7 +88,7 @@ export interface ApiClient {
   }): Promise<void>;
   submitRetroComment(sprintNumber: number, data: RetroCommentInput): Promise<void>;
   reportProgress(data: ProgressReport): Promise<void>;
-  fetchPlaybookPrompt(): Promise<string>;
+  fetchPlaybookPrompt(agentName?: string): Promise<string>;
   fetchMessages(channel: string): Promise<Message[]>;
   sendMessage(from: string, to: string, content: string): Promise<void>;
   fetchMySecrets(): Promise<Record<string, string>>;
@@ -254,9 +254,10 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       }
     },
 
-    async fetchPlaybookPrompt(): Promise<string> {
+    async fetchPlaybookPrompt(agentName?: string): Promise<string> {
       try {
-        const res = await fetch(`${apiUrl}/api/v1/playbook/prompt`, { headers });
+        const qs = agentName ? `?agent=${encodeURIComponent(agentName)}` : "";
+        const res = await fetch(`${apiUrl}/api/v1/playbook/prompt${qs}`, { headers });
         if (!res.ok) return "";
         const data = (await res.json()) as { prompt: string };
         return data.prompt ?? "";
