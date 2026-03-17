@@ -494,56 +494,75 @@ export class Manager {
     const replyLines: string[] = [];
     let proposals: Array<Record<string, string>> | undefined;
 
-    // First pass: extract multi-line ACTION blocks (LLM sometimes formats JSON across lines)
-    const actionRegex = /^ACTION:\s*(\w+)\s+([\s\S]*?)(?=\n(?:ACTION:|\S)|$)/gm;
-    const cleaned = response.replace(actionRegex, (match, type: string, jsonPart: string) => {
-      // Try to extract valid JSON from the captured content
-      const jsonStr = jsonPart.trim();
-      // Find the complete JSON (array or object) by bracket matching
-      const startChar = jsonStr[0];
-      if (startChar === "[" || startChar === "{") {
-        const endChar = startChar === "[" ? "]" : "}";
+    // Extract ACTION blocks — handles both single-line and multi-line JSON
+    // Strategy: find "ACTION: type" markers, then bracket-match the JSON that follows
+    let remaining = response;
+    const actionPattern = /ACTION:\s*(\w+)\s*/g;
+    let lastEnd = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = actionPattern.exec(remaining)) !== null) {
+      // Add text before this ACTION to reply
+      const before = remaining.slice(lastEnd, match.index);
+      if (before.trim()) replyLines.push(before.trim());
+
+      const type = match[1] as ManagerAction["type"];
+      const jsonStart = match.index + match[0].length;
+
+      // Find the JSON by bracket matching from jsonStart
+      const rest = remaining.slice(jsonStart);
+      const firstChar = rest.trimStart()[0];
+      const trimOffset = rest.length - rest.trimStart().length;
+
+      if (firstChar === "[" || firstChar === "{") {
+        const endChar = firstChar === "[" ? "]" : "}";
         let depth = 0;
         let end = -1;
-        for (let i = 0; i < jsonStr.length; i++) {
-          if (jsonStr[i] === startChar) depth++;
-          if (jsonStr[i] === endChar) depth--;
+        const searchFrom = jsonStart + trimOffset;
+        for (let i = searchFrom; i < remaining.length; i++) {
+          if (remaining[i] === firstChar) depth++;
+          if (remaining[i] === endChar) depth--;
           if (depth === 0) { end = i + 1; break; }
         }
         if (end > 0) {
+          const jsonStr = remaining.slice(searchFrom, end);
           try {
-            const raw = JSON.parse(jsonStr.slice(0, end));
+            const raw = JSON.parse(jsonStr);
             if (type === "propose_tasks" && Array.isArray(raw)) {
               proposals = raw as Array<Record<string, string>>;
-              actions.push({ type: type as ManagerAction["type"], params: { tasks: raw } });
+              actions.push({ type, params: { tasks: raw } });
             } else {
-              actions.push({ type: type as ManagerAction["type"], params: raw as Record<string, unknown> });
+              actions.push({ type, params: raw as Record<string, unknown> });
             }
-            return ""; // Remove from reply text
-          } catch { /* fall through */ }
+            lastEnd = end;
+            actionPattern.lastIndex = end;
+            continue;
+          } catch { /* fall through to line-based */ }
         }
       }
-      // Single-line fallback
+
+      // Fallback: try single-line JSON on the same line
+      const lineEnd = remaining.indexOf("\n", jsonStart);
+      const lineJson = remaining.slice(jsonStart, lineEnd === -1 ? undefined : lineEnd).trim();
       try {
-        const raw = JSON.parse(jsonStr);
+        const raw = JSON.parse(lineJson);
         if (type === "propose_tasks" && Array.isArray(raw)) {
           proposals = raw as Array<Record<string, string>>;
-          actions.push({ type: type as ManagerAction["type"], params: { tasks: raw } });
+          actions.push({ type, params: { tasks: raw } });
         } else {
-          actions.push({ type: type as ManagerAction["type"], params: raw as Record<string, unknown> });
+          actions.push({ type, params: raw as Record<string, unknown> });
         }
-        return "";
+        lastEnd = lineEnd === -1 ? remaining.length : lineEnd;
+        actionPattern.lastIndex = lastEnd;
       } catch {
-        return match; // Keep as reply text
-      }
-    });
-
-    for (const line of cleaned.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith("ACTION:")) {
-        replyLines.push(line);
+        // Could not parse — keep as reply text
+        lastEnd = match.index + match[0].length;
       }
     }
+
+    // Add any remaining text after the last ACTION
+    const tail = remaining.slice(lastEnd).trim();
+    if (tail) replyLines.push(tail);
 
     let reply = replyLines.join("\n").trim();
     if (!reply && actions.length > 0) {
