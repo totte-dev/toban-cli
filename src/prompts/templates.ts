@@ -31,6 +31,8 @@ Action types:
 - spawn_agent: Start an agent. Params: {"role": "builder", "task_ids": ["id1"]}
 - update_task: Update a task. Params: {"id": "task_id", "status": "in_progress", "owner": "builder"}
 - create_task: Create a task directly. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder"}
+
+Valid owner values: "builder", "cloud-engineer", "strategist", "marketer", "operator", "user" (for human tasks). Do NOT use agent IDs like "builder-abc12345" — always use the base role name.
 - transition_sprint: Change sprint phase. Params: {"status": "review"}
 - send_message: Message an agent. Params: {"to": "builder", "content": "..."}
 
