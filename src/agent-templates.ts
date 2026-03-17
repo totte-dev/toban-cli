@@ -350,21 +350,23 @@ export async function executeActions(
             return ctx.config.workingDir;
           })();
           try {
-            // Get the merge commit (most recent) and its diff
+            // Get the merge commit and its details
             const lastCommit = revExec("git log --oneline -1", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
+            const commitBody = revExec("git log -1 --format=%b", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
             const diffStat = revExec("git diff HEAD~1 --stat", { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
             const diffContent = revExec("git diff HEAD~1 --no-color", { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
 
-            // Build review summary (keep it compact for API)
+            // Build review summary with commit description + file stats
             const lines = diffContent.split("\n").length;
             const filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
             const review = [
               `Agent: ${ctx.agentName}`,
               `Commit: ${lastCommit}`,
-              `Files changed: ${filesChanged.length}`,
+              commitBody ? `\n${commitBody}` : "",
+              `\nFiles changed: ${filesChanged.length}`,
               diffStat,
               lines > 200 ? `(${lines} lines of diff)` : "",
-            ].filter(Boolean).join("\n").slice(0, 4000); // Limit size
+            ].filter(Boolean).join("\n").slice(0, 4000);
 
             await ctx.api.updateTask(ctx.task.id, { review_comment: review } as Partial<Task>);
             ui.info( `[${phase}] ${label}: ${filesChanged.length} files`);
