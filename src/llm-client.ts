@@ -50,6 +50,10 @@ export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<strin
   const env = { ...process.env };
   delete env.CLAUDECODE;
 
+  // When using --allowedTools (variadic flag), the prompt positional arg
+  // gets consumed as part of the tools list. Use stdin (-p -) to avoid this.
+  const useStdin = enableTools && allowedTools?.length;
+
   const args = [
     "--print",
     "--system-prompt", systemPrompt,
@@ -61,25 +65,35 @@ export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<strin
       args.push("--allowedTools", allowedTools.join(","));
     }
   }
-  args.push(fullPrompt);
+  if (useStdin) {
+    args.push("-p", "-"); // read prompt from stdin
+  } else {
+    args.push(fullPrompt);
+  }
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn("claude", args, {
       env,
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [useStdin ? "pipe" : "ignore", "pipe", "pipe"],
       ...(cwd ? { cwd } : {}),
     });
+
+    // Write prompt to stdin when using -p -
+    if (useStdin && child.stdin) {
+      child.stdin.write(fullPrompt);
+      child.stdin.end();
+    }
 
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
       stdout += text;
       if (onChunk && text) onChunk(text);
     });
-    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
