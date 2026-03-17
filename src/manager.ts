@@ -377,7 +377,7 @@ export class Manager {
       ui.debug("manager", `Failed to fetch context: ${err}`);
       // Return minimal context
       return {
-        workspace: { name: "Unknown", language: "ja", description: null, spec: null },
+        workspace: { name: "Unknown", language: "en", description: null, spec: null },
         sprint: null,
         tasks: [],
         agents: [],
