@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { AgentConfig, AgentType } from "./types.js";
-import type { AgentActivity } from "./runner.js";
+import type { AgentActivity } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Types
