@@ -315,9 +315,16 @@ export async function executeActions(
               stdio: "pipe",
             });
             ui.info( `[${phase}] ${label}: pushed ${ctx.config.baseBranch}`);
-          } catch (pushErr) {
-            const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
-            ui.warn(`[template] git_push failed: ${msg}`);
+          } catch {
+            // Push rejected (remote ahead) — pull rebase and retry
+            try {
+              pushExec(`git pull --rebase origin ${ctx.config.baseBranch}`, { cwd: pushRepoDir, stdio: "pipe" });
+              pushExec(`git push origin ${ctx.config.baseBranch}`, { cwd: pushRepoDir, stdio: "pipe" });
+              ui.info( `[${phase}] ${label}: pushed ${ctx.config.baseBranch} (after rebase)`);
+            } catch (retryErr) {
+              const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+              ui.warn(`[template] git_push failed after rebase: ${msg}`);
+            }
           }
           break;
         }
