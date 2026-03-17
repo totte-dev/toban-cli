@@ -1,60 +1,29 @@
 #!/usr/bin/env node
 
 /**
- * Toban Agent Runner CLI
- *
- * Fetches tasks from the Toban API, spawns Claude Code agents in git worktrees,
- * and reports status back.
+ * Toban Agent Runner CLI — entrypoint.
  *
  * Usage:
- *   toban start --api-url <url> --api-key <key>
- *
- * Environment variables:
- *   TOBAN_API_URL  - Base URL of the Toban API
- *   TOBAN_API_KEY  - API key for authentication
+ *   toban start [options]
+ *   toban sprint complete [--push]
  */
 
-import { AgentRunner, type AgentRunnerOptions } from "./runner.js";
+import { AgentRunner } from "./runner.js";
 import type { AgentType } from "./types.js";
-import {
-  createApiClient,
-  type Task,
-  type SprintStartResult,
-  type WorkspaceRepository,
-} from "./api-client.js";
-import { buildAgentPrompt, type RepoInfo } from "./prompt.js";
+import { createApiClient, type Task } from "./api-client.js";
+import { buildAgentPrompt } from "./prompt.js";
 import { matchTemplate, executeActions, type ActionContext } from "./agent-templates.js";
 import { ChatPoller } from "./chat-poller.js";
-import { Manager } from "./manager.js";
 import { MessagePoller } from "./message-poller.js";
-import { WsChatServer } from "./ws-server.js";
 import { WS_MSG } from "./ws-types.js";
+import { resolveTaskWorkingDir } from "./git-ops.js";
+import { setup, type CliArgs, type SetupResult } from "./setup.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // Arg parsing
 // ---------------------------------------------------------------------------
-
-interface CliArgs {
-  command: string;
-  apiUrl: string;
-  apiKey: string;
-  workingDir: string;
-  explicitWorkingDir: boolean;
-  agentName: string;
-  baseBranch: string;
-  model: string;
-  llmBaseUrl?: string;
-  llmApiKey?: string;
-  noDocker: boolean;
-  wsPort: number;
-  debug: boolean;
-  engine: AgentType;
-}
 
 function printUsage(): void {
   console.log(`
@@ -77,18 +46,12 @@ Options:
   --model <model>       AI model for manager chat (default: claude-sonnet-4-20250514)
   --llm-base-url <url>  OpenAI-compatible API base URL (or LLM_BASE_URL env)
   --llm-api-key <key>   LLM provider API key (or LLM_API_KEY env)
-  --engine <type>       Agent engine: claude, codex, gemini, mock, custom (default: claude)
+  --engine <type>       Agent engine: claude (default: claude)
   --docker              Enable Docker isolation for agents (default: off)
   --ws-port <port>      WebSocket server port for direct chat (default: 4000, 0=auto)
   --push                Push the sprint tag to origin (sprint complete only)
   --debug               Enable verbose debug output (or DEBUG=1 env)
   --help                Show this help
-
-LLM Provider Examples:
-  Anthropic: --llm-base-url https://api.anthropic.com/v1 --model claude-sonnet-4-20250514
-  OpenAI:    --llm-base-url https://api.openai.com/v1 --model gpt-4o
-  Gemini:    --llm-base-url https://generativelanguage.googleapis.com/v1beta/openai --model gemini-2.0-flash
-  Local:     --llm-base-url http://localhost:11434/v1 --model llama3
 
 If --llm-base-url is not set, uses Claude Code CLI (no API key needed).
 `);
@@ -112,29 +75,14 @@ function parseArgs(argv: string[]): CliArgs {
   const apiUrl = getFlag("--api-url") ?? process.env.TOBAN_API_URL;
   const apiKey = getFlag("--api-key") ?? process.env.TOBAN_API_KEY;
 
-  if (!apiUrl) {
-    ui.error("--api-url or TOBAN_API_URL is required");
-    process.exit(1);
-  }
-  if (!apiKey) {
-    ui.error("--api-key or TOBAN_API_KEY is required");
-    process.exit(1);
-  }
+  if (!apiUrl) { ui.error("--api-url or TOBAN_API_URL is required"); process.exit(1); }
+  if (!apiKey) { ui.error("--api-key or TOBAN_API_KEY is required"); process.exit(1); }
 
-  const hostname = (() => {
-    try {
-      return execSync("hostname", { encoding: "utf-8" }).trim();
-    } catch {
-      return "agent";
-    }
-  })();
-
+  const hostname = (() => { try { return execSync("hostname", { encoding: "utf-8" }).trim(); } catch { return "agent"; } })();
   const explicitWorkingDir = getFlag("--working-dir");
 
   return {
-    command,
-    apiUrl,
-    apiKey,
+    command, apiUrl, apiKey,
     workingDir: explicitWorkingDir ?? process.cwd(),
     explicitWorkingDir: !!explicitWorkingDir,
     agentName: getFlag("--agent-name") ?? "manager",
@@ -150,582 +98,29 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 // ---------------------------------------------------------------------------
-// Git revert execution
-// ---------------------------------------------------------------------------
-
-/**
- * Execute git revert for given commits in the appropriate repo directory.
- * Reverts are done on the main branch (trunk-based).
- */
-async function executeRevert(
-  repoName: string,
-  commits: string[],
-  repos: WorkspaceRepository[]
-): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const repo = repos.find((r) => r.repo_name === repoName);
-    const repoPath = repo?.repo_path;
-    if (!repoPath || !existsSync(repoPath)) {
-      return { ok: false, error: `Repository path not found for "${repoName}"` };
-    }
-
-    // Revert commits in reverse order (newest first)
-    const reversed = [...commits].reverse();
-    for (const hash of reversed) {
-      ui.info(`[revert] Reverting ${hash.slice(0, 7)} in ${repoName}`);
-      execSync(`git revert --no-edit ${hash}`, { cwd: repoPath, stdio: "pipe" });
-    }
-
-    // Push the reverts
-    ui.info(`[revert] Pushing reverts for ${repoName}`);
-    execSync("git push origin HEAD", { cwd: repoPath, stdio: "pipe" });
-
-    ui.step(`[revert] Successfully reverted ${commits.length} commit(s) in ${repoName}`);
-    return { ok: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    ui.warn(`[revert] Failed: ${msg}`);
-    return { ok: false, error: msg };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Workspace repo management
-// ---------------------------------------------------------------------------
-
-/**
- * Ensure a repository is cloned/updated for the given agent.
- * Returns the path to the repo working directory.
- *
- * Structure: .toban/<agent-name>/<repo-name>/
- */
-/**
- * Create a git credential helper script that fetches fresh tokens from the Toban API.
- * GitHub App installation tokens expire after 1 hour, so we need to refresh on each git operation.
- */
-function setupGitCredentialHelper(tobanHome: string, apiUrl: string, apiKey: string): string {
-  const helperPath = join(tobanHome, "git-credential-helper.sh");
-  const script = `#!/bin/sh
-# Toban git credential helper — fetches fresh GitHub App token on demand
-if [ "$1" = "get" ]; then
-  TOKEN=$(curl -sf -H "Authorization: Bearer ${apiKey}" "${apiUrl}/api/v1/workspace/git-token" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
-  if [ -n "$TOKEN" ]; then
-    echo "protocol=https"
-    echo "host=github.com"
-    echo "username=x-access-token"
-    echo "password=$TOKEN"
-  fi
-fi
-`;
-  writeFileSync(helperPath, script, { mode: 0o700 });
-  return helperPath;
-}
-
-function ensureAgentRepo(
-  tobanHome: string,
-  agentName: string,
-  repo: WorkspaceRepository,
-  gitToken?: string,
-  gitUser?: { name: string; email: string },
-  credentialHelperPath?: string
-): string {
-  const agentDir = join(tobanHome, agentName);
-  const repoDir = join(agentDir, repo.repo_name);
-
-  mkdirSync(agentDir, { recursive: true });
-
-  if (existsSync(join(repoDir, ".git"))) {
-    // Existing repo: clean auth + fetch + reset to remote main
-    ui.info(`Updating ${repo.repo_name} for ${agentName}`);
-
-    // Clean up stale token-embedded URLs
-    try {
-      const remoteUrl = execSync("git remote get-url origin", { cwd: repoDir, stdio: "pipe" }).toString().trim();
-      if (remoteUrl.includes("x-access-token")) {
-        const cleanPath = remoteUrl.replace(/https:\/\/x-access-token:[^@]+@github\.com\//, "").replace(/\.git$/, "");
-        execSync(`git remote set-url origin "https://github.com/${cleanPath}.git"`, { cwd: repoDir, stdio: "pipe" });
-      }
-    } catch { /* non-fatal */ }
-
-    // Reset credential helper
-    if (credentialHelperPath) {
-      try {
-        execSync("git config --unset-all credential.helper", { cwd: repoDir, stdio: "pipe" });
-      } catch { /* may not exist */ }
-      try {
-        execSync(`git config --add credential.helper ""`, { cwd: repoDir, stdio: "pipe" });
-        execSync(`git config --add credential.helper "${credentialHelperPath}"`, { cwd: repoDir, stdio: "pipe" });
-      } catch { /* non-fatal */ }
-    }
-
-    // Fetch and reset to remote (handles diverged local branches from agent merges)
-    try {
-      execSync("git fetch origin", { cwd: repoDir, stdio: "pipe" });
-      execSync("git checkout main 2>/dev/null || git checkout master", {
-        cwd: repoDir,
-        stdio: "pipe",
-        shell: "/bin/sh",
-      });
-      try {
-        execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
-      } catch {
-        // ff-only failed (diverged) — hard reset to remote
-        execSync("git reset --hard origin/main 2>/dev/null || git reset --hard origin/master", {
-          cwd: repoDir,
-          stdio: "pipe",
-          shell: "/bin/sh",
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ui.warn(`git update failed for ${repo.repo_name}: ${msg}`);
-    }
-  } else {
-    // Clone the repo — use token for initial clone only
-    let cloneUrl = repo.repo_url || repo.repo_path;
-    if (gitToken && cloneUrl.includes("github.com")) {
-      const repoPath = cloneUrl
-        .replace(/^https?:\/\/github\.com\//, "")
-        .replace(/\.git$/, "");
-      cloneUrl = `https://x-access-token:${gitToken}@github.com/${repoPath}.git`;
-      ui.info(`Cloning ${repo.repo_name} (authenticated)`);
-    } else if (!cloneUrl.startsWith("http") && !cloneUrl.startsWith("git@")) {
-      if (gitToken) {
-        cloneUrl = `https://x-access-token:${gitToken}@github.com/${cloneUrl}.git`;
-      } else {
-        cloneUrl = `https://github.com/${cloneUrl}.git`;
-      }
-      ui.info(`Cloning ${repo.repo_name}`);
-    } else {
-      ui.info(`Cloning ${repo.repo_name}`);
-    }
-
-    execSync(`git clone "${cloneUrl}" "${repoDir}"`, { stdio: "pipe" });
-
-    // After clone, replace token-embedded URL with clean URL so credential helper is used
-    try {
-      const cleanUrl = (repo.repo_url || repo.repo_path)
-        .replace(/^https?:\/\/github\.com\//, "")
-        .replace(/\.git$/, "");
-      execSync(`git remote set-url origin "https://github.com/${cleanUrl}.git"`, { cwd: repoDir, stdio: "pipe" });
-    } catch {
-      // Non-fatal — keep the original URL
-    }
-  }
-
-  // Configure credential helper for fresh token on every git auth
-  // Use empty string first to reset any global credential helpers (e.g. osxkeychain)
-  if (credentialHelperPath) {
-    try {
-      execSync("git config --unset-all credential.helper", { cwd: repoDir, stdio: "pipe" }).toString();
-    } catch { /* may not exist */ }
-    try {
-      execSync(`git config --add credential.helper ""`, { cwd: repoDir, stdio: "pipe" });
-      execSync(`git config --add credential.helper "${credentialHelperPath}"`, { cwd: repoDir, stdio: "pipe" });
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  // Set git user from GitHub App login (overrides global config)
-  if (gitUser) {
-    try {
-      execSync(`git config user.name "${gitUser.name}"`, { cwd: repoDir, stdio: "pipe" });
-      execSync(`git config user.email "${gitUser.email}"`, { cwd: repoDir, stdio: "pipe" });
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  return repoDir;
-}
-
-/**
- * Resolve the working directory for a task.
- * If the task has a target_repo, ensure that repo is cloned for the agent.
- * Otherwise, use the default working directory.
- */
-function resolveTaskWorkingDir(
-  task: Task,
-  repos: WorkspaceRepository[],
-  tobanHome: string,
-  agentName: string,
-  defaultWorkingDir: string,
-  gitToken?: string,
-  gitUser?: { name: string; email: string },
-  credHelper?: string
-): string {
-  if (!task.target_repo) return defaultWorkingDir;
-
-  const repo = repos.find(
-    (r) => r.repo_name === task.target_repo || r.id === task.target_repo
-  );
-  if (!repo) {
-    ui.warn(`target_repo "${task.target_repo}" not found in workspace repositories, using default`);
-    return defaultWorkingDir;
-  }
-
-  try {
-    return ensureAgentRepo(tobanHome, agentName, repo, gitToken, gitUser, credHelper);
-  } catch (err) {
-    ui.error(`Failed to setup repo ${repo.repo_name}: ${err}`);
-    return defaultWorkingDir;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Run loop
+// Main task execution loop
 // ---------------------------------------------------------------------------
 
 async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
-  const api = createApiClient(cliArgs.apiUrl, cliArgs.apiKey);
+  const ctx = await setup(cliArgs, runner);
+  activeManager = ctx.mgr;
+  activeWsServer = ctx.wsServer;
 
-  ui.setDebug(cliArgs.debug);
-  ui.intro();
+  const { api, wsServer, tobanHome, repos, gitToken, gitUserInfo, credentialHelperPath } = ctx;
+  let { sprintData } = ctx;
 
-  const s = ui.createSpinner();
+  const POLL_INTERVAL_MS = 30_000;
 
-  s.start("Authenticating...");
-  await api.updateAgent({
-    name: cliArgs.agentName,
-    status: "online",
-    activity: "Starting up",
-  });
-  s.stop("Authenticated");
-
-  let workingDir = cliArgs.workingDir;
-  let workspaceSpec: string | undefined;
-  let workspaceName: string | undefined;
-  let playbookRules: string | undefined;
-  let mainGithubRepo: string | undefined;
-  let gitUserInfo: { name: string; email: string } | undefined;
-
-  s.start("Fetching workspace...");
-  try {
-    const ws = await api.fetchWorkspace();
-    workspaceSpec = (ws as unknown as Record<string, unknown>).spec as string | undefined || undefined;
-    workspaceName = ws.name || undefined;
-    mainGithubRepo = ws.github_repo || undefined;
-    if (ws.github_login) {
-      gitUserInfo = { name: ws.github_login, email: `${ws.github_login}@users.noreply.github.com` };
-    }
-    s.stop(workspaceName ? `Workspace: ${workspaceName}` : "Workspace loaded");
-
-    // Fetch playbook rules (includes git strategy rules + security rules)
-    try {
-      playbookRules = await api.fetchPlaybookPrompt() || undefined;
-    } catch (pbErr) {
-      ui.warn(`Could not fetch playbook rules: ${pbErr}`);
-    }
-
-    if (!cliArgs.explicitWorkingDir) {
-      if (ws.github_repo) {
-        const tobanHome = join(homedir(), ".toban");
-        const repoDir = join(tobanHome, ws.id);
-
-        // Get GitHub token from API for authenticated git operations
-        const gitCreds = await api.fetchGitToken();
-
-        if (existsSync(join(repoDir, ".git"))) {
-          s.start(`Pulling latest for ${ws.github_repo}...`);
-          try {
-            execSync("git fetch origin", { cwd: repoDir, stdio: "pipe" });
-            try {
-              execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
-            } catch {
-              // ff-only failed (diverged from agent merges) — reset to remote
-              execSync("git reset --hard origin/main 2>/dev/null || git reset --hard origin/master", {
-                cwd: repoDir, stdio: "pipe", shell: "/bin/sh",
-              });
-            }
-            s.stop(`Repo updated: ${ws.github_repo}`);
-          } catch (pullErr) {
-            const pullMsg = pullErr instanceof Error ? pullErr.message : String(pullErr);
-            s.stop(`Repo: ${ws.github_repo} (pull failed, using existing)`);
-            ui.warn(`git pull failed: ${pullMsg}`);
-          }
-        } else {
-          s.start(`Cloning ${ws.github_repo}...`);
-          mkdirSync(tobanHome, { recursive: true });
-
-          // Build clone URL with token authentication
-          let cloneUrl: string;
-          if (gitCreds?.token) {
-            const repoPath = ws.github_repo.replace(/^https?:\/\/github\.com\//, "");
-            cloneUrl = `https://x-access-token:${gitCreds.token}@github.com/${repoPath}.git`;
-          } else {
-            const repoUrl = ws.github_repo.startsWith("https://")
-              ? ws.github_repo
-              : `https://github.com/${ws.github_repo}`;
-            cloneUrl = `${repoUrl}.git`;
-          }
-
-          execSync(
-            `git clone ${cloneUrl} "${repoDir}"`,
-            { stdio: "pipe" }
-          );
-          s.stop(`Repo cloned: ${ws.github_repo}`);
-        }
-
-        workingDir = repoDir;
-        ui.workspaceInfo(undefined, workingDir, true);
-      } else {
-        ui.workspaceInfo(undefined, workingDir);
-      }
-    } else {
-      ui.workspaceInfo(undefined, workingDir);
-    }
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    s.stop("Workspace fetch failed");
-    ui.warn(`Using working dir: ${workingDir}`);
-
-    // Notify user via chat if any git operation failed (clone, pull, auth)
-    const isGitError =
-      errMsg.includes("clone") ||
-      errMsg.includes("pull") ||
-      errMsg.includes("Repository not found") ||
-      errMsg.includes("not found") ||
-      errMsg.includes("authentication") ||
-      errMsg.includes("fatal:") ||
-      errMsg.includes("Could not resolve host");
-    if (isGitError) {
-      await api.sendMessage(
-        "manager",
-        "user",
-        `Failed to set up repository. Please check access permissions and network.\n\nError: ${errMsg.slice(0, 200)}`
-      );
-    }
-  }
-
-  let sprintData: SprintStartResult;
-  try {
-    sprintData = await api.startSprint();
-    ui.sprintInfo(sprintData.sprint.number, sprintData.agents.length, sprintData.tasks.length);
-  } catch (err) {
-    ui.error(`Failed to start sprint: ${err}`);
-    await api.updateAgent({
-      name: cliArgs.agentName,
-      status: "error",
-      activity: `No active sprint: ${err}`,
-    });
-    process.exit(1);
-  }
-
-  // Fetch workspace repositories early (needed for Manager repo access + per-task resolution)
-  let repos: WorkspaceRepository[] = [];
-  try {
-    repos = await api.fetchRepositories();
-    if (repos.length > 0) {
-      ui.info(`${repos.length} workspace repositor${repos.length === 1 ? "y" : "ies"} found`);
-    }
-  } catch (err) {
-    ui.warn(`Could not fetch repositories: ${err}`);
-  }
-
-  // Get git token for repo cloning
-  let gitToken: string | undefined;
-  try {
-    const creds = await api.fetchGitToken();
-    if (creds?.token) gitToken = creds.token;
-  } catch {
-    // Non-fatal
-  }
-
-  const tobanHome = join(homedir(), ".toban");
-  mkdirSync(tobanHome, { recursive: true });
-
-  // Set up credential helper for fresh token on every git auth (tokens expire after 1 hour)
-  let credentialHelperPath: string | undefined;
-  if (gitToken) {
-    credentialHelperPath = setupGitCredentialHelper(tobanHome, cliArgs.apiUrl, cliArgs.apiKey);
-    ui.debug("git", `Credential helper: ${credentialHelperPath}`);
-
-    // Also configure the main workspace repo (cloned at startup)
-    if (existsSync(join(workingDir, ".git"))) {
-      try {
-        try { execSync("git config --unset-all credential.helper", { cwd: workingDir, stdio: "pipe" }); } catch { /* may not exist */ }
-        execSync(`git config --add credential.helper ""`, { cwd: workingDir, stdio: "pipe" });
-        execSync(`git config --add credential.helper "${credentialHelperPath}"`, { cwd: workingDir, stdio: "pipe" });
-        // Replace token-embedded URL with clean URL
-        const remoteUrl = execSync("git remote get-url origin", { cwd: workingDir, stdio: "pipe" }).toString().trim();
-        if (remoteUrl.includes("x-access-token")) {
-          const cleanPath = remoteUrl.replace(/https:\/\/x-access-token:[^@]+@github\.com\//, "").replace(/\.git$/, "");
-          execSync(`git remote set-url origin "https://github.com/${cleanPath}.git"`, { cwd: workingDir, stdio: "pipe" });
-        }
-      } catch {
-        // Non-fatal
-      }
-    }
-  }
-
-  // Clone all repos for Manager read-only access (main repo + sub repos)
-  let managerReposDir: string | undefined;
-  const managerRepoInfos: Array<{ name: string; path: string; description?: string }> = [];
-  {
-    // Build a combined list: main repo + workspace_repositories (deduplicated)
-    const allRepos: WorkspaceRepository[] = [...repos];
-    if (mainGithubRepo) {
-      const mainRepoName = mainGithubRepo.replace(/^https?:\/\/github\.com\//, "");
-      const alreadyIncluded = allRepos.some(
-        (r) => r.repo_name === mainRepoName || r.repo_path.includes(mainRepoName)
-      );
-      if (!alreadyIncluded) {
-        allRepos.unshift({
-          id: "main",
-          repo_name: mainRepoName,
-          repo_path: mainGithubRepo.startsWith("http") ? mainGithubRepo : `https://github.com/${mainGithubRepo}`,
-          repo_url: "",
-          description: "Main repository",
-          access_agents: [],
-        });
-      }
-    }
-
-    if (allRepos.length > 0) {
-      const reposParent = join(tobanHome, "manager-repos");
-      mkdirSync(reposParent, { recursive: true });
-      for (const repo of allRepos) {
-        try {
-          const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken, gitUserInfo, credentialHelperPath);
-          managerRepoInfos.push({
-            name: repo.repo_name,
-            path: repoPath,
-            description: repo.description || undefined,
-          });
-        } catch (err) {
-          ui.warn(`Could not clone ${repo.repo_name} for Manager: ${err}`);
-        }
-      }
-      if (managerRepoInfos.length > 0) {
-        managerReposDir = join(reposParent, "shared");
-        ui.step(`Manager has read access to ${managerRepoInfos.length} repo(s)`);
-      }
-    }
-  }
-
-  // Start the Manager (replaces ChatPoller with action-capable LLM manager)
-  const mgr = new Manager({
-    apiUrl: cliArgs.apiUrl,
-    apiKey: cliArgs.apiKey,
-    llmBaseUrl: cliArgs.llmBaseUrl,
-    llmApiKey: cliArgs.llmApiKey,
-    model: cliArgs.model,
-    runner,
-    api,
-    reposDir: managerReposDir,
-    repositories: managerRepoInfos,
-  });
-  activeManager = mgr;
-
-  // Keep ChatPoller as fallback (for backward compat, will be removed)
-  activeChatPoller = null;
-
-  // Start WebSocket server for direct chat
-  let wsServer: WsChatServer | null = null;
-  let actualWsPort: number | undefined;
-  try {
-    wsServer = new WsChatServer({
-      port: cliArgs.wsPort,
-      apiKey: cliArgs.apiKey,
-      apiUrl: cliArgs.apiUrl,
-      onMessage: async (content) => mgr.handleWsMessage(content),
-      onClientConnected: () => mgr.pausePolling(),
-      onAllClientsDisconnected: () => mgr.resumePolling(),
-      onRevert: async (taskId, repoName, commits) => {
-        return executeRevert(repoName, commits, repos);
-      },
-      onApprovalResponse: (approvalId, approved) => {
-        mgr.resolveApproval(approvalId, approved);
-      },
-      getPendingApprovals: () => mgr.getPendingApprovals(),
-    });
-    actualWsPort = await wsServer.start();
-    await wsServer.registerPort();
-    activeWsServer = wsServer;
-
-    // Wire Manager poll-path replies to WS broadcast
-    mgr.onReply = (reply) => {
-      wsServer?.broadcast({
-        type: WS_MSG.CHAT,
-        from: "manager",
-        to: "user",
-        content: reply,
-        timestamp: new Date().toISOString(),
-      });
-    };
-    mgr.onProposals = (proposals) => {
-      wsServer?.broadcast({
-        type: WS_MSG.PROPOSALS,
-        tasks: proposals,
-        timestamp: new Date().toISOString(),
-      });
-    };
-    mgr.onStreamChunk = (chunk) => {
-      wsServer?.broadcast({
-        type: WS_MSG.CHAT_STREAM,
-        from: "manager",
-        content: chunk,
-        timestamp: new Date().toISOString(),
-      });
-    };
-    mgr.onApprovalRequest = (approval) => {
-      wsServer?.broadcast({
-        type: WS_MSG.APPROVAL_REQUEST,
-        approval_id: approval.id,
-        role: approval.role,
-        task_ids: approval.taskIds,
-        timestamp: new Date().toISOString(),
-      });
-    };
-  } catch (err) {
-    ui.warn(`WebSocket server failed to start: ${err}`);
-  }
-
-  // Wire Manager's spawn_agent action to move tasks to in_progress
-  // (the main loop picks up in_progress tasks and runs them)
-  mgr.onSpawnAgent = async (_role: string, taskIds: string[]) => {
-    for (const taskId of taskIds) {
-      try {
-        await api.updateTask(taskId, { status: "in_progress" });
-        ui.info(`[manager] Queued task ${taskId.slice(0, 8)} for agent execution`);
-      } catch (err) {
-        ui.warn(`[manager] Failed to queue task ${taskId.slice(0, 8)}: ${err}`);
-      }
-    }
-  };
-
-  mgr.start();
-
-  // Show connection info
-  ui.connectionInfo({
-    apiUrl: cliArgs.apiUrl,
-    agent: cliArgs.agentName,
-    branch: cliArgs.baseBranch,
-    docker: !cliArgs.noDocker,
-    wsPort: actualWsPort,
-    llmProvider: cliArgs.llmBaseUrl || "Claude Code CLI",
-  });
-
-  const POLL_INTERVAL_MS = 30_000; // 30 seconds
-
-  // ---------------------------------------------------------------------------
-  // Main polling loop — stays resident, re-checks for new tasks periodically
-  // ---------------------------------------------------------------------------
   while (!shuttingDown) {
-    // Re-fetch sprint data to pick up newly added tasks (GET, no side effects)
     try {
       sprintData = await api.fetchSprintData();
     } catch (err) {
       ui.warn(`Failed to refresh sprint: ${err}`);
-      ui.info(`Waiting ${POLL_INTERVAL_MS / 1000}s before retry...`);
       await sleep(POLL_INTERVAL_MS);
       continue;
     }
 
-    const tasks: Task[] = sprintData.tasks;
-
-    const todoTasks = tasks
+    const todoTasks = (sprintData.tasks as Task[])
       .filter((t) => t.status === "in_progress" && t.owner !== "user")
       .sort((a, b) => {
         const pa = typeof a.priority === "string" ? parseInt(a.priority.replace("p", ""), 10) : (a.priority ?? 99);
@@ -736,13 +131,11 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     if (todoTasks.length === 0) {
       const phase = sprintData.sprint?.status ?? "unknown";
       const isIdle = phase === "review" || phase === "retrospective" || phase === "completed";
-      const waitMs = isIdle ? POLL_INTERVAL_MS * 4 : POLL_INTERVAL_MS; // 2min in review, 30s in active
+      const waitMs = isIdle ? POLL_INTERVAL_MS * 4 : POLL_INTERVAL_MS;
       await api.updateAgent({
-        name: cliArgs.agentName,
-        status: "idle",
+        name: cliArgs.agentName, status: "idle",
         activity: isIdle ? `Sprint ${phase}, waiting` : "Waiting for tasks",
       });
-      // Only log "No tasks" when no WS clients are connected (avoid noise)
       if (!isIdle && !wsServer?.hasClients) ui.info(`No tasks — polling again in ${waitMs / 1000}s`);
       await sleep(waitMs);
       continue;
@@ -751,188 +144,105 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     ui.tasksSummary(todoTasks.length);
 
     for (const task of todoTasks) {
-      if (shuttingDown) {
-        ui.warn("Shutting down, skipping remaining tasks");
-        break;
-      }
+      if (shuttingDown) { ui.warn("Shutting down, skipping remaining tasks"); break; }
 
       ui.step(`Starting task: ${task.title}`);
 
-      // Resolve the working directory for this task
       const taskWorkingDir = resolveTaskWorkingDir(
-        task,
-        repos,
-        tobanHome,
-        cliArgs.agentName,
-        workingDir,
-        gitToken,
-        gitUserInfo,
-        credentialHelperPath
+        task, repos, tobanHome, cliArgs.agentName,
+        ctx.workingDir, gitToken, gitUserInfo, credentialHelperPath
       );
-
-      // Note: Worker agents operate in a worktree (single repo) so we don't
-      // inject "Available Repositories" into their prompt. They should only
-      // work within their assigned worktree directory.
 
       const agentName = task.owner ?? "builder";
       const apiDocs = await api.fetchApiDocs(agentName);
-
       const taskType = (task as Record<string, unknown>).type as string | undefined;
       const agentTemplate = matchTemplate(taskType, agentName);
       const isReadOnly = agentTemplate.tools !== "all";
       ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
 
-      // Execute pre-actions from template
       const actionCtx: ActionContext = {
-        api,
-        task,
-        agentName: cliArgs.agentName,
-        config: {
-          apiUrl: cliArgs.apiUrl,
-          apiKey: cliArgs.apiKey,
-          workingDir: taskWorkingDir,
-          baseBranch: cliArgs.baseBranch,
-          sprintNumber: sprintData.sprint.number,
-        },
+        api, task, agentName: cliArgs.agentName,
+        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number },
       };
-      try {
-        await executeActions(agentTemplate.pre_actions, actionCtx, "pre");
-      } catch (err) {
-        ui.error(`[task] Pre-actions failed: ${err}`);
-        continue;
-      }
+
+      try { await executeActions(agentTemplate.pre_actions, actionCtx, "pre"); }
+      catch (err) { ui.error(`[task] Pre-actions failed: ${err}`); continue; }
 
       const prompt = buildAgentPrompt({
-        role: agentName,
-        projectName: workspaceName,
-        projectSpec: workspaceSpec,
-        taskId: task.id,
-        taskTitle: task.title,
+        role: agentName, projectName: ctx.workspaceName, projectSpec: ctx.workspaceSpec,
+        taskId: task.id, taskTitle: task.title,
         taskDescription: task.description || undefined,
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
-        taskType,
-        apiUrl: cliArgs.apiUrl,
-        apiKey: cliArgs.apiKey,
-        playbookRules,
-        targetRepo: task.target_repo ?? undefined,
+        taskType, apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey,
+        playbookRules: ctx.playbookRules, targetRepo: task.target_repo ?? undefined,
         apiDocs: apiDocs || undefined,
       });
 
       try {
-        // Fetch project secrets for the agent
         let secrets: Record<string, string> = {};
         try {
           secrets = await api.fetchMySecrets();
-          if (Object.keys(secrets).length > 0) {
-            const secretNames = Object.keys(secrets).join(", ");
-            ui.info(`Injected ${Object.keys(secrets).length} secrets: ${secretNames}`);
-          }
-        } catch (err) {
-          ui.warn(`Could not fetch secrets: ${err}`);
-        }
+          if (Object.keys(secrets).length > 0) ui.info(`Injected ${Object.keys(secrets).length} secrets`);
+        } catch (err) { ui.warn(`Could not fetch secrets: ${err}`); }
 
         const agentConfig = {
           name: `${agentName}-${task.id.slice(0, 8)}`,
-          type: cliArgs.engine,
-          taskId: task.id,
-          workingDir: taskWorkingDir,
-          branch: cliArgs.baseBranch,
-          apiKey: cliArgs.apiKey,
-          apiUrl: cliArgs.apiUrl,
-          prompt,
-          parentAgent: cliArgs.agentName,
-          sprintNumber: sprintData.sprint.number,
+          type: cliArgs.engine, taskId: task.id, workingDir: taskWorkingDir,
+          branch: cliArgs.baseBranch, apiKey: cliArgs.apiKey, apiUrl: cliArgs.apiUrl,
+          prompt, parentAgent: cliArgs.agentName, sprintNumber: sprintData.sprint.number,
           ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
-          ...(actualWsPort ? { managerPort: actualWsPort } : {}),
+          ...(ctx.wsPort ? { managerPort: ctx.wsPort } : {}),
           ...(isReadOnly ? { readOnly: true } : {}),
         };
 
-        ui.agentSpawned({
-          agentName: agentConfig.name,
-          taskId: task.id,
-          taskTitle: task.title,
-          docker: !cliArgs.noDocker,
-        });
+        ui.agentSpawned({ agentName: agentConfig.name, taskId: task.id, taskTitle: task.title, docker: !cliArgs.noDocker });
 
-        // Start message poller for this agent's channel
-        const agentChannel = task.owner ?? cliArgs.agentName;
-        const messagePoller = new MessagePoller({
-          api,
-          channel: agentChannel,
-          workingDir: taskWorkingDir,
-        });
+        const messagePoller = new MessagePoller({ api, channel: task.owner ?? cliArgs.agentName, workingDir: taskWorkingDir });
         messagePoller.start();
 
         const runningAgent = await runner.spawn(agentConfig);
-
         await waitForAgent(runner, agentConfig.name);
-
-        // Stop message poller after agent completes
         messagePoller.stop();
 
         const exitCode = runningAgent.exitCode;
         const succeeded = runningAgent.status === "completed";
-        ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed",
-          succeeded ? undefined : `exit code: ${exitCode}`);
+        ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`);
 
-        // Execute post-actions from template
         actionCtx.exitCode = exitCode;
         await executeActions(agentTemplate.post_actions, actionCtx, "post");
 
-        // Notify user on failure
         if (!succeeded) {
           const stderrSnippet = runningAgent.stderr.slice(-3).join("\n");
-          await api.sendMessage(
-            "manager",
-            "user",
+          await api.sendMessage("manager", "user",
             `⚠️ Task "${task.title}" failed (exit code: ${exitCode}).\n\n${stderrSnippet ? `Error: ${stderrSnippet.slice(0, 300)}` : "Check CLI logs for details."}`
           );
         }
       } catch (err) {
         ui.error(`Error spawning agent for task ${task.id}: ${err}`);
         await api.updateTask(task.id, { status: "todo" });
-        const errMsg = err instanceof Error ? err.message : String(err);
-        await api.sendMessage(
-          "manager",
-          "user",
-          `⚠️ Failed to spawn agent for task "${task.title}".\n\nError: ${errMsg.slice(0, 300)}`
+        await api.sendMessage("manager", "user",
+          `⚠️ Failed to spawn agent for task "${task.title}".\n\nError: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`
         );
       }
     }
 
-    // After processing all tasks in this cycle, loop back to poll for more
     if (!shuttingDown) {
-      await api.updateAgent({
-        name: cliArgs.agentName,
-        status: "idle",
-        activity: "All tasks completed, waiting for new tasks",
-      });
+      await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "All tasks completed, waiting for new tasks" });
       ui.info(`Tasks done — polling again in ${POLL_INTERVAL_MS / 1000}s`);
       await sleep(POLL_INTERVAL_MS);
     }
   }
 
-  await api.updateAgent({
-    name: cliArgs.agentName,
-    status: "idle",
-    activity: "Shut down",
-  });
+  await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "Shut down" });
   ui.outro("Shutting down — goodbye");
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 
 function waitForAgent(runner: AgentRunner, agentName: string): Promise<void> {
   return new Promise((resolve) => {
     const interval = setInterval(() => {
-      const status = runner.status();
-      const agent = status.find((s) => s.name === agentName);
-      if (!agent) {
-        clearInterval(interval);
-        resolve();
-      }
+      if (!runner.status().find((s) => s.name === agentName)) { clearInterval(interval); resolve(); }
     }, 2000);
   });
 }
@@ -942,41 +252,21 @@ function waitForAgent(runner: AgentRunner, agentName: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 let shuttingDown = false;
-
 let activeChatPoller: ChatPoller | null = null;
-let activeManager: Manager | null = null;
-let activeWsServer: WsChatServer | null = null;
+let activeManager: ReturnType<typeof Object> | null = null;
+let activeWsServer: { stop: () => Promise<void> } | null = null;
 
 function setupShutdownHandlers(runner: AgentRunner): void {
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
     ui.warn("Shutting down...");
-
-    if (activeWsServer) {
-      activeWsServer.stop().catch(() => {});
-    }
-
-    if (activeChatPoller) {
-      activeChatPoller.stop();
-    }
-
-    if (activeManager) {
-      activeManager.stop();
-    }
-
-    const agents = runner.status();
-    for (const agent of agents) {
-      ui.info(`Stopping agent: ${agent.name}`);
-      runner.stop(agent.name);
-    }
-
-    setTimeout(() => {
-      ui.shutdown();
-      process.exit(0);
-    }, 3000);
+    activeWsServer?.stop().catch(() => {});
+    activeChatPoller?.stop();
+    if (activeManager && "stop" in activeManager) (activeManager as { stop: () => void }).stop();
+    for (const agent of runner.status()) { ui.info(`Stopping agent: ${agent.name}`); runner.stop(agent.name); }
+    setTimeout(() => { ui.shutdown(); process.exit(0); }, 3000);
   };
-
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }
@@ -987,62 +277,35 @@ function setupShutdownHandlers(runner: AgentRunner): void {
 
 async function handleSprintComplete(apiUrl: string, apiKey: string, push: boolean): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
-
   ui.intro();
-
   const s = ui.createSpinner();
 
-  // 1. Fetch current sprint
   s.start("Fetching current sprint...");
   const sprint = await api.fetchCurrentSprint();
-  if (!sprint) {
-    s.stop("No active sprint found");
-    ui.error("No active sprint found. Nothing to complete.");
-    process.exit(1);
-  }
+  if (!sprint) { s.stop("No active sprint found"); ui.error("No active sprint."); process.exit(1); }
   s.stop(`Sprint #${sprint.number} (${sprint.status})`);
 
-  // 2. Complete the sprint if not already completed
   if (sprint.status !== "completed") {
     s.start(`Completing sprint #${sprint.number}...`);
-    try {
-      await api.completeSprint(sprint.number);
-      s.stop(`Sprint #${sprint.number} completed`);
-    } catch (err) {
-      s.stop("Failed to complete sprint");
-      ui.error(`${err}`);
-      process.exit(1);
-    }
-  } else {
-    ui.info(`Sprint #${sprint.number} already completed`);
-  }
+    try { await api.completeSprint(sprint.number); s.stop(`Sprint #${sprint.number} completed`); }
+    catch (err) { s.stop("Failed"); ui.error(`${err}`); process.exit(1); }
+  } else { ui.info(`Sprint #${sprint.number} already completed`); }
 
-  // 3. Create git tag
   const tagName = `sprint-${sprint.number}`;
   try {
     const existing = execSync(`git tag -l "${tagName}"`, { stdio: "pipe" }).toString().trim();
-    if (existing) {
-      ui.warn(`Tag ${tagName} already exists, skipping`);
-    } else {
+    if (existing) { ui.warn(`Tag ${tagName} already exists`); }
+    else {
       execSync(`git tag "${tagName}"`, { stdio: "pipe" });
-      const shortHash = execSync("git rev-parse --short HEAD", { stdio: "pipe" }).toString().trim();
-      ui.step(`Tagged ${tagName} at ${shortHash}`);
+      const hash = execSync("git rev-parse --short HEAD", { stdio: "pipe" }).toString().trim();
+      ui.step(`Tagged ${tagName} at ${hash}`);
     }
-  } catch (err) {
-    ui.warn(`Failed to create tag: ${err}`);
-  }
+  } catch (err) { ui.warn(`Failed to create tag: ${err}`); }
 
-  // 4. Push tag if --push flag
   if (push) {
-    try {
-      execSync(`git push origin "${tagName}"`, { stdio: "inherit" });
-      ui.step(`Pushed ${tagName} to origin`);
-    } catch (err) {
-      ui.error(`Failed to push tag: ${err}`);
-      process.exit(1);
-    }
+    try { execSync(`git push origin "${tagName}"`, { stdio: "inherit" }); ui.step(`Pushed ${tagName}`); }
+    catch (err) { ui.error(`Failed to push tag: ${err}`); process.exit(1); }
   }
-
   ui.outro(`Sprint #${sprint.number} complete`);
 }
 
@@ -1052,50 +315,26 @@ async function handleSprintComplete(apiUrl: string, apiKey: string, push: boolea
 
 const cliArgs = parseArgs(process.argv);
 
-// Handle "sprint complete" subcommand
 if (cliArgs.command === "sprint") {
   const rawArgs = process.argv.slice(2);
-  const subCommand = rawArgs[1];
-  if (subCommand === "complete") {
-    const push = rawArgs.includes("--push");
-    handleSprintComplete(cliArgs.apiUrl, cliArgs.apiKey, push).catch((err) => {
-      ui.error(`Fatal error: ${err}`);
-      process.exit(1);
-    });
-  } else {
-    ui.error(`Unknown sprint subcommand: ${subCommand}`);
-    printUsage();
-    process.exit(1);
-  }
+  if (rawArgs[1] === "complete") {
+    handleSprintComplete(cliArgs.apiUrl, cliArgs.apiKey, rawArgs.includes("--push")).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  } else { ui.error(`Unknown sprint subcommand: ${rawArgs[1]}`); printUsage(); process.exit(1); }
 } else if (cliArgs.command === "start") {
   const runner = new AgentRunner({
     useDocker: !cliArgs.noDocker,
     onStdout: (agentName, lines, stream) => {
-      if (activeWsServer && activeWsServer.clientCount > 0) {
-        activeWsServer.broadcastStdout(agentName, lines, stream);
-      }
+      if (activeWsServer && "broadcastStdout" in activeWsServer) (activeWsServer as any).broadcastStdout(agentName, lines, stream);
     },
     onActivity: (agentName, activity) => {
-      if (activeWsServer && activeWsServer.clientCount > 0) {
-        activeWsServer.broadcast({
-          type: WS_MSG.AGENT_ACTIVITY,
-          agent_name: agentName,
-          content: activity.summary,
-          kind: activity.kind,
-          tool: activity.tool,
-          timestamp: activity.timestamp,
+      if (activeWsServer && "broadcast" in activeWsServer) {
+        (activeWsServer as any).broadcast({
+          type: WS_MSG.AGENT_ACTIVITY, agent_name: agentName,
+          content: activity.summary, kind: activity.kind, tool: activity.tool, timestamp: activity.timestamp,
         });
       }
     },
   });
   setupShutdownHandlers(runner);
-
-  runLoop(cliArgs, runner).catch((err) => {
-    ui.error(`Fatal error: ${err}`);
-    process.exit(1);
-  });
-} else {
-  ui.error(`Unknown command: ${cliArgs.command}`);
-  printUsage();
-  process.exit(1);
-}
+  runLoop(cliArgs, runner).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+} else { ui.error(`Unknown command: ${cliArgs.command}`); printUsage(); process.exit(1); }
