@@ -567,6 +567,17 @@ export class Manager {
     const tail = remaining.slice(lastEnd).trim();
     if (tail) replyLines.push(tail);
 
+    // Sanitize owner fields in proposals
+    if (proposals) {
+      const validOwners = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "user"];
+      for (const p of proposals) {
+        if (p.owner && !validOwners.includes(p.owner)) {
+          const base = p.owner.split("-")[0];
+          p.owner = validOwners.includes(base) ? base : "builder";
+        }
+      }
+    }
+
     let reply = replyLines.join("\n").trim();
     if (!reply && actions.length > 0) {
       // LLM returned only ACTION lines — summarize what was done
@@ -610,8 +621,11 @@ export class Manager {
             const { title, description, priority, owner } = action.params as {
               title: string; description?: string; priority?: string; owner?: string;
             };
+            // Sanitize owner: only allow base role names, not child agent IDs
+            const validOwners = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "user"];
+            const safeOwner = owner && validOwners.includes(owner) ? owner : (owner?.split("-")[0] && validOwners.includes(owner?.split("-")[0]) ? owner.split("-")[0] : "builder");
             if (title) {
-              await this.createTask(title, description, priority, owner, _context, this.lastUserMessage);
+              await this.createTask(title, description, priority, safeOwner, _context, this.lastUserMessage);
               ui.info(`[manager] Created task: ${title}`);
             }
             break;
