@@ -308,12 +308,14 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
   let workspaceSpec: string | undefined;
   let workspaceName: string | undefined;
   let playbookRules: string | undefined;
+  let mainGithubRepo: string | undefined;
 
   s.start("Fetching workspace...");
   try {
     const ws = await api.fetchWorkspace();
     workspaceSpec = (ws as unknown as Record<string, unknown>).spec as string | undefined || undefined;
     workspaceName = ws.name || undefined;
+    mainGithubRepo = ws.github_repo || undefined;
     s.stop(workspaceName ? `Workspace: ${workspaceName}` : "Workspace loaded");
 
     // Fetch playbook rules (includes git strategy rules + security rules)
@@ -431,27 +433,48 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
   const tobanHome = join(homedir(), ".toban");
 
-  // Clone all repos for Manager read-only access
+  // Clone all repos for Manager read-only access (main repo + sub repos)
   let managerReposDir: string | undefined;
   const managerRepoInfos: Array<{ name: string; path: string; description?: string }> = [];
-  if (repos.length > 0) {
-    const reposParent = join(tobanHome, "manager-repos");
-    mkdirSync(reposParent, { recursive: true });
-    for (const repo of repos) {
-      try {
-        const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken);
-        managerRepoInfos.push({
-          name: repo.repo_name,
-          path: repoPath,
-          description: repo.description || undefined,
+  {
+    // Build a combined list: main repo + workspace_repositories (deduplicated)
+    const allRepos: WorkspaceRepository[] = [...repos];
+    if (mainGithubRepo) {
+      const mainRepoName = mainGithubRepo.replace(/^https?:\/\/github\.com\//, "");
+      const alreadyIncluded = allRepos.some(
+        (r) => r.repo_name === mainRepoName || r.repo_path.includes(mainRepoName)
+      );
+      if (!alreadyIncluded) {
+        allRepos.unshift({
+          id: "main",
+          repo_name: mainRepoName,
+          repo_path: mainGithubRepo.startsWith("http") ? mainGithubRepo : `https://github.com/${mainGithubRepo}`,
+          repo_url: "",
+          description: "Main repository",
+          access_agents: [],
         });
-      } catch (err) {
-        ui.warn(`Could not clone ${repo.repo_name} for Manager: ${err}`);
       }
     }
-    if (managerRepoInfos.length > 0) {
-      managerReposDir = join(reposParent, "shared");
-      ui.step(`Manager has read access to ${managerRepoInfos.length} repo(s)`);
+
+    if (allRepos.length > 0) {
+      const reposParent = join(tobanHome, "manager-repos");
+      mkdirSync(reposParent, { recursive: true });
+      for (const repo of allRepos) {
+        try {
+          const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken);
+          managerRepoInfos.push({
+            name: repo.repo_name,
+            path: repoPath,
+            description: repo.description || undefined,
+          });
+        } catch (err) {
+          ui.warn(`Could not clone ${repo.repo_name} for Manager: ${err}`);
+        }
+      }
+      if (managerRepoInfos.length > 0) {
+        managerReposDir = join(reposParent, "shared");
+        ui.step(`Manager has read access to ${managerRepoInfos.length} repo(s)`);
+      }
     }
   }
 
