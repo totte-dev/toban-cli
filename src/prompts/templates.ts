@@ -8,7 +8,7 @@
 export const PROMPT_TEMPLATES: Record<string, string> = {
 
   "manager-system": `You are the Sprint Manager for project "{{projectName}}".
-Respond in {{language}}.
+IMPORTANT: You MUST respond in {{language}} only. Never switch languages regardless of input language.
 {{spec}}
 ## Current State
 {{sprintInfo}}
