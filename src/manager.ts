@@ -15,7 +15,8 @@
 import { execSync } from "node:child_process";
 import type { ApiClient, Task } from "./api-client.js";
 import type { AgentRunner } from "./runner.js";
-import { callClaudeCli, callClaudeCliStream, createAuthHeaders, buildConversationHistory } from "./llm-client.js";
+import { createAuthHeaders, buildConversationHistory } from "./llm-client.js";
+import { createLlmProvider, type LlmProvider } from "./llm-provider.js";
 import { PollLoop } from "./poll-loop.js";
 import * as ui from "./ui.js";
 
@@ -103,15 +104,13 @@ export interface ManagerOptions {
 export class Manager {
   private apiUrl: string;
   private apiKey: string;
-  private llmBaseUrl?: string;
-  private llmApiKey?: string;
   private model: string;
   private pollIntervalMs: number;
   private runner: AgentRunner | null;
   private api: ApiClient | null;
   private lastSeenId: string | null = null;
   private poller: PollLoop;
-  private useClaudeCli: boolean;
+  private llmProvider: LlmProvider;
   private reposDir?: string;
   private repositories: Array<{ name: string; path: string; description?: string }>;
 
@@ -132,15 +131,17 @@ export class Manager {
   constructor(options: ManagerOptions) {
     this.apiUrl = options.apiUrl;
     this.apiKey = options.apiKey;
-    this.llmBaseUrl = options.llmBaseUrl;
-    this.llmApiKey = options.llmApiKey;
     this.model = options.model ?? "claude-sonnet-4-20250514";
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
     this.runner = options.runner ?? null;
     this.api = options.api ?? null;
-    this.useClaudeCli = !options.llmBaseUrl || !options.llmApiKey;
+    this.llmProvider = createLlmProvider({
+      llmBaseUrl: options.llmBaseUrl,
+      llmApiKey: options.llmApiKey,
+    });
     this.reposDir = options.reposDir;
     this.repositories = options.repositories ?? [];
+    ui.debug("manager", `LLM provider: ${this.llmProvider.id}`);
     this.poller = new PollLoop({
       name: "manager",
       intervalMs: this.pollIntervalMs,
@@ -313,21 +314,16 @@ export class Manager {
     const systemPrompt = this.buildSystemPrompt(context);
     const conversationHistory = this.buildManagerConversationHistory(context);
 
-    let llmResponse: string;
-    if (this.useClaudeCli) {
-      llmResponse = await callClaudeCliStream({
-        systemPrompt,
-        history: conversationHistory,
-        userMessage,
-        model: this.model,
-        onChunk: this.onStreamChunk,
-        cwd: this.reposDir,
-        enableTools: !!this.reposDir,
-        allowedTools: this.reposDir ? ["Read", "Grep", "Glob", "Bash", "Agent"] : undefined,
-      });
-    } else {
-      llmResponse = await this.callLlmApi(systemPrompt, conversationHistory, userMessage);
-    }
+    const llmResponse = await this.llmProvider.call({
+      systemPrompt,
+      history: conversationHistory,
+      userMessage,
+      model: this.model,
+      onChunk: this.onStreamChunk,
+      cwd: this.reposDir,
+      enableTools: !!this.reposDir,
+      allowedTools: this.reposDir ? ["Read", "Grep", "Glob", "Bash", "Agent"] : undefined,
+    });
 
     const { reply, actions, proposals } = this.parseResponse(llmResponse);
     return { reply, actions, proposals };
@@ -630,45 +626,6 @@ Help the user with sprint management.`;
       headers: this.authHeaders(),
       body: JSON.stringify(body),
     });
-  }
-
-  // ── LLM backends ────────────────────────────────────────
-
-  private async callLlmApi(
-    systemPrompt: string,
-    history: Array<{ role: string; content: string }>,
-    userMessage: string
-  ): Promise<string> {
-    const messages = [
-      { role: "system" as const, content: systemPrompt },
-      ...history,
-      { role: "user" as const, content: userMessage },
-    ];
-
-    const baseUrl = this.llmBaseUrl!.replace(/\/$/, "");
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.llmApiKey!}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: this.model,
-        max_tokens: 2048,
-        messages,
-      }),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`LLM API error ${res.status}: ${errText}`);
-    }
-
-    const data = (await res.json()) as {
-      choices: Array<{ message: { content: string } }>;
-    };
-
-    return data.choices?.[0]?.message?.content ?? "(no response)";
   }
 
   // ── Message handling (polling fallback) ──────────────────
