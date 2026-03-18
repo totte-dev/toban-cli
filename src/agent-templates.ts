@@ -213,6 +213,8 @@ export interface ActionContext {
   onRetro?: () => Promise<void>;
   /** Broadcast data updates to connected WS clients */
   onDataUpdate?: (entity: string, id: string, changes: Record<string, unknown>) => void;
+  /** Broadcast review progress to connected WS clients */
+  onReviewUpdate?: (taskId: string, phase: string, reviewComment?: string) => void;
 }
 
 /**
@@ -361,6 +363,7 @@ export async function executeActions(
           break;
         }
         case "review_changes": {
+          ctx.onReviewUpdate?.(ctx.task.id, "started");
           const { execSync: revExec } = await import("node:child_process");
           const { existsSync: revExists } = await import("node:fs");
           // workingDir may be a deleted worktree after git_merge — resolve repo root
@@ -393,6 +396,7 @@ export async function executeActions(
             const filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
 
             // LLM review: ask Claude to review the diff against the task requirements
+            ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
             let llmReview = "";
             try {
               const { spawn: reviewSpawn } = await import("node:child_process");
@@ -444,7 +448,9 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
                 });
                 if (res.ok) {
                   reviewSaved = true;
-                  ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: JSON.stringify(report), commits: commitHash });
+                  const reviewJson = JSON.stringify(report);
+                  ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewJson, commits: commitHash });
+                  ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewJson);
                 }
               } catch { /* JSON parse failed — fall back to text */ }
             }
@@ -462,11 +468,13 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
               ].filter(Boolean).join("\n").slice(0, 4000);
               await ctx.api.updateTask(ctx.task.id, { review_comment: review, commits: commitHash } as Partial<Task>);
               ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: review, commits: commitHash });
+              ctx.onReviewUpdate?.(ctx.task.id, "completed", review);
             }
             ui.info( `[${phase}] ${label}: ${filesChanged.length} files${llmReview ? " + LLM review" : ""}`);
           } catch (revErr) {
             const msg = revErr instanceof Error ? revErr.message : String(revErr);
             ui.warn(`[template] review_changes failed: ${msg}`);
+            ctx.onReviewUpdate?.(ctx.task.id, "failed");
             // Still set a basic comment
             try {
               await ctx.api.updateTask(ctx.task.id, { review_comment: "Auto-review failed. Please review manually." } as Partial<Task>);

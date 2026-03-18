@@ -42,6 +42,9 @@ interface WsMessage {
   /** Data update fields */
   entity?: string;
   changes?: Record<string, unknown>;
+  /** Review update fields */
+  phase?: string;
+  review_comment?: string;
 }
 
 export interface WsChatServerOptions {
