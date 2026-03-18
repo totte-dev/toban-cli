@@ -141,7 +141,22 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       }
     }
 
-    const todoTasks = (sprintData.tasks as Task[])
+    // Pick up in_progress tasks + auto-start todo tasks owned by agents
+    const allTasks = sprintData.tasks as Task[];
+    const agentRoles = ["builder", "cloud-engineer", "strategist", "marketer", "operator"];
+    const todoForAgents = allTasks.filter((t) => t.status === "todo" && t.owner && agentRoles.includes(t.owner));
+
+    // Auto-transition todo → in_progress for agent-owned tasks
+    for (const t of todoForAgents) {
+      try {
+        await api.updateTask(t.id, { status: "in_progress" } as Partial<Task>);
+        t.status = "in_progress" as Task["status"];
+        ui.info(`[auto] ${t.owner}/${t.id.slice(0, 8)}: todo → in_progress`);
+        wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: t.id, changes: { status: "in_progress" }, timestamp: new Date().toISOString() });
+      } catch { /* non-fatal */ }
+    }
+
+    const todoTasks = allTasks
       .filter((t) => t.status === "in_progress" && t.owner !== "user")
       .sort((a, b) => {
         const pa = typeof a.priority === "string" ? parseInt(a.priority.replace("p", ""), 10) : (a.priority ?? 99);
