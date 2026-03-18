@@ -19,6 +19,7 @@ export const WS_MSG = {
   APPROVAL_RESPONSE: "approval_response",
   AGENT_ACTIVITY: "agent_activity",
   DATA_UPDATE: "data_update",
+  REVIEW_UPDATE: "review_update",
 } as const;
 
 export type WsMsgType = typeof WS_MSG[keyof typeof WS_MSG];
