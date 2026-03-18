@@ -422,15 +422,27 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
 
               const env = { ...process.env };
               delete env.CLAUDECODE;
+              const LLM_TIMEOUT = 120_000; // 2 minutes
               llmReview = await new Promise<string>((resolve) => {
                 const child = reviewSpawn("claude", ["--print", "--model", "claude-sonnet-4-20250514", reviewPrompt], {
-                  env, stdio: ["ignore", "pipe", "pipe"], timeout: 60_000,
+                  env, stdio: ["ignore", "pipe", "pipe"], timeout: LLM_TIMEOUT,
                 });
                 let out = "";
+                let resolved = false;
                 child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
-                child.on("close", () => resolve(out.trim()));
-                child.on("error", () => resolve(""));
-                setTimeout(() => { try { child.kill(); } catch {} resolve(""); }, 60_000);
+                child.on("close", (code) => {
+                  if (!resolved) { resolved = true; resolve(out.trim()); }
+                  if (code !== 0) ui.warn(`[review] LLM exited with code ${code}`);
+                });
+                child.on("error", (err) => {
+                  if (!resolved) { resolved = true; resolve(""); }
+                  ui.warn(`[review] LLM spawn error: ${err.message}`);
+                });
+                setTimeout(() => {
+                  if (!resolved) { resolved = true; resolve(""); }
+                  try { child.kill(); } catch {}
+                  ui.warn("[review] LLM review timed out (120s)");
+                }, LLM_TIMEOUT);
               });
             } catch (llmErr) {
               ui.warn(`[review] LLM review failed: ${llmErr instanceof Error ? llmErr.message : llmErr}`);
