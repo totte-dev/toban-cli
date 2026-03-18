@@ -125,6 +125,7 @@ export class Manager {
   private llmProvider: LlmProvider;
   private reposDir?: string;
   private repositories: Array<{ name: string; path: string; description?: string }>;
+  private codebaseSummary: string;
 
   /** Pending spawn_agent approvals waiting for user confirmation */
   private pendingApprovals = new Map<string, PendingApproval>();
@@ -157,12 +158,56 @@ export class Manager {
     });
     this.reposDir = options.reposDir;
     this.repositories = options.repositories ?? [];
+    this.codebaseSummary = this.buildCodebaseSummary();
     ui.debug("manager", `LLM provider: ${this.llmProvider.id}`);
     this.poller = new PollLoop({
       name: "manager",
       intervalMs: this.pollIntervalMs,
       onTick: () => this.poll(),
     });
+  }
+
+  /**
+   * Build a static codebase summary at startup (no tool calls needed).
+   * Includes: directory structure, CLAUDE.md content, recent git log.
+   */
+  private buildCodebaseSummary(): string {
+    if (!this.reposDir || this.repositories.length === 0) return "";
+
+    const parts: string[] = [];
+    for (const repo of this.repositories) {
+      try {
+        // Directory tree (top 2 levels)
+        const tree = execSync("find . -maxdepth 2 -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' | head -50", {
+          cwd: repo.path, stdio: "pipe", timeout: 5000,
+        }).toString().trim();
+
+        // CLAUDE.md content (if exists)
+        let claudeMd = "";
+        try {
+          claudeMd = execSync("cat CLAUDE.md 2>/dev/null | head -80", {
+            cwd: repo.path, stdio: "pipe", timeout: 3000, shell: "/bin/sh",
+          }).toString().trim();
+        } catch { /* no CLAUDE.md */ }
+
+        // Recent commits
+        let recentCommits = "";
+        try {
+          recentCommits = execSync("git log --oneline -10 2>/dev/null", {
+            cwd: repo.path, stdio: "pipe", timeout: 3000, shell: "/bin/sh",
+          }).toString().trim();
+        } catch { /* no git history */ }
+
+        parts.push(`### ${repo.name}`);
+        if (claudeMd) parts.push(`CLAUDE.md:\n${claudeMd}`);
+        parts.push(`Files:\n${tree}`);
+        if (recentCommits) parts.push(`Recent commits:\n${recentCommits}`);
+      } catch {
+        parts.push(`### ${repo.name}\n(failed to read)`);
+      }
+    }
+
+    return parts.length > 0 ? `\n## Codebase Summary (cached at startup)\n${parts.join("\n\n")}` : "";
   }
 
   // ── Lifecycle ────────────────────────────────────────────
@@ -488,7 +533,7 @@ export class Manager {
     const rules = loadPromptTemplate("manager-rules");
     const playbook = ctx.playbook_rules ? `\n## Playbook Rules\n${ctx.playbook_rules}` : "";
 
-    return `${system}\n${actions}\n${rules}${playbook}`;
+    return `${system}\n${this.codebaseSummary}\n${actions}\n${rules}${playbook}`;
   }
 
   // ── Conversation history ─────────────────────────────────
