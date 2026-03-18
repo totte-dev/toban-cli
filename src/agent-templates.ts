@@ -392,7 +392,8 @@ export async function executeActions(
             try {
               const { spawn: reviewSpawn } = await import("node:child_process");
               const diffForReview = diffContent.slice(0, 8000); // Limit diff size for prompt
-              const reviewPrompt = `You are reviewing code changes made by an AI agent.
+              const lang = ctx.config.language === "ja" ? "Japanese" : "English";
+              const reviewPrompt = `You are reviewing code changes made by an AI agent. Reply in ${lang}.
 
 Task: ${ctx.task.title}
 Description: ${ctx.task.description || "No description"}
@@ -400,13 +401,25 @@ Description: ${ctx.task.description || "No description"}
 Git diff:
 ${diffForReview}
 
-Write a brief code review (3-5 bullet points) covering:
-1. Does the change match the task requirements?
-2. Code quality concerns (if any)
-3. Missing tests or edge cases
-4. Overall verdict: APPROVE or NEEDS_CHANGES
+You MUST respond in the following structured format. Fill in every section — do not skip any.
 
-Keep it concise. Reply in ${ctx.config.language === "ja" ? "Japanese" : "English"}.`;
+## Requirement Match
+Does the diff address the task requirements? List each requirement and whether it is met.
+
+## Files Changed
+List each changed file with a one-line summary of what was modified.
+
+## Code Quality
+Identify any issues: naming, complexity, error handling, security. Say "No issues found" if clean.
+
+## Test Coverage
+Were tests added or updated? Are there untested paths or edge cases?
+
+## Risks
+Any potential regressions, breaking changes, or deployment concerns? Say "None identified" if safe.
+
+## Verdict
+APPROVE or NEEDS_CHANGES (with specific items to fix).`;
 
               const env = { ...process.env };
               delete env.CLAUDECODE;
