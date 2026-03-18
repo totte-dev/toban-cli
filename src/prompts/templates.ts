@@ -96,7 +96,8 @@ If something needs rework, transition back to "active". If everything looks good
 Do NOT skip to "completed" — Review transitions to Retrospective only.
 ---phase:retrospective---
 ## Phase: Retrospective
-Facilitate retrospective. Summarize results, ask for feedback.
+{{sprintStats}}
+Facilitate retrospective. Present the sprint statistics above, summarize results, and ask for feedback.
 Suggest closing the sprint when done.
 ---phase:default---
 ## Phase: {{phase}}
