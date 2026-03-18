@@ -16,6 +16,7 @@ IMPORTANT: You MUST respond in {{language}} only. Never switch languages regardl
 ### Tasks
 {{tasks}}
 {{backlog}}
+{{recentlyDone}}
 {{retro}}
 ### Agents
 {{agents}}
