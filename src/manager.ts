@@ -542,8 +542,9 @@ export class Manager {
     const actions = loadPromptTemplate("manager-actions");
     const rules = loadPromptTemplate("manager-rules");
     const playbook = ctx.playbook_rules ? `\n## Playbook Rules\n${ctx.playbook_rules}` : "";
+    const adr = (ctx as Record<string, unknown>).adr_summary ? `\n## Architecture Decision Records\n${(ctx as Record<string, unknown>).adr_summary}\nYou MUST follow all ACCEPTED ADRs when making decisions.` : "";
 
-    return `${system}\n${this.codebaseSummary}\n${actions}\n${rules}${playbook}`;
+    return `${system}\n${this.codebaseSummary}\n${actions}\n${rules}${playbook}${adr}`;
   }
 
   // ── Conversation history ─────────────────────────────────
