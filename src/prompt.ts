@@ -131,8 +131,8 @@ export function buildAgentPrompt(ctx: PromptContext): string {
     ROLE_DESCRIPTIONS[ctx.role] ??
     `You are the ${ctx.role} agent.`;
 
-  const lang = ctx.language === "ja" ? "Japanese" : ctx.language === "en" ? "English" : null;
-  const langLine = lang ? `\nRespond in ${lang}.` : "";
+  const lang = ctx.language === "ja" ? "Japanese" : "English";
+  const langLine = `\nIMPORTANT: You MUST respond in ${lang} only. Never switch languages regardless of input language.`;
 
   const projectLine = ctx.projectName
     ? `\nProject: ${ctx.projectName}`

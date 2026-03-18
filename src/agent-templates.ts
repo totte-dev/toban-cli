@@ -191,6 +191,7 @@ export interface ActionContext {
     workingDir: string;
     baseBranch: string;
     sprintNumber?: number;
+    language?: string;
   };
   /** Agent exit code (only available in post_actions) */
   exitCode?: number | null;
@@ -390,7 +391,7 @@ Write a brief code review (3-5 bullet points) covering:
 3. Missing tests or edge cases
 4. Overall verdict: APPROVE or NEEDS_CHANGES
 
-Keep it concise. Reply in the same language as the task title.`;
+Keep it concise. Reply in ${ctx.config.language === "ja" ? "Japanese" : "English"}.`;
 
               const env = { ...process.env };
               delete env.CLAUDECODE;
