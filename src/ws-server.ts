@@ -68,6 +68,20 @@ export interface WsChatServerOptions {
   getPendingApprovals?: () => Array<{ id: string; role: string; taskIds: string[]; createdAt: number }>;
 }
 
+/** Tracked review state for a task */
+interface ReviewState {
+  task_id: string;
+  agent_name?: string;
+  phase: string;
+  review_comment?: string;
+  timestamp: string;
+}
+
+/** Terminal review phases that expire after a timeout */
+const TERMINAL_PHASES = new Set(["completed", "failed"]);
+/** How long to keep terminal review states for re-send (5 minutes) */
+const REVIEW_STATE_TTL_MS = 5 * 60 * 1000;
+
 export class WsChatServer {
   private wss: WebSocketServer | null = null;
   private httpServer: ReturnType<typeof createServer> | null = null;
@@ -83,6 +97,8 @@ export class WsChatServer {
   private clients = new Set<WebSocket>();
   /** Lock to prevent concurrent LLM calls from multiple WS clients */
   private chatProcessing = false;
+  /** Latest review state per task for re-sending on reconnect */
+  private reviewStates = new Map<string, ReviewState>();
 
   /** Whether any browser clients are connected */
   get hasClients(): boolean {
@@ -164,6 +180,9 @@ export class WsChatServer {
           timestamp: new Date().toISOString(),
         }));
 
+        // Re-send latest review states to newly connected client
+        this.sendPendingReviewStates(ws);
+
         // Re-send pending approvals to newly connected client
         if (this.getPendingApprovals) {
           const pending = this.getPendingApprovals();
@@ -219,8 +238,20 @@ export class WsChatServer {
 
   /**
    * Send a message to all connected clients.
+   * Tracks REVIEW_UPDATE messages for re-sending on reconnect.
    */
   broadcast(message: WsMessage): void {
+    // Track review state for re-sending to new clients
+    if (message.type === WS_MSG.REVIEW_UPDATE && message.task_id) {
+      this.reviewStates.set(message.task_id, {
+        task_id: message.task_id,
+        agent_name: message.agent_name,
+        phase: message.phase ?? "unknown",
+        review_comment: message.review_comment,
+        timestamp: message.timestamp ?? new Date().toISOString(),
+      });
+    }
+
     const data = JSON.stringify(message);
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) {
@@ -244,6 +275,38 @@ export class WsChatServer {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
       }
+    }
+  }
+
+  /**
+   * Send latest review states to a newly connected client.
+   * Prunes expired terminal states (completed/failed older than TTL).
+   */
+  private sendPendingReviewStates(ws: WebSocket): void {
+    const now = Date.now();
+    let sent = 0;
+
+    for (const [taskId, state] of this.reviewStates) {
+      // Prune old terminal states
+      const stateAge = now - new Date(state.timestamp).getTime();
+      if (TERMINAL_PHASES.has(state.phase) && stateAge > REVIEW_STATE_TTL_MS) {
+        this.reviewStates.delete(taskId);
+        continue;
+      }
+
+      ws.send(JSON.stringify({
+        type: WS_MSG.REVIEW_UPDATE,
+        task_id: state.task_id,
+        agent_name: state.agent_name,
+        phase: state.phase,
+        review_comment: state.review_comment,
+        timestamp: state.timestamp,
+      }));
+      sent++;
+    }
+
+    if (sent > 0) {
+      ui.info(`[ws] Re-sent ${sent} review state(s) to new client`);
     }
   }
 
