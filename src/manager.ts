@@ -696,10 +696,22 @@ export class Manager {
           case "transition_sprint": {
             const { status } = action.params as { status: string };
             if (status && _context.sprint && this.api) {
+              // Validate transition: planning→active→review→retrospective→completed
+              const validTransitions: Record<string, string[]> = {
+                planning: ["active"],
+                active: ["review"],
+                review: ["retrospective", "active"],
+                retrospective: ["completed"],
+              };
+              const current = _context.sprint.status;
+              const allowed = validTransitions[current] ?? [];
+              if (!allowed.includes(status)) {
+                ui.warn(`[manager] transition_sprint blocked: ${current} → ${status} is not allowed`);
+                break;
+              }
               if (status === "completed") {
                 await this.api.completeSprint(_context.sprint.number);
               } else {
-                // Use PATCH endpoint
                 await fetch(`${this.apiUrl}/api/v1/sprints/${_context.sprint.number}`, {
                   method: "PATCH",
                   headers: this.authHeaders(),
@@ -720,6 +732,11 @@ export class Manager {
             break;
           }
           case "spawn_agent": {
+            // Block during planning — agents should only run in active phase
+            if (_context.sprint?.status === "planning") {
+              ui.warn(`[manager] spawn_agent blocked: sprint is in planning phase`);
+              break;
+            }
             const { role, task_ids } = action.params as { role: string; task_ids: string[] };
             if (role) {
               const fullIds = (task_ids ?? []).map((id) => this.resolveTaskId(id, _context));
