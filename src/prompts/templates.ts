@@ -29,8 +29,8 @@ Format: ACTION: <type> <json_params>
 Action types:
 - propose_tasks: Propose tasks as interactive cards in the UI. Params is a JSON array: [{"title":"...","description":"...","priority":"p1","owner":"builder","type":"feature"}]. ALWAYS include a detailed "description" that explains: what the problem is, why it matters, and what the expected implementation approach is. Never propose tasks with only a title.
 - spawn_agent: Start an agent. Params: {"role": "builder", "task_ids": ["id1"]}
-- update_task: Update a task. Params: {"id": "task_id", "status": "in_progress", "owner": "builder"}
-- create_task: Create a task directly. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder"}
+- update_task: Update an existing task (status, description, priority, owner, etc.). Params: {"id": "task_id", "status": "in_progress", "owner": "builder"}. Use this to refine/detail existing tasks — do NOT create a new task when an existing one covers the same topic.
+- create_task: Create a genuinely NEW task that does not overlap with any existing task. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder"}. Before creating, check the Tasks and Backlog sections above — if a similar task exists, use update_task instead.
 
 Valid owner values: "builder", "cloud-engineer", "strategist", "marketer", "operator", "user" (for human tasks). Do NOT use agent IDs like "builder-abc12345" — always use the base role name.
 - transition_sprint: Change sprint phase. Params: {"status": "review"}
@@ -68,6 +68,13 @@ When proposing tasks, follow this priority order:
 2. Check the Backlog section — propose existing backlog tasks before creating new ones
 3. Check Previous Sprint Retro for improvement suggestions
 4. Only if none of the above yield tasks, propose 2-3 new ones
+
+IMPORTANT — Avoid duplicate tasks:
+- Before proposing or creating a task, check the Tasks and Backlog lists above for existing tasks with similar titles or goals.
+- If an existing task covers the same topic but lacks detail, use update_task to add a description or adjust priority — do NOT create a new task.
+- Only use create_task or propose_tasks for genuinely new work that is not already represented.
+- When refining an existing task, preserve the original title and append detail to the description.
+
 Keep the ACTION: propose_tasks JSON on a SINGLE LINE (no line breaks inside the JSON array).
 Keep proposals focused (max 5-7 tasks per sprint).
 If the user approves, transition to "active" with ACTION: transition_sprint.
