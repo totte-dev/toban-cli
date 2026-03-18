@@ -58,6 +58,18 @@ export function cleanRepoAuth(repoDir: string, credentialHelperPath?: string): v
  */
 export function fetchAndResetToRemote(repoDir: string): void {
   execSync("git fetch origin", { cwd: repoDir, stdio: "pipe" });
+
+  // Check if remote has any branches (empty repo has none)
+  const remoteBranches = execSync("git branch -r", { cwd: repoDir, stdio: "pipe" }).toString().trim();
+  if (!remoteBranches) {
+    // Empty repo — create initial branch with empty commit
+    try {
+      execSync("git checkout -b main", { cwd: repoDir, stdio: "pipe" });
+    } catch { /* already on main */ }
+    execSync('git commit --allow-empty -m "Initial commit"', { cwd: repoDir, stdio: "pipe" });
+    return;
+  }
+
   execSync("git checkout main 2>/dev/null || git checkout master", {
     cwd: repoDir, stdio: "pipe", shell: "/bin/sh",
   });
