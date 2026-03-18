@@ -669,11 +669,20 @@ export class Manager {
           case "update_task": {
             const { id, ...rawUpdates } = action.params as { id: string; [k: string]: unknown };
             if (id && this.api) {
-              // Only send fields the API accepts
-              const allowedFields = ["title", "description", "owner", "priority", "status", "type", "sprint", "branch", "labels", "blocks", "blocked_by", "context_notes", "target_repo", "parent_task", "review_comment", "commits"];
+              const allowedFields = ["title", "description", "owner", "priority", "status", "type", "sprint", "branch", "labels", "blocks", "blocked_by", "context_notes", "target_repo", "parent_task", "review_comment", "commits", "story_points"];
+              const VALID_STATUS = ["todo", "in_progress", "review", "done"];
+              const VALID_PRIORITY = ["p0", "p1", "p2", "p3"];
+              const VALID_TYPE = ["feature", "bug", "chore", "research", "docs", "infra", "content", "strategy", "task"];
+              const VALID_SP = [1, 2, 3, 5, 8];
+
               const updates: Record<string, unknown> = {};
               for (const [k, v] of Object.entries(rawUpdates)) {
-                if (allowedFields.includes(k)) updates[k] = v;
+                if (!allowedFields.includes(k)) continue;
+                if (k === "status" && !VALID_STATUS.includes(v as string)) { ui.warn(`[manager] update_task: invalid status "${v}"`); continue; }
+                if (k === "priority" && !VALID_PRIORITY.includes(v as string)) { ui.warn(`[manager] update_task: invalid priority "${v}"`); continue; }
+                if (k === "type" && v != null && !VALID_TYPE.includes(v as string)) { ui.warn(`[manager] update_task: invalid type "${v}"`); continue; }
+                if (k === "story_points" && v != null && !VALID_SP.includes(v as number)) { ui.warn(`[manager] update_task: invalid story_points "${v}"`); continue; }
+                updates[k] = v;
               }
               if (Object.keys(updates).length === 0) {
                 ui.warn(`[manager] update_task ${id}: no valid fields`);
@@ -687,14 +696,17 @@ export class Manager {
             break;
           }
           case "create_task": {
-            const { title, description, priority, owner } = action.params as {
-              title: string; description?: string; priority?: string; owner?: string;
+            const { title, description, priority, owner, story_points } = action.params as {
+              title: string; description?: string; priority?: string; owner?: string; story_points?: number;
             };
-            // Sanitize owner: only allow base role names, not child agent IDs
             const validOwners = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "user"];
             const safeOwner = owner && validOwners.includes(owner) ? owner : (owner?.split("-")[0] && validOwners.includes(owner?.split("-")[0]) ? owner.split("-")[0] : "builder");
+            const safePriority = priority && ["p0", "p1", "p2", "p3"].includes(priority) ? priority : "p1";
+            if (safePriority !== priority) ui.warn(`[manager] create_task: invalid priority "${priority}" → defaulted to "${safePriority}"`);
+            const safeSp = story_points && [1, 2, 3, 5, 8].includes(story_points) ? story_points : undefined;
+            if (story_points && !safeSp) ui.warn(`[manager] create_task: invalid story_points "${story_points}"`);
             if (title) {
-              await this.createTask(title, description, priority, safeOwner, _context, this.lastUserMessage);
+              await this.createTask(title, description, safePriority, safeOwner, _context, this.lastUserMessage);
               ui.info(`[manager] Created task: ${title}`);
             }
             break;
