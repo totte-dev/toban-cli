@@ -385,11 +385,15 @@ export async function executeActions(
             return ctx.config.workingDir;
           })();
           try {
+            ui.debug("review", `repo dir: ${revRepoDir}`);
             // Get the merge commit and its details
             const lastCommit = revExec("git log --oneline -1", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
             const commitBody = revExec("git log -1 --format=%b", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
-            const diffStat = revExec("git diff HEAD~1 --stat", { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
-            const diffContent = revExec("git diff HEAD~1 --no-color", { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
+            // Use merge commit diff (HEAD^..HEAD for merge, HEAD~1 for regular)
+            const parentCount = (revExec("git cat-file -p HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().match(/^parent /gm) || []).length;
+            const diffRef = parentCount >= 2 ? "HEAD^..HEAD" : "HEAD~1";
+            const diffStat = revExec(`git diff ${diffRef} --stat`, { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
+            const diffContent = revExec(`git diff ${diffRef} --no-color`, { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
 
             // Build review summary with commit description + file stats
             const lines = diffContent.split("\n").length;
@@ -428,7 +432,9 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
                 child.on("error", () => resolve(""));
                 setTimeout(() => { try { child.kill(); } catch {} resolve(""); }, 60_000);
               });
-            } catch { /* LLM review failed — continue with stats only */ }
+            } catch (llmErr) {
+              ui.warn(`[review] LLM review failed: ${llmErr instanceof Error ? llmErr.message : llmErr}`);
+            }
 
             // Get commit hash for the merge
             const commitHash = revExec("git rev-parse HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
@@ -451,8 +457,13 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
                   const reviewJson = JSON.stringify(report);
                   ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewJson, commits: commitHash });
                   ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewJson);
+                } else {
+                  const errBody = await res.text().catch(() => "");
+                  ui.warn(`[review] review-report API ${res.status}: ${errBody.slice(0, 200)}`);
                 }
-              } catch { /* JSON parse failed — fall back to text */ }
+              } catch (parseErr) {
+                ui.warn(`[review] Structured review failed: ${parseErr instanceof Error ? parseErr.message : parseErr}`);
+              }
             }
 
             // Fallback: save as plain text review
@@ -473,7 +484,7 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
             ui.info( `[${phase}] ${label}: ${filesChanged.length} files${llmReview ? " + LLM review" : ""}`);
           } catch (revErr) {
             const msg = revErr instanceof Error ? revErr.message : String(revErr);
-            ui.warn(`[template] review_changes failed: ${msg}`);
+            ui.warn(`[review] review_changes failed at ${revRepoDir}: ${msg}`);
             ctx.onReviewUpdate?.(ctx.task.id, "failed");
             // Still set a basic comment
             try {
