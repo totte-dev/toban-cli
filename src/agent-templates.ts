@@ -321,6 +321,10 @@ export async function executeActions(
           // Resolve repo root (workingDir may be a worktree)
           const pushRepoDir = pushExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
             .toString().trim().replace(/\/.git$/, "");
+          // Stash any unstaged changes (e.g. inject_memory's CLAUDE.md modifications)
+          try {
+            pushExec("git stash --include-untracked", { cwd: pushRepoDir, stdio: "pipe" });
+          } catch { /* nothing to stash */ }
           try {
             pushExec(`git push origin ${ctx.config.baseBranch}`, {
               cwd: pushRepoDir,
@@ -338,6 +342,10 @@ export async function executeActions(
               ui.warn(`[template] git_push failed after rebase: ${msg}`);
             }
           }
+          // Restore stashed changes (non-fatal if nothing was stashed)
+          try {
+            pushExec("git stash pop", { cwd: pushRepoDir, stdio: "pipe" });
+          } catch { /* no stash to pop */ }
           break;
         }
         case "submit_retro": {
