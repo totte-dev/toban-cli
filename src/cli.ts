@@ -164,7 +164,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
       const actionCtx: ActionContext = {
         api, task, agentName: cliArgs.agentName,
-        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number },
+        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({
             type: WS_MSG.DATA_UPDATE,
