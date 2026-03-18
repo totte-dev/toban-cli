@@ -39,6 +39,9 @@ interface WsMessage {
   /** Activity-specific fields */
   kind?: string;
   tool?: string;
+  /** Data update fields */
+  entity?: string;
+  changes?: Record<string, unknown>;
 }
 
 export interface WsChatServerOptions {

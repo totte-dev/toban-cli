@@ -144,6 +144,8 @@ export class Manager {
   onApprovalRequest?: (approval: PendingApproval) => void;
   /** Callback when Manager activity changes (for WS broadcast) */
   onActivityChange?: (activity: string) => void;
+  /** Callback for real-time data updates (sprint, task, etc.) */
+  onDataUpdate?: (entity: string, id: string, changes: Record<string, unknown>) => void;
 
   constructor(options: ManagerOptions) {
     this.apiUrl = options.apiUrl;
@@ -667,6 +669,7 @@ export class Manager {
               }
               const fullId = this.resolveTaskId(id, _context);
               await this.api.updateTask(fullId, updates as Partial<Task>);
+              this.onDataUpdate?.("task", fullId, updates);
               ui.info(`[manager] Updated task ${id}`);
             }
             break;
@@ -697,6 +700,7 @@ export class Manager {
                   body: JSON.stringify({ status }),
                 });
               }
+              this.onDataUpdate?.("sprint", String(_context.sprint.number), { status });
               ui.info(`[manager] Sprint transitioned to ${status}`);
             }
             break;

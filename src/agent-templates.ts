@@ -198,6 +198,8 @@ export interface ActionContext {
   onMerge?: () => boolean;
   /** Retro submit function (injected from runner) */
   onRetro?: () => Promise<void>;
+  /** Broadcast data updates to connected WS clients */
+  onDataUpdate?: (entity: string, id: string, changes: Record<string, unknown>) => void;
 }
 
 /**
@@ -223,6 +225,7 @@ export async function executeActions(
         case "update_task": {
           const updates = action.params ?? {};
           await ctx.api.updateTask(ctx.task.id, updates as Partial<Task>);
+          ctx.onDataUpdate?.("task", ctx.task.id, updates);
           ui.info( `[${phase}] ${label}`);
           break;
         }
@@ -243,6 +246,7 @@ export async function executeActions(
               activity: activity ?? `Task ${ctx.task.id}: ${ctx.task.title}`,
             }),
           });
+          ctx.onDataUpdate?.("agent", ctx.agentName, { status: status ?? "working", activity: activity ?? `Task ${ctx.task.id}` });
           ui.info( `[${phase}] ${label}`);
           break;
         }
@@ -415,6 +419,7 @@ Keep it concise. Reply in the same language as the task title.`;
             // Get commit hash for the merge
             const commitHash = revExec("git rev-parse HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
             await ctx.api.updateTask(ctx.task.id, { review_comment: review, commits: commitHash } as Partial<Task>);
+            ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: review, commits: commitHash });
             ui.info( `[${phase}] ${label}: ${filesChanged.length} files${llmReview ? " + LLM review" : ""}`);
           } catch (revErr) {
             const msg = revErr instanceof Error ? revErr.message : String(revErr);
