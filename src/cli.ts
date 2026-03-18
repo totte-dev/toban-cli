@@ -18,6 +18,7 @@ import { ChatPoller } from "./chat-poller.js";
 import { MessagePoller } from "./message-poller.js";
 import { WS_MSG } from "./ws-types.js";
 import { resolveTaskWorkingDir } from "./git-ops.js";
+import { logError, CLI_ERR } from "./error-logger.js";
 import { ensureGitUser } from "./spawner.js";
 import { setup, type CliArgs, type SetupResult } from "./setup.js";
 import * as ui from "./ui.js";
@@ -117,6 +118,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     try {
       sprintData = await api.fetchSprintData();
     } catch (err) {
+      logError(CLI_ERR.API_REQUEST_FAILED, `Failed to refresh sprint: ${err}`, { phase: "poll" }, err);
       ui.warn(`Failed to refresh sprint: ${err}`);
       await sleep(POLL_INTERVAL_MS);
       continue;
@@ -222,7 +224,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       };
 
       try { await executeActions(agentTemplate.pre_actions, actionCtx, "pre"); }
-      catch (err) { ui.error(`[task] Pre-actions failed: ${err}`); continue; }
+      catch (err) { logError(CLI_ERR.ACTION_FAILED, `Pre-actions failed: ${err}`, { taskId: task.id, phase: "pre" }, err); ui.error(`[task] Pre-actions failed: ${err}`); continue; }
 
       const contextNotes = (task as Record<string, unknown>).context_notes as string | undefined;
       const fullDescription = [task.description, contextNotes].filter(Boolean).join("\n\n") || undefined;
@@ -412,6 +414,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         };
         await executeActions(agentTemplate.post_actions, actionCtx, "post");
       } catch (err) {
+        logError(CLI_ERR.AGENT_SPAWN_FAILED, `Error spawning agent for task ${task.id}: ${err}`, { taskId: task.id, agentName }, err);
         ui.error(`Error spawning agent for task ${task.id}: ${err}`);
         // Use failure post_actions to reset task and notify user
         actionCtx.exitCode = 1;
