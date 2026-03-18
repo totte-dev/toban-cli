@@ -119,6 +119,7 @@ export function connectionInfo(opts: {
   llmProvider?: string;
 }): void {
   const lines = [
+    `${color.dim("Version:")} ${color.bold(`v${VERSION}`)}`,
     `${color.dim("API:")}      ${opts.apiUrl}`,
     `${color.dim("Agent:")}    ${opts.agent}`,
     `${color.dim("Branch:")}   ${opts.branch}`,
