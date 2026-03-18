@@ -86,12 +86,14 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       completion: `IMPORTANT: Work ONLY on the assigned task described above. Do NOT fix other issues you discover, do NOT refactor unrelated code, do NOT add features not requested. If you find other issues, mention them in your RETRO_JSON suggested_tasks instead.
 Focus on files relevant to your task. Do not explore the entire codebase.
 Do NOT run git push — the CLI will handle pushing after you finish.
+Do NOT call curl or any API endpoints directly — the CLI handles all API communication.
 
 When completing a task:
-1. Commit: git add -A && git commit -m "<message>"
-2. Collect your commit hashes: COMMITS=$(git log --format="%H" origin/HEAD..HEAD | tr '\\n' ',' | sed 's/,$//')
-3. Move task to review with summary and commit hashes:
-   curl -s -X PATCH {{apiUrl}}/api/v1/tasks/{{taskId}} -H "Content-Type: application/json" -H "Authorization: Bearer {{apiKey}}" -d "{\\\"status\\\":\\\"review\\\",\\\"review_comment\\\":\\\"<summary of changes, key files>\\\",\\\"commits\\\":\\\"$COMMITS\\\"}"`,
+1. Commit your changes: git add -A && git commit -m "<message>"
+2. Output a completion report on a new line in this exact format:
+COMPLETION_JSON:{"review_comment":"<summary: what was changed, key files, approach taken>","commits":"<comma-separated commit hashes from git log --format=%H origin/HEAD..HEAD>"}
+
+The CLI will automatically update the task status and submit this data. Do NOT manually call any API.`,
     },
   },
   {
@@ -117,11 +119,14 @@ When completing a task:
     prompt: {
       mode_header: "## READ-ONLY MODE — Do NOT modify any files, create commits, or push code.",
       completion: `Your job is to investigate, analyze, and report findings. Use Read, Grep, Glob, and Bash (for read-only commands like ls, git log, etc.) to gather information.
+Do NOT call curl or any API endpoints directly — the CLI handles all API communication.
 
 When your investigation is complete:
 1. Write a clear, detailed summary of your findings.
-2. Move the task to review with your findings as the review comment:
-   curl -s -X PATCH {{apiUrl}}/api/v1/tasks/{{taskId}} -H "Content-Type: application/json" -H "Authorization: Bearer {{apiKey}}" -d "{\\\"status\\\":\\\"review\\\",\\\"review_comment\\\":\\\"<your detailed findings>\\\"}"
+2. Output a completion report on a new line in this exact format:
+COMPLETION_JSON:{"review_comment":"<your detailed findings and recommendations>"}
+
+The CLI will automatically update the task status and submit this data.
 
 DO NOT: git add, git commit, git push, or modify any files. Only read and analyze.`,
       rules: [

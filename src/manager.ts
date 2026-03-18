@@ -35,6 +35,8 @@ interface ManagerContext {
   sprint: {
     number: number;
     status: string;
+    goal?: string | null;
+    deadline?: string | null;
   } | null;
   tasks: Array<{
     id: string;
@@ -56,6 +58,7 @@ interface ManagerContext {
   }>;
   recently_done?: Array<{ title: string; sprint: number }>;
   retro_comments?: string[];
+  adr_summary?: string;
   agents: Array<{
     name: string;
     status: string;
@@ -463,8 +466,8 @@ export class Manager {
       } catch { /* invalid JSON */ }
     }
 
-    const sprintGoal = (ctx.sprint as Record<string, unknown>)?.goal as string | undefined;
-    const sprintDeadline = (ctx.sprint as Record<string, unknown>)?.deadline as string | undefined;
+    const sprintGoal = ctx.sprint?.goal;
+    const sprintDeadline = ctx.sprint?.deadline;
     const sprintInfo = ctx.sprint
       ? `Sprint #${ctx.sprint.number} (${ctx.sprint.status})${sprintGoal ? `\nGoal: ${sprintGoal}` : ""}${sprintDeadline ? `\nDeadline: ${sprintDeadline}` : ""}`
       : "No active sprint";
@@ -542,7 +545,7 @@ export class Manager {
     const actions = loadPromptTemplate("manager-actions");
     const rules = loadPromptTemplate("manager-rules");
     const playbook = ctx.playbook_rules ? `\n## Playbook Rules\n${ctx.playbook_rules}` : "";
-    const adr = (ctx as Record<string, unknown>).adr_summary ? `\n## Architecture Decision Records\n${(ctx as Record<string, unknown>).adr_summary}\nYou MUST follow all ACCEPTED ADRs when making decisions.` : "";
+    const adr = ctx.adr_summary ? `\n## Architecture Decision Records\n${ctx.adr_summary}\nYou MUST follow all ACCEPTED ADRs when making decisions.` : "";
 
     return `${system}\n${this.codebaseSummary}\n${actions}\n${rules}${playbook}${adr}`;
   }
