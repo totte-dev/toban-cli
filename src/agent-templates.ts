@@ -6,6 +6,8 @@
  * templates can be loaded from the API or a YAML config file.
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 
@@ -16,7 +18,7 @@ import * as ui from "./ui.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "submit_retro" | "notify_user" | "shell";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -64,10 +66,12 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
     tools: "all",
     pre_actions: [
       { type: "git_auth_check", label: "Verify git push credentials" },
+      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
       { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
       { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
     ],
     post_actions: [
+      { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "git_push", when: "success", label: "Push main to remote" },
       { type: "review_changes", when: "success", label: "Auto-review code changes" },
@@ -98,10 +102,12 @@ When completing a task:
     },
     tools: ["Read", "Grep", "Glob", "Bash", "Agent"],
     pre_actions: [
+      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
       { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
       { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
     ],
     post_actions: [
+      { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
       { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
@@ -192,6 +198,7 @@ export interface ActionContext {
     baseBranch: string;
     sprintNumber?: number;
     language?: string;
+    engine?: string;
   };
   /** Agent exit code (only available in post_actions) */
   exitCode?: number | null;
@@ -452,6 +459,84 @@ Keep it concise. Reply in ${ctx.config.language === "ja" ? "Japanese" : "English
             execSync(cmd, { cwd: ctx.config.workingDir, stdio: "pipe" });
             ui.info( `[${phase}] ${label}`);
           }
+          break;
+        }
+        case "inject_memory": {
+          // Claude-specific: write agent memories into CLAUDE.md for auto-loading
+          if (ctx.config.engine !== "claude") {
+            ui.debug("template", `inject_memory skipped (engine: ${ctx.config.engine})`);
+            break;
+          }
+          const memories = await ctx.api.fetchAgentMemories(ctx.agentName);
+          if (memories.length === 0) break;
+
+          const memoryBlock = [
+            "<!-- TOBAN_MEMORY_START -->",
+            "# Agent Memory (auto-injected by Toban)",
+            "",
+            ...memories.map((m) => `## ${m.type}: ${m.key}\n${m.content}`),
+            "<!-- TOBAN_MEMORY_END -->",
+          ].join("\n");
+
+          const claudeMdPath = path.join(ctx.config.workingDir, "CLAUDE.md");
+          const existing = fs.existsSync(claudeMdPath)
+            ? fs.readFileSync(claudeMdPath, "utf-8")
+            : "";
+          fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
+          ui.info(`[${phase}] ${label}: ${memories.length} memory entries injected`);
+          break;
+        }
+        case "collect_memory": {
+          // Claude-specific: read .claude/projects/*/memory/*.md and save to API
+          if (ctx.config.engine !== "claude") {
+            ui.debug("template", `collect_memory skipped (engine: ${ctx.config.engine})`);
+            break;
+          }
+          const claudeDir = path.join(ctx.config.workingDir, ".claude");
+          if (!fs.existsSync(claudeDir)) break;
+
+          // Find memory files under .claude/projects/*/memory/
+          const memFiles: string[] = [];
+          const projectsDir = path.join(claudeDir, "projects");
+          if (fs.existsSync(projectsDir)) {
+            for (const proj of fs.readdirSync(projectsDir)) {
+              const memDir = path.join(projectsDir, proj, "memory");
+              if (fs.existsSync(memDir) && fs.statSync(memDir).isDirectory()) {
+                for (const f of fs.readdirSync(memDir)) {
+                  if (f.endsWith(".md") && f !== "MEMORY.md") {
+                    memFiles.push(path.join("projects", proj, "memory", f));
+                  }
+                }
+              }
+            }
+          }
+          if (memFiles.length === 0) break;
+
+          let saved = 0;
+          for (const relFile of memFiles) {
+            try {
+              const content = fs.readFileSync(path.join(claudeDir, relFile), "utf-8");
+              // Parse frontmatter: ---\nname: ...\ntype: ...\n---\nbody
+              const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+              if (!fmMatch) continue;
+
+              const frontmatter = fmMatch[1];
+              const body = fmMatch[2].trim();
+              const getName = frontmatter.match(/^name:\s*(.+)$/m);
+              const getType = frontmatter.match(/^type:\s*(.+)$/m);
+              if (!getName || !getType || !body) continue;
+
+              const key = getName[1].trim();
+              const memType = getType[1].trim();
+              if (!["identity", "feedback", "project", "reference"].includes(memType)) continue;
+
+              await ctx.api.putAgentMemory(ctx.agentName, key, { type: memType, content: body });
+              saved++;
+            } catch {
+              // Skip unparseable files
+            }
+          }
+          if (saved > 0) ui.info(`[${phase}] ${label}: ${saved} memory entries saved`);
           break;
         }
         default:

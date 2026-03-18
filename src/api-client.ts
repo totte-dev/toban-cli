@@ -71,6 +71,12 @@ export interface ProgressReport {
   detail?: string;
 }
 
+export interface AgentMemory {
+  key: string;
+  type: string;
+  content: string;
+}
+
 export interface ApiClient {
   fetchWorkspace(): Promise<WorkspaceInfo>;
   fetchGitToken(): Promise<{ token: string; repo: string | null } | null>;
@@ -93,6 +99,8 @@ export interface ApiClient {
   sendMessage(from: string, to: string, content: string): Promise<void>;
   fetchMySecrets(): Promise<Record<string, string>>;
   fetchApiDocs(agentName: string): Promise<string>;
+  fetchAgentMemories(agentName: string): Promise<AgentMemory[]>;
+  putAgentMemory(agentName: string, key: string, data: { type: string; content: string }): Promise<void>;
 }
 
 export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
@@ -285,6 +293,29 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         return data.prompt ?? "";
       } catch {
         return "";
+      }
+    },
+
+    async fetchAgentMemories(agentName: string): Promise<AgentMemory[]> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/agents/${encodeURIComponent(agentName)}/memories`, { headers });
+        if (!res.ok) return [];
+        const data = (await res.json()) as { memories: AgentMemory[] };
+        return data.memories ?? [];
+      } catch {
+        return [];
+      }
+    },
+
+    async putAgentMemory(agentName: string, key: string, data: { type: string; content: string }): Promise<void> {
+      try {
+        await fetch(`${apiUrl}/api/v1/agents/${encodeURIComponent(agentName)}/memories/${encodeURIComponent(key)}`, {
+          method: "PUT",
+          headers,
+          body: JSON.stringify(data),
+        });
+      } catch {
+        // Non-fatal
       }
     },
   };
