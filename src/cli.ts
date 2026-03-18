@@ -194,6 +194,16 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
             timestamp: new Date().toISOString(),
           });
         },
+        onReviewUpdate: (taskId, phase, reviewComment) => {
+          ctx.wsServer?.broadcast({
+            type: WS_MSG.REVIEW_UPDATE,
+            task_id: taskId,
+            agent_name: cliArgs.agentName,
+            phase,
+            review_comment: reviewComment,
+            timestamp: new Date().toISOString(),
+          });
+        },
       };
 
       try { await executeActions(agentTemplate.pre_actions, actionCtx, "pre"); }
@@ -259,6 +269,16 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
             timestamp: new Date().toISOString(),
           });
         };
+        actionCtx.onReviewUpdate = (taskId, phase, reviewComment) => {
+          ctx.wsServer?.broadcast({
+            type: WS_MSG.REVIEW_UPDATE,
+            task_id: taskId,
+            agent_name: cliArgs.agentName,
+            phase,
+            review_comment: reviewComment,
+            timestamp: new Date().toISOString(),
+          });
+        };
         // Extract COMPLETION_JSON from agent stdout → enrich post_action update_task
         for (const line of runningAgent.stdout) {
           const completionLine = line.startsWith("COMPLETION_JSON:") ? line : null;
@@ -273,6 +293,10 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
                 }
               }
               ui.info(`[completion] Parsed COMPLETION_JSON: ${json.review_comment?.slice(0, 80)}...`);
+              // Broadcast review comment immediately for real-time dashboard update
+              if (json.review_comment) {
+                actionCtx.onReviewUpdate?.(task.id, "agent_submitted", json.review_comment);
+              }
               break;
             } catch { /* skip */ }
           }
@@ -290,6 +314,10 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
                   }
                 }
                 ui.info(`[completion] Parsed COMPLETION_JSON from stream: ${json.review_comment?.slice(0, 80)}...`);
+                // Broadcast review comment immediately for real-time dashboard update
+                if (json.review_comment) {
+                  actionCtx.onReviewUpdate?.(task.id, "agent_submitted", json.review_comment);
+                }
                 break;
               }
             }
