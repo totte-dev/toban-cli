@@ -259,6 +259,43 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
             timestamp: new Date().toISOString(),
           });
         };
+        // Extract COMPLETION_JSON from agent stdout → enrich post_action update_task
+        for (const line of runningAgent.stdout) {
+          const completionLine = line.startsWith("COMPLETION_JSON:") ? line : null;
+          if (completionLine) {
+            try {
+              const json = JSON.parse(completionLine.slice("COMPLETION_JSON:".length));
+              // Inject review_comment and commits into the update_task post_action params
+              for (const action of agentTemplate.post_actions) {
+                if (action.type === "update_task" && action.when === "success" && action.params?.status === "review") {
+                  action.params = { ...action.params, review_comment: json.review_comment, commits: json.commits };
+                  break;
+                }
+              }
+              ui.info(`[completion] Parsed COMPLETION_JSON: ${json.review_comment?.slice(0, 80)}...`);
+              break;
+            } catch { /* skip */ }
+          }
+          // Also try stream-json events
+          try {
+            const event = JSON.parse(line);
+            if (event.type === "result" && typeof event.result === "string") {
+              const match = event.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
+              if (match) {
+                const json = JSON.parse(match[1]);
+                for (const action of agentTemplate.post_actions) {
+                  if (action.type === "update_task" && action.when === "success" && action.params?.status === "review") {
+                    action.params = { ...action.params, review_comment: json.review_comment, commits: json.commits };
+                    break;
+                  }
+                }
+                ui.info(`[completion] Parsed COMPLETION_JSON from stream: ${json.review_comment?.slice(0, 80)}...`);
+                break;
+              }
+            }
+          } catch { /* not JSON */ }
+        }
+
         actionCtx.onRetro = async () => {
           // Extract RETRO_JSON from agent stdout and submit to API
           for (const line of runningAgent.stdout) {
