@@ -750,11 +750,6 @@ export class Manager {
             break;
           }
           case "spawn_agent": {
-            // Block during planning — agents should only run in active phase
-            if (_context.sprint?.status === "planning") {
-              ui.warn(`[manager] spawn_agent blocked: sprint is in planning phase`);
-              break;
-            }
             const { role, task_ids } = action.params as { role: string; task_ids: string[] };
             if (role) {
               const fullIds = (task_ids ?? []).map((id) => this.resolveTaskId(id, _context));
