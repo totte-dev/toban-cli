@@ -528,28 +528,50 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
           break;
         }
         case "inject_memory": {
-          // Claude-specific: write agent memories into CLAUDE.md for auto-loading
+          // Claude-specific: write agent memories + directory hints into CLAUDE.md
           if (ctx.config.engine !== "claude") {
             ui.debug("template", `inject_memory skipped (engine: ${ctx.config.engine})`);
             break;
           }
-          const memories = await ctx.api.fetchAgentMemories(ctx.agentName);
-          if (memories.length === 0) break;
-
-          const memoryBlock = [
-            "<!-- TOBAN_MEMORY_START -->",
-            "# Agent Memory (auto-injected by Toban)",
-            "",
-            ...memories.map((m) => `## ${m.type}: ${m.key}\n${m.content}`),
-            "<!-- TOBAN_MEMORY_END -->",
-          ].join("\n");
 
           const claudeMdPath = path.join(ctx.config.workingDir, "CLAUDE.md");
-          const existing = fs.existsSync(claudeMdPath)
-            ? fs.readFileSync(claudeMdPath, "utf-8")
-            : "";
-          fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
-          ui.info(`[${phase}] ${label}: ${memories.length} memory entries injected`);
+          const hasClaudeMd = fs.existsSync(claudeMdPath);
+          let injected = 0;
+
+          // If no CLAUDE.md exists, generate directory structure hint
+          if (!hasClaudeMd) {
+            try {
+              const { execSync: lsExec } = await import("node:child_process");
+              const tree = lsExec("find . -maxdepth 2 -type d -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.next/*' -not -path '*/.wrangler/*' | head -40", {
+                cwd: ctx.config.workingDir, stdio: "pipe", timeout: 5000,
+              }).toString().trim();
+              const hint = `# Repository Structure (auto-generated)\n\n\`\`\`\n${tree}\n\`\`\`\n\nNote: This file was auto-generated because no CLAUDE.md was found.\n`;
+              fs.writeFileSync(claudeMdPath, hint);
+              ui.info(`[${phase}] Generated CLAUDE.md with directory structure`);
+            } catch { /* non-fatal */ }
+          }
+
+          // Inject agent memories
+          const memories = await ctx.api.fetchAgentMemories(ctx.agentName);
+          if (memories.length > 0) {
+            const memoryBlock = [
+              "<!-- TOBAN_MEMORY_START -->",
+              "# Agent Memory (auto-injected by Toban)",
+              "",
+              ...memories.map((m) => `## ${m.type}: ${m.key}\n${m.content}`),
+              "<!-- TOBAN_MEMORY_END -->",
+            ].join("\n");
+
+            const existing = fs.existsSync(claudeMdPath)
+              ? fs.readFileSync(claudeMdPath, "utf-8")
+              : "";
+            fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
+            injected = memories.length;
+          }
+
+          if (injected > 0 || !hasClaudeMd) {
+            ui.info(`[${phase}] ${label}: ${injected} memories${!hasClaudeMd ? " + dir structure" : ""}`);
+          }
           break;
         }
         case "collect_memory": {
