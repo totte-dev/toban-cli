@@ -185,7 +185,8 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         body: JSON.stringify(data),
       });
       if (!res.ok) {
-        throw new Error(`Failed to update task ${id}: ${res.status} ${res.statusText}`);
+        const errBody = await res.text().catch(() => "");
+        throw new Error(`Failed to update task ${id}: ${res.status} ${res.statusText} — ${errBody.slice(0, 200)}`);
       }
     },
 

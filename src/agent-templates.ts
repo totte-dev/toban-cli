@@ -463,6 +463,15 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
                 const cleanJson = llmReview.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
                 const report = JSON.parse(cleanJson);
                 report.commits = commitHash;
+                // Normalize verdict to match API enum
+                if (report.verdict) {
+                  const v = String(report.verdict).toUpperCase().trim();
+                  if (v.includes("NEEDS") || v.includes("CHANGE") || v.includes("REJECT")) {
+                    report.verdict = "NEEDS_CHANGES";
+                  } else {
+                    report.verdict = "APPROVE";
+                  }
+                }
                 const res = await fetch(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
