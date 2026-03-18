@@ -165,6 +165,16 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       const actionCtx: ActionContext = {
         api, task, agentName: cliArgs.agentName,
         config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number },
+        onDataUpdate: (entity, id, changes) => {
+          ctx.wsServer?.broadcast({
+            type: WS_MSG.DATA_UPDATE,
+            entity,
+            task_id: id,
+            agent_name: entity === "agent" ? id : undefined,
+            changes,
+            timestamp: new Date().toISOString(),
+          });
+        },
       };
 
       try { await executeActions(agentTemplate.pre_actions, actionCtx, "pre"); }
@@ -220,6 +230,16 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
         // All post-completion logic (merge, push, retro, notify, status) is in template
         actionCtx.exitCode = exitCode;
+        actionCtx.onDataUpdate = (entity, id, changes) => {
+          ctx.wsServer?.broadcast({
+            type: WS_MSG.DATA_UPDATE,
+            entity,
+            task_id: id,
+            agent_name: entity === "agent" ? id : undefined,
+            changes,
+            timestamp: new Date().toISOString(),
+          });
+        };
         actionCtx.onRetro = async () => {
           // Extract RETRO_JSON from agent stdout and submit to API
           for (const line of runningAgent.stdout) {

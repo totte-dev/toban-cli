@@ -257,6 +257,7 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
     mgr.onStreamChunk = (chunk) => { wsServer?.broadcast({ type: WS_MSG.CHAT_STREAM, from: "manager", content: chunk, timestamp: new Date().toISOString() }); };
     mgr.onApprovalRequest = (approval) => { wsServer?.broadcast({ type: WS_MSG.APPROVAL_REQUEST, approval_id: approval.id, role: approval.role, task_ids: approval.taskIds, timestamp: new Date().toISOString() }); };
     mgr.onActivityChange = (activity) => { wsServer?.broadcast({ type: WS_MSG.STATUS, from: "manager", content: activity, timestamp: new Date().toISOString() }); };
+    mgr.onDataUpdate = (entity, id, changes) => { wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity, task_id: id, agent_name: entity === "agent" ? id : undefined, changes, timestamp: new Date().toISOString() }); };
     mgr.onToolUse = (tool, summary) => {
       wsServer?.broadcast({ type: WS_MSG.AGENT_ACTIVITY, agent_name: "manager", content: summary, kind: "tool", tool, timestamp: new Date().toISOString() });
     };
