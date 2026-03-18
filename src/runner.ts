@@ -360,7 +360,6 @@ export class AgentRunner {
           name: config.name,
           status,
           activity: activity ?? `Task ${config.taskId}`,
-          parent_agent: config.parentAgent ?? null,
         }),
       });
     } catch {
