@@ -297,45 +297,66 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         }
 
         actionCtx.onRetro = async () => {
-          // Extract RETRO_JSON from agent stdout and submit to API
+          // Extract RETRO_JSON from agent stdout, validate, and submit
           for (const line of runningAgent.stdout) {
+            let raw: string | null = null;
             if (line.startsWith("RETRO_JSON:")) {
+              raw = line.slice("RETRO_JSON:".length);
+            } else {
               try {
-                const json = JSON.parse(line.slice("RETRO_JSON:".length));
-                await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprintData.sprint.number}/retro`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
-                  body: JSON.stringify({
-                    agent_name: agentConfig.name,
-                    went_well: json.went_well || undefined,
-                    to_improve: json.to_improve || undefined,
-                    suggested_tasks: json.suggested_tasks || undefined,
-                  }),
-                });
-                return;
-              } catch { /* skip */ }
-            }
-            // Also try parsing stream-json events for RETRO_JSON
-            try {
-              const event = JSON.parse(line);
-              if (event.type === "result" && typeof event.result === "string") {
-                const match = event.result.match(/RETRO_JSON:(\{[\s\S]*\})/);
-                if (match) {
-                  const json = JSON.parse(match[1]);
-                  await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprintData.sprint.number}/retro`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
-                    body: JSON.stringify({
-                      agent_name: agentConfig.name,
-                      went_well: json.went_well || undefined,
-                      to_improve: json.to_improve || undefined,
-                      suggested_tasks: json.suggested_tasks || undefined,
-                    }),
-                  });
-                  return;
+                const event = JSON.parse(line);
+                if (event.type === "result" && typeof event.result === "string") {
+                  const match = event.result.match(/RETRO_JSON:(\{[\s\S]*\})/);
+                  if (match) raw = match[1];
                 }
+              } catch { /* not JSON */ }
+            }
+            if (!raw) continue;
+
+            try {
+              const json = JSON.parse(raw);
+
+              // Validate: at least one meaningful field required
+              const wentWell = typeof json.went_well === "string" ? json.went_well.trim() : "";
+              const toImprove = typeof json.to_improve === "string" ? json.to_improve.trim() : "";
+              const suggestedTasks = Array.isArray(json.suggested_tasks) ? json.suggested_tasks : [];
+
+              if (!wentWell && !toImprove && suggestedTasks.length === 0) {
+                ui.warn("[retro] RETRO_JSON has no meaningful content — skipped");
+                return;
               }
-            } catch { /* not JSON */ }
+
+              // Reject generic/template responses
+              const genericPatterns = [/^completed?\s*successfully/i, /^nothing/i, /^no\s*issue/i, /^n\/a$/i, /^none$/i];
+              if (wentWell && genericPatterns.some((p) => p.test(wentWell))) {
+                ui.warn(`[retro] went_well is too generic: "${wentWell}" — skipped`);
+                return;
+              }
+
+              // Validate suggested_tasks structure
+              const validTasks = suggestedTasks.filter((t: unknown) =>
+                typeof t === "object" && t !== null && typeof (t as Record<string, unknown>).title === "string"
+              );
+
+              // Length checks (match API schema)
+              const safeWentWell = wentWell.slice(0, 2000) || undefined;
+              const safeToImprove = toImprove.slice(0, 2000) || undefined;
+
+              await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprintData.sprint.number}/retro`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
+                body: JSON.stringify({
+                  agent_name: agentConfig.name,
+                  went_well: safeWentWell,
+                  to_improve: safeToImprove,
+                  suggested_tasks: validTasks.length > 0 ? validTasks : undefined,
+                }),
+              });
+              ui.info(`[retro] Submitted: went_well=${!!safeWentWell}, to_improve=${!!safeToImprove}, tasks=${validTasks.length}`);
+              return;
+            } catch (err) {
+              ui.warn(`[retro] Failed to parse RETRO_JSON: ${err}`);
+            }
           }
         };
         await executeActions(agentTemplate.post_actions, actionCtx, "post");
