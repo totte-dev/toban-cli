@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
+import { logError, CLI_ERR } from "./error-logger.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -303,6 +304,7 @@ export async function executeActions(
             }
           } catch (mergeErr) {
             const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
+            logError(CLI_ERR.GIT_MERGE_FAILED, `git_merge failed: ${msg}`, { taskId: ctx.task.id }, mergeErr);
             ui.warn(`[template] git_merge failed: ${msg}`);
             try { gitExec("git merge --abort", { cwd: repoDir, stdio: "pipe" }); } catch { /* already clean */ }
           }
@@ -346,6 +348,7 @@ export async function executeActions(
               ui.info( `[${phase}] ${label}: pushed ${ctx.config.baseBranch} (after rebase)`);
             } catch (retryErr) {
               const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+              logError(CLI_ERR.GIT_PUSH_FAILED, `git_push failed after rebase: ${msg}`, { taskId: ctx.task.id, repoDir: pushRepoDir }, retryErr);
               ui.warn(`[template] git_push failed after rebase: ${msg}`);
             }
           }
@@ -445,6 +448,7 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
                 }, LLM_TIMEOUT);
               });
             } catch (llmErr) {
+              logError(CLI_ERR.REVIEW_LLM_FAILED, `LLM review failed`, { taskId: ctx.task.id }, llmErr);
               ui.warn(`[review] LLM review failed: ${llmErr instanceof Error ? llmErr.message : llmErr}`);
             }
 
@@ -496,6 +500,7 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
             ui.info( `[${phase}] ${label}: ${filesChanged.length} files${llmReview ? " + LLM review" : ""}`);
           } catch (revErr) {
             const msg = revErr instanceof Error ? revErr.message : String(revErr);
+            logError(CLI_ERR.ACTION_FAILED, `review_changes failed at ${revRepoDir}: ${msg}`, { taskId: ctx.task.id, repoDir: revRepoDir }, revErr);
             ui.warn(`[review] review_changes failed at ${revRepoDir}: ${msg}`);
             ctx.onReviewUpdate?.(ctx.task.id, "failed");
             // Still set a basic comment
@@ -631,6 +636,7 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
           ui.warn(`[template] Unknown action type: ${action.type}`);
       }
     } catch (err) {
+      logError(CLI_ERR.ACTION_FAILED, `${phase} action "${label}" failed`, { taskId: ctx.task.id, action: action.type, phase }, err);
       ui.warn(`[template] ${phase} action "${label}" failed: ${err}`);
     }
   }
