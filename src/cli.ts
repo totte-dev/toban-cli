@@ -197,7 +197,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
 
       const actionCtx: ActionContext = {
-        api, task, agentName: cliArgs.agentName,
+        api, task, agentName,
         config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({
