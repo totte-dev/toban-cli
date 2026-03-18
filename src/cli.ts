@@ -234,8 +234,9 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         // Ensure git user is set before worktree creation
         if (ctx.gitUserInfo) ensureGitUser(taskWorkingDir, ctx.gitUserInfo.name, ctx.gitUserInfo.email);
 
+        // Use parent agent name directly (no child IDs) — prevents DB/UI bloat
         const agentConfig = {
-          name: `${agentName}-${task.id.slice(0, 8)}`,
+          name: agentName,
           type: cliArgs.engine, taskId: task.id, workingDir: taskWorkingDir,
           branch: cliArgs.baseBranch, apiKey: cliArgs.apiKey, apiUrl: cliArgs.apiUrl,
           prompt, parentAgent: cliArgs.agentName, sprintNumber: sprintData.sprint.number,
@@ -243,6 +244,13 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
           ...(ctx.wsPort ? { managerPort: ctx.wsPort } : {}),
           ...(isReadOnly ? { readOnly: true } : {}),
         };
+
+        // Block if same agent name is already running
+        const running = runner.status().find((s) => s.name === agentConfig.name);
+        if (running) {
+          ui.warn(`[task] Agent "${agentConfig.name}" is already running — skipping task ${task.id.slice(0, 8)}`);
+          continue;
+        }
 
         ui.agentSpawned({ agentName: agentConfig.name, taskId: task.id, taskTitle: task.title, docker: !cliArgs.noDocker });
 
