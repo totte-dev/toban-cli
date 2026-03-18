@@ -406,25 +406,11 @@ Description: ${ctx.task.description || "No description"}
 Git diff:
 ${diffForReview}
 
-You MUST respond in the following structured format. Fill in every section — do not skip any.
+You MUST respond with ONLY a JSON object (no markdown, no explanation). Every field is required:
 
-## Requirement Match
-Does the diff address the task requirements? List each requirement and whether it is met.
+{"requirement_match":"Does the diff address the task? List each requirement and whether met.","files_changed":"List each changed file with a one-line summary.","code_quality":"Issues: naming, complexity, error handling, security. Or 'No issues found'.","test_coverage":"Were tests added/updated? Untested paths or edge cases?","risks":"Regressions, breaking changes, deployment concerns. Or 'None identified'.","verdict":"APPROVE or NEEDS_CHANGES (with items to fix)"}
 
-## Files Changed
-List each changed file with a one-line summary of what was modified.
-
-## Code Quality
-Identify any issues: naming, complexity, error handling, security. Say "No issues found" if clean.
-
-## Test Coverage
-Were tests added or updated? Are there untested paths or edge cases?
-
-## Risks
-Any potential regressions, breaking changes, or deployment concerns? Say "None identified" if safe.
-
-## Verdict
-APPROVE or NEEDS_CHANGES (with specific items to fix).`;
+Respond with the JSON object only. No wrapping markdown code blocks.`;
 
               const env = { ...process.env };
               delete env.CLAUDECODE;
@@ -440,20 +426,43 @@ APPROVE or NEEDS_CHANGES (with specific items to fix).`;
               });
             } catch { /* LLM review failed — continue with stats only */ }
 
-            const review = [
-              `Agent: ${ctx.agentName}`,
-              `Commit: ${lastCommit}`,
-              commitBody ? `\n${commitBody}` : "",
-              `\nFiles changed: ${filesChanged.length}`,
-              diffStat,
-              lines > 200 ? `(${lines} lines of diff)` : "",
-              llmReview ? `\n--- Code Review ---\n${llmReview}` : "",
-            ].filter(Boolean).join("\n").slice(0, 4000);
-
             // Get commit hash for the merge
             const commitHash = revExec("git rev-parse HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
-            await ctx.api.updateTask(ctx.task.id, { review_comment: review, commits: commitHash } as Partial<Task>);
-            ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: review, commits: commitHash });
+
+            // Try structured review-report API first
+            let reviewSaved = false;
+            if (llmReview) {
+              try {
+                // Parse LLM output as JSON (strip markdown code blocks if present)
+                const cleanJson = llmReview.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
+                const report = JSON.parse(cleanJson);
+                report.commits = commitHash;
+                const res = await fetch(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
+                  body: JSON.stringify(report),
+                });
+                if (res.ok) {
+                  reviewSaved = true;
+                  ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: JSON.stringify(report), commits: commitHash });
+                }
+              } catch { /* JSON parse failed — fall back to text */ }
+            }
+
+            // Fallback: save as plain text review
+            if (!reviewSaved) {
+              const review = [
+                `Agent: ${ctx.agentName}`,
+                `Commit: ${lastCommit}`,
+                commitBody ? `\n${commitBody}` : "",
+                `\nFiles changed: ${filesChanged.length}`,
+                diffStat,
+                lines > 200 ? `(${lines} lines of diff)` : "",
+                llmReview ? `\n--- Code Review ---\n${llmReview}` : "",
+              ].filter(Boolean).join("\n").slice(0, 4000);
+              await ctx.api.updateTask(ctx.task.id, { review_comment: review, commits: commitHash } as Partial<Task>);
+              ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: review, commits: commitHash });
+            }
             ui.info( `[${phase}] ${label}: ${filesChanged.length} files${llmReview ? " + LLM review" : ""}`);
           } catch (revErr) {
             const msg = revErr instanceof Error ? revErr.message : String(revErr);
