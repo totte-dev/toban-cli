@@ -28,7 +28,7 @@ You MUST take actions by including ACTION blocks in your response. Each ACTION b
 Format: ACTION: <type> <json_params>
 
 Action types:
-- propose_tasks: Propose tasks as interactive cards in the UI. Params is a JSON array: [{"title":"...","description":"...","priority":"p1","owner":"builder","type":"feature"}]. ALWAYS include a detailed "description" that explains: what the problem is, why it matters, and what the expected implementation approach is. Never propose tasks with only a title.
+- propose_tasks: Propose tasks as interactive cards in the UI. Params is a JSON array: [{"title":"...","description":"...","priority":"p1","owner":"builder","type":"feature","story_points":3}]. ALWAYS include a detailed "description" and "story_points" (1/2/3/5/8). Never propose tasks with only a title.
 - spawn_agent: Start an agent. Params: {"role": "builder", "task_ids": ["id1"]}
 - update_task: Update an existing task (status, description, priority, owner, etc.). Params: {"id": "task_id", "status": "in_progress", "owner": "builder"}. Use this to refine/detail existing tasks — do NOT create a new task when an existing one covers the same topic.
 - create_task: Create a genuinely NEW task that does not overlap with any existing task. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder"}. Before creating, check the Tasks and Backlog sections above — if a similar task exists, use update_task instead.
@@ -42,7 +42,7 @@ User: "タスクを提案して"
 Response:
 バックログから優先度の高いタスクを提案します。
 
-ACTION: propose_tasks [{"title":"セットアップ失敗時のロールバック","description":"空プロジェクトが残る問題の修正","priority":"p1","owner":"builder","type":"bug"},{"title":"リポジトリ作成機能を削除","priority":"p1","owner":"builder","type":"chore"}]`,
+ACTION: propose_tasks [{"title":"セットアップ失敗時のロールバック","description":"空プロジェクトが残る問題の修正","priority":"p1","owner":"builder","type":"bug","story_points":3},{"title":"リポジトリ作成機能を削除","description":"不要になった機能を安全に削除","priority":"p1","owner":"builder","type":"chore","story_points":2}]`,
 
   "manager-rules": `## Rules
 - ALWAYS include at least one ACTION block in your response. Responses without ACTION blocks are useless.
@@ -66,11 +66,16 @@ Working directory: {{reposDir}}
   "phases": `## Phase: Planning
 RESTRICTIONS: Do NOT use spawn_agent during Planning. Agents can only be started in Active phase. Do NOT skip to "review" or "retrospective" — the only valid transition is Planning → Active.
 
+If a Sprint Goal is set, all proposed tasks MUST align with it. Explain how each task contributes to the goal.
+
 When proposing tasks, follow this priority order:
-1. Check the Roadmap in the Project Spec — align tasks with the current phase
-2. Check the Backlog section — propose existing backlog tasks before creating new ones
-3. Check Previous Sprint Retro for improvement suggestions
-4. Only if none of the above yield tasks, propose 2-3 new ones
+1. Check the Sprint Goal — propose tasks that directly advance the goal
+2. Check the Roadmap in the Project Spec — align tasks with the current phase
+3. Check the Backlog section — propose existing backlog tasks before creating new ones
+4. Check Previous Sprint Retro for improvement suggestions
+5. Only if none of the above yield tasks, propose 2-3 new ones
+
+Story Points: ALWAYS include "story_points" in each proposed task (1=trivial, 2=small, 3=medium, 5=large, 8=very large). Estimate based on scope and complexity.
 
 IMPORTANT — Avoid duplicate tasks:
 - Before proposing or creating a task, check the Tasks and Backlog lists above for existing tasks with similar titles or goals.

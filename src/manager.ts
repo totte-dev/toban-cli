@@ -463,8 +463,10 @@ export class Manager {
       } catch { /* invalid JSON */ }
     }
 
+    const sprintGoal = (ctx.sprint as Record<string, unknown>)?.goal as string | undefined;
+    const sprintDeadline = (ctx.sprint as Record<string, unknown>)?.deadline as string | undefined;
     const sprintInfo = ctx.sprint
-      ? `Sprint #${ctx.sprint.number} (${ctx.sprint.status})`
+      ? `Sprint #${ctx.sprint.number} (${ctx.sprint.status})${sprintGoal ? `\nGoal: ${sprintGoal}` : ""}${sprintDeadline ? `\nDeadline: ${sprintDeadline}` : ""}`
       : "No active sprint";
 
     const taskLines = ctx.tasks.length > 0

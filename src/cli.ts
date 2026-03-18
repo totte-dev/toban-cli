@@ -122,6 +122,25 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       continue;
     }
 
+    // Timebox: auto-transition to review if deadline has passed
+    const sprint = sprintData.sprint as Record<string, unknown> | undefined;
+    if (sprint?.status === "active" && sprint?.deadline) {
+      const deadline = new Date(sprint.deadline as string).getTime();
+      if (Date.now() > deadline) {
+        ui.warn(`[timebox] Sprint deadline passed — transitioning to review`);
+        try {
+          await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
+            body: JSON.stringify({ status: "review" }),
+          });
+          wsServer?.broadcast({ type: "data_update" as const, entity: "sprint", task_id: String(sprint.number), changes: { status: "review" }, timestamp: new Date().toISOString() });
+        } catch { /* non-fatal */ }
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+    }
+
     const todoTasks = (sprintData.tasks as Task[])
       .filter((t) => t.status === "in_progress" && t.owner !== "user")
       .sort((a, b) => {
