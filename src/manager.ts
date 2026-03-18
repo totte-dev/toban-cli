@@ -18,6 +18,7 @@ import type { AgentRunner } from "./runner.js";
 import { createAuthHeaders, buildConversationHistory } from "./llm-client.js";
 import { createLlmProvider, type LlmProvider } from "./llm-provider.js";
 import { renderPrompt, loadPromptTemplate, renderTemplate, loadPhaseInstructions } from "./prompt-loader.js";
+import { buildSprintStats, formatSprintStats, type TaskInput } from "./sprint-stats.js";
 import { PollLoop } from "./poll-loop.js";
 import * as ui from "./ui.js";
 
@@ -510,7 +511,12 @@ export class Manager {
       ? ctx.retro_comments.map((c) => `  - ${c}`).join("\n")
       : "";
 
-    const phaseInstructions = loadPhaseInstructions(ctx.sprint?.status ?? "unknown");
+    const rawPhaseInstructions = loadPhaseInstructions(ctx.sprint?.status ?? "unknown");
+    // Inject sprint stats into retrospective/completed phase instructions
+    const sprintStatsText = (ctx.sprint?.status === "retrospective" || ctx.sprint?.status === "completed")
+      ? formatSprintStats(buildSprintStats(ctx.tasks as TaskInput[]))
+      : "";
+    const phaseInstructions = renderTemplate(rawPhaseInstructions, { sprintStats: sprintStatsText });
 
     // Build repo access section (only if repos are configured)
     let repoAccess = "";
