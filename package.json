@@ -1,6 +1,6 @@
 {
   "name": "toban-cli",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "Toban Agent Runner CLI - Orchestrate AI coding agents from your terminal",
   "type": "module",
   "bin": {
