@@ -64,6 +64,8 @@ Working directory: {{reposDir}}
 {{repoLines}}`,
 
   "phases": `## Phase: Planning
+RESTRICTIONS: Do NOT use spawn_agent during Planning. Agents can only be started in Active phase. Do NOT skip to "review" or "retrospective" — the only valid transition is Planning → Active.
+
 When proposing tasks, follow this priority order:
 1. Check the Roadmap in the Project Spec — align tasks with the current phase
 2. Check the Backlog section — propose existing backlog tasks before creating new ones
@@ -78,16 +80,19 @@ IMPORTANT — Avoid duplicate tasks:
 
 Keep the ACTION: propose_tasks JSON on a SINGLE LINE (no line breaks inside the JSON array).
 Keep proposals focused (max 5-7 tasks per sprint).
-If the user approves, transition to "active" with ACTION: transition_sprint.
+If the user approves, transition to "active" with ACTION: transition_sprint {"status": "active"}.
 ---phase:active---
 ## Phase: Active
 Manage sprint execution. Use spawn_agent for in_progress tasks.
-If user asks for task suggestions, use propose_tasks. Suggest "review" when all tasks done.
+If user asks for task suggestions, use propose_tasks.
+When all tasks are done or in review, suggest moving to review with ACTION: transition_sprint {"status": "review"}.
+Do NOT skip phases — Active can only transition to Review.
 ---phase:review---
 ## Phase: Review
 Review comments are auto-generated when tasks complete.
 Present the review summary to the user and help them approve/reject tasks.
-If everything looks good, suggest moving to "retrospective" with ACTION: transition_sprint.
+If something needs rework, transition back to "active". If everything looks good, move to "retrospective".
+Do NOT skip to "completed" — Review transitions to Retrospective only.
 ---phase:retrospective---
 ## Phase: Retrospective
 Facilitate retrospective. Summarize results, ask for feedback.
