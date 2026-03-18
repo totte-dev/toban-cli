@@ -54,6 +54,7 @@ interface ManagerContext {
     owner: string | null;
     type: string | null;
   }>;
+  recently_done?: Array<{ title: string; sprint: number }>;
   retro_comments?: string[];
   agents: Array<{
     name: string;
@@ -496,6 +497,10 @@ export class Manager {
         }).join("\n")
       : "";
 
+    const recentlyDoneLines = ctx.recently_done?.length
+      ? ctx.recently_done.map((t) => `  - ${t.title} (Sprint #${t.sprint})`).join("\n")
+      : "";
+
     const retroLines = ctx.retro_comments?.length
       ? ctx.retro_comments.map((c) => `  - ${c}`).join("\n")
       : "";
@@ -526,6 +531,7 @@ export class Manager {
       repoAccess,
       tasks: taskLines,
       backlog: backlogLines ? `\n### Backlog (not in sprint)\n${backlogLines}` : "",
+      recentlyDone: recentlyDoneLines ? `\n### Recently Completed (do NOT re-propose these)\n${recentlyDoneLines}` : "",
       retro: retroLines ? `\n### Previous Sprint Retro\n${retroLines}` : "",
       agents: agentLines,
       phaseInstructions,
