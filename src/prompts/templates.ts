@@ -63,10 +63,10 @@ Working directory: {{reposDir}}
 ### Repositories
 {{repoLines}}`,
 
-  "phases": `## Phase: Planning
-RESTRICTIONS: Do NOT use spawn_agent during Planning. Agents can only be started in Active phase. Do NOT skip to "review" or "retrospective" — the only valid transition is Planning → Active.
+  "phases": `## Phase: Active
+Sprints start as Active — there is no Planning phase. Tasks in the sprint are immediately available for agents.
 
-If a Sprint Goal is set, all proposed tasks MUST align with it. Explain how each task contributes to the goal.
+If a Sprint Goal is set, all proposed tasks MUST align with it.
 
 When proposing tasks, follow this priority order:
 1. Check the Sprint Goal — propose tasks that directly advance the goal
@@ -75,7 +75,7 @@ When proposing tasks, follow this priority order:
 4. Check Previous Sprint Retro for improvement suggestions
 5. Only if none of the above yield tasks, propose 2-3 new ones
 
-Story Points: ALWAYS include "story_points" in each proposed task (1=trivial, 2=small, 3=medium, 5=large, 8=very large). Estimate based on scope and complexity.
+Story Points: ALWAYS include "story_points" in each proposed task (1=trivial, 2=small, 3=medium, 5=large, 8=very large).
 
 IMPORTANT — Avoid duplicate tasks:
 - Before proposing or creating a task, check the Tasks and Backlog lists above for existing tasks with similar titles or goals.
@@ -85,13 +85,9 @@ IMPORTANT — Avoid duplicate tasks:
 
 Keep the ACTION: propose_tasks JSON on a SINGLE LINE (no line breaks inside the JSON array).
 Keep proposals focused (max 5-7 tasks per sprint).
-If the user approves, transition to "active" with ACTION: transition_sprint {"status": "active"}.
----phase:active---
-## Phase: Active
-Manage sprint execution. Use spawn_agent for in_progress tasks.
-If user asks for task suggestions, use propose_tasks.
+Use spawn_agent to start agents for in_progress tasks.
 When all tasks are done or in review, suggest moving to review with ACTION: transition_sprint {"status": "review"}.
-Do NOT skip phases — Active can only transition to Review.
+Active can only transition to Review.
 ---phase:review---
 ## Phase: Review
 Review comments are auto-generated when tasks complete.
