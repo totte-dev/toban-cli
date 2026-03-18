@@ -407,27 +407,33 @@ export async function executeActions(
             let llmReview = "";
             try {
               const { spawn: reviewSpawn } = await import("node:child_process");
-              const diffForReview = diffContent.slice(0, 8000); // Limit diff size for prompt
+              // Keep full diff context but filter out test files for size reduction
+              const diffLines = diffContent.split("\n");
+              const filteredDiff: string[] = [];
+              let inTestFile = false;
+              for (const line of diffLines) {
+                if (line.startsWith("diff --git")) {
+                  inTestFile = /test|spec|__tests__/i.test(line);
+                }
+                if (!inTestFile) filteredDiff.push(line);
+              }
+              const diffForReview = (filteredDiff.join("\n") || diffContent).slice(0, 6000);
               const lang = ctx.config.language === "ja" ? "Japanese" : "English";
-              const reviewPrompt = `You are reviewing code changes made by an AI agent. Reply in ${lang}.
+              const reviewPrompt = `Review this AI agent's code change. Reply in ${lang}. JSON only, no markdown.
 
 Task: ${ctx.task.title}
-Description: ${ctx.task.description || "No description"}
+${ctx.task.description ? `Desc: ${ctx.task.description.slice(0, 200)}` : ""}
 
-Git diff:
+Diff (${filesChanged.length} files, ${lines} lines):
 ${diffForReview}
 
-You MUST respond with ONLY a JSON object (no markdown, no explanation). Every field is required:
-
-{"requirement_match":"Does the diff address the task? List each requirement and whether met.","files_changed":"List each changed file with a one-line summary.","code_quality":"Issues: naming, complexity, error handling, security. Or 'No issues found'.","test_coverage":"Were tests added/updated? Untested paths or edge cases?","risks":"Regressions, breaking changes, deployment concerns. Or 'None identified'.","verdict":"APPROVE or NEEDS_CHANGES (with items to fix)"}
-
-Respond with the JSON object only. No wrapping markdown code blocks.`;
+{"requirement_match":"met or not","files_changed":"file: summary","code_quality":"issues or No issues","test_coverage":"tested or not","risks":"risks or None","verdict":"APPROVE or NEEDS_CHANGES"}`;
 
               const env = { ...process.env };
               delete env.CLAUDECODE;
               const LLM_TIMEOUT = 120_000; // 2 minutes
               llmReview = await new Promise<string>((resolve) => {
-                const child = reviewSpawn("claude", ["--print", "--model", "claude-sonnet-4-20250514", reviewPrompt], {
+                const child = reviewSpawn("claude", ["--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "1", reviewPrompt], {
                   env, stdio: ["ignore", "pipe", "pipe"], timeout: LLM_TIMEOUT,
                 });
                 let out = "";
@@ -455,6 +461,19 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
             // Get commit hash for the merge
             const commitHash = revExec("git rev-parse HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
 
+            // If LLM timed out or failed, generate a stat-based review
+            if (!llmReview) {
+              llmReview = JSON.stringify({
+                requirement_match: "LLM review timed out — manual review recommended",
+                files_changed: filesChanged.map((f) => f).join(", ") || "See diff stat",
+                code_quality: "Unable to assess (LLM timeout)",
+                test_coverage: "Unable to assess (LLM timeout)",
+                risks: "Manual review required — automated review was not completed",
+                verdict: "NEEDS_CHANGES",
+              });
+              ui.info("[review] Generated fallback review (LLM timeout)");
+            }
+
             // Try structured review-report API first
             let reviewSaved = false;
             if (llmReview) {
@@ -463,6 +482,10 @@ Respond with the JSON object only. No wrapping markdown code blocks.`;
                 const cleanJson = llmReview.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
                 const report = JSON.parse(cleanJson);
                 report.commits = commitHash;
+                // Append diff stat to files_changed for context
+                if (diffStat) {
+                  report.files_changed = (report.files_changed || "") + "\n\n" + diffStat;
+                }
                 // Normalize verdict to match API enum
                 if (report.verdict) {
                   const v = String(report.verdict).toUpperCase().trim();
