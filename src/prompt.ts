@@ -189,7 +189,7 @@ Your task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descript
 ${apiDocsBlock}
 ${completionInstructions}
 
-Write a brief retrospective as a JSON comment to stdout on a new line in this format:
-RETRO_JSON:{"went_well":"what went well","to_improve":"what could be improved","suggested_tasks":[{"title":"task title","priority":"p1"}]}
-This helps the team improve in future sprints.`;
+Write a retrospective as a JSON comment to stdout on a new line in this format:
+RETRO_JSON:{"went_well":"<specific accomplishment: what files changed, what problem was solved>","to_improve":"<specific issue: what was harder than expected, what assumptions were wrong, what tooling/docs were missing>","suggested_tasks":[{"title":"<actionable follow-up task>","description":"<why this matters>","priority":"p1"}]}
+Be specific and concrete — avoid generic statements like "completed successfully" or "nothing to improve". Mention actual files, errors encountered, or gaps discovered. suggested_tasks should be real follow-up work you identified during implementation.`;
 }
