@@ -412,7 +412,9 @@ Keep it concise. Reply in the same language as the task title.`;
               llmReview ? `\n--- Code Review ---\n${llmReview}` : "",
             ].filter(Boolean).join("\n").slice(0, 4000);
 
-            await ctx.api.updateTask(ctx.task.id, { review_comment: review } as Partial<Task>);
+            // Get commit hash for the merge
+            const commitHash = revExec("git rev-parse HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
+            await ctx.api.updateTask(ctx.task.id, { review_comment: review, commits: commitHash } as Partial<Task>);
             ui.info( `[${phase}] ${label}: ${filesChanged.length} files${llmReview ? " + LLM review" : ""}`);
           } catch (revErr) {
             const msg = revErr instanceof Error ? revErr.message : String(revErr);
