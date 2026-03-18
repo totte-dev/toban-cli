@@ -1,3 +1,14 @@
+<p align="center">
+  <img src="assets/ogp.svg" alt="toban-cli" width="800" />
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/toban-cli"><img src="https://img.shields.io/npm/v/toban-cli.svg" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/toban-cli"><img src="https://img.shields.io/npm/dm/toban-cli.svg" alt="npm downloads"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="Node.js >= 20"></a>
+</p>
+
 # toban-cli
 
 Orchestrate AI coding agents from your terminal. Toban CLI connects to your [Toban](https://toban.dev) workspace, fetches sprint tasks, and runs Claude Code agents in isolated git worktrees -- fully automated.
@@ -18,11 +29,27 @@ No global install needed. `npx` downloads and runs the latest version.
 
 ## What It Does
 
-- Connects to the Toban API and starts the current sprint
-- Spawns Claude Code agents in isolated git worktrees (one per task)
-- Streams agent activity (tool use, file edits, commands) to the dashboard in real-time
-- Auto-merges completed branches and pushes to the remote
-- Runs a Manager LLM that coordinates sprint planning and agent orchestration
+```
+You (PM)          Toban Dashboard          toban-cli              Agents
+  |                    |                      |                     |
+  |  Create sprint     |                      |                     |
+  +------------------->|                      |                     |
+  |                    |   Fetch tasks        |                     |
+  |                    |<---------------------+                     |
+  |                    |                      |  Spawn in worktree  |
+  |                    |                      +-------------------->|
+  |                    |    Stream activity    |                     |
+  |                    |<---------------------+<--------------------+
+  |  Review & approve  |                      |                     |
+  |<-------------------+                      |   Merge & push      |
+  |                    |                      +-------------------->|
+```
+
+- **Sprint-driven**: Connects to the Toban API and executes tasks from the current sprint
+- **Isolated execution**: Each agent runs in its own git worktree -- no conflicts between parallel tasks
+- **Real-time streaming**: Agent activity (tool use, file edits, commands) streams to the dashboard live
+- **Auto merge & push**: Completed branches are merged to main and pushed automatically
+- **Manager LLM**: A coordinator LLM handles sprint planning, task assignment, and retrospectives
 
 ## Requirements
 
@@ -54,6 +81,23 @@ npx toban-cli@latest start
 | `--engine <type>` | | Agent engine (default: claude) |
 | `--ws-port <port>` | | WebSocket port (default: 4000, 0=auto) |
 | `--debug` | `DEBUG=1` | Verbose output |
+
+## How It Works
+
+1. **Connect** -- CLI authenticates with the Toban API and starts the sprint
+2. **Plan** -- Manager LLM analyzes the backlog and assigns tasks to agents
+3. **Execute** -- Each agent spawns in an isolated git worktree with a focused prompt
+4. **Stream** -- Activity streams to the dashboard via WebSocket in real-time
+5. **Review** -- Completed work is submitted for review with auto-generated comments
+6. **Merge** -- Approved changes are merged to main and pushed to the remote
+
+## Supported Agent Engines
+
+| Engine | Status | Description |
+|--------|--------|-------------|
+| Claude Code | Stable | Primary engine via `@anthropic-ai/claude-code` CLI |
+| Codex CLI | Beta | OpenAI Codex CLI integration |
+| Gemini CLI | Beta | Google Gemini CLI integration |
 
 ## Documentation
 
