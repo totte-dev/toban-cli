@@ -189,10 +189,38 @@ export function buildAgentPrompt(ctx: PromptContext): string {
     ? `\n\n## Past Failures (avoid repeating these)\n${ctx.pastFailures.map((f) => `- [${f.failure_type}] ${f.summary}`).join("\n")}\n`
     : "";
 
-  return `${roleDesc}${langLine}${projectLine}${specBlock}
-${securityRules}${playbookBlock}${repoBlock}${modeHeader}${extraRules}${engineHintLine}
-Your task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descriptionBlock}${failuresBlock}
-${apiDocsBlock}
+  // Context budget: estimate tokens (chars / 4) and trim low-priority sections
+  const TOKEN_BUDGET = 30_000;
+  const estimateTokens = (s: string) => Math.ceil(s.length / 4);
+
+  // Fixed sections (always included)
+  const fixedParts = [roleDesc, langLine, projectLine, modeHeader, extraRules, engineHintLine,
+    `\nYour task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descriptionBlock}`,
+    completionInstructions];
+  const fixedCost = fixedParts.reduce((sum, p) => sum + estimateTokens(p), 0);
+
+  // Variable sections in priority order (highest first, lowest dropped first)
+  const variableSections = [
+    securityRules,
+    playbookBlock,
+    failuresBlock,
+    specBlock,
+    repoBlock,
+    apiDocsBlock,
+  ].filter((s) => s.length > 0);
+
+  let budget = TOKEN_BUDGET - fixedCost;
+  const includedVariable: string[] = [];
+  for (const section of variableSections) {
+    const cost = estimateTokens(section);
+    if (cost <= budget) {
+      includedVariable.push(section);
+      budget -= cost;
+    }
+  }
+
+  return `${roleDesc}${langLine}${projectLine}${includedVariable.join("\n")}${modeHeader}${extraRules}${engineHintLine}
+Your task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descriptionBlock}
 ${completionInstructions}
 
 Write a retrospective as a JSON comment to stdout on a new line in this format:
