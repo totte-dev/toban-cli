@@ -972,9 +972,11 @@ ${outputFormat}`;
               "<!-- TOBAN_MEMORY_END -->",
             ].join("\n");
 
-            const existing = fs.existsSync(claudeMdPath)
+            let existing = fs.existsSync(claudeMdPath)
               ? fs.readFileSync(claudeMdPath, "utf-8")
               : "";
+            // Remove existing memory block to prevent duplicates
+            existing = existing.replace(/<!-- TOBAN_MEMORY_START -->[\s\S]*?<!-- TOBAN_MEMORY_END -->\n?/g, "").trimEnd();
             fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
             injected = memories.length;
           }
