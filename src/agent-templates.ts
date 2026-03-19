@@ -550,6 +550,22 @@ export async function executeActions(
             const lines = diffContent.split("\n").length;
             const filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
 
+            // Run tests before review to include results in the prompt
+            let testResult = "";
+            try {
+              ctx.onReviewUpdate?.(ctx.task.id, "testing");
+              const testOutput = revExec("npm test 2>&1 || true", {
+                cwd: revRepoDir, stdio: "pipe", timeout: 60_000,
+              }).toString().trim();
+              const lastLines = testOutput.split("\n").slice(-10).join("\n");
+              const passed = testOutput.includes("passed") && !testOutput.includes("failed");
+              testResult = passed
+                ? "Tests: ALL PASSED"
+                : `Tests: SOME FAILED\n${lastLines}`;
+            } catch {
+              testResult = "Tests: could not run (no test script or timeout)";
+            }
+
             // LLM review: ask Claude to review the diff against the task requirements
             ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
             let llmReview = "";
@@ -590,8 +606,12 @@ export async function executeActions(
 
               const reviewPrompt = `${reviewSystem}
 
+${testResult}
+
 Diff (${filesChanged.length} files, ${lines} lines):
 ${diffForReview}
+
+If tests failed, verdict MUST be NEEDS_CHANGES.
 
 ${outputFormat}`;
 
