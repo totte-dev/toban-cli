@@ -288,6 +288,45 @@ export async function executeActions(
               // Find worktree path for cleanup
               const worktreeDir = gitJoin(repoDir, ".worktrees", worktreeBranch.replace(/\//g, "-"));
 
+              // Safety check: verify agent actually made commits on the branch
+              const agentCommits = gitExec(
+                `git log ${baseBranch}..${worktreeBranch} --oneline`,
+                { cwd: repoDir, stdio: "pipe" }
+              ).toString().trim();
+
+              if (!agentCommits) {
+                ui.warn(`[${phase}] ${label}: no agent commits on ${worktreeBranch} — skipping merge`);
+                // Clean up the empty branch
+                if (gitExists(worktreeDir)) {
+                  const { rmSync } = await import("node:fs");
+                  try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+                }
+                try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+                try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+                break;
+              }
+
+              // Safety check: verify diff contains real code changes (not just CLAUDE.md / .toban-messages.md)
+              const diffFiles = gitExec(
+                `git diff ${baseBranch}..${worktreeBranch} --name-only`,
+                { cwd: repoDir, stdio: "pipe" }
+              ).toString().trim().split("\n").filter(Boolean);
+              const meaningfulFiles = diffFiles.filter(
+                (f) => !f.startsWith("CLAUDE.md") && !f.startsWith(".claude/") && !f.startsWith(".toban-")
+              );
+
+              if (meaningfulFiles.length === 0) {
+                ui.warn(`[${phase}] ${label}: only metadata files changed (${diffFiles.join(", ")}) — skipping merge`);
+                if (gitExists(worktreeDir)) {
+                  const { rmSync } = await import("node:fs");
+                  try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+                }
+                try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+                try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+                break;
+              }
+
+              ui.info(`[${phase}] ${label}: ${agentCommits.split("\n").length} commit(s), ${meaningfulFiles.length} file(s)`);
               gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
               gitExec(`git merge --no-ff "${worktreeBranch}" -m "merge: ${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
               ui.info( `[${phase}] ${label}: merged ${worktreeBranch}`);
