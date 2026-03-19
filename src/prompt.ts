@@ -44,6 +44,8 @@ export interface PromptContext {
   apiDocs?: string;
   /** Engine-specific prompt hint (e.g. "CLAUDE.md is auto-loaded") */
   engineHint?: string;
+  /** Past failures relevant to this task (from Failure Database) */
+  pastFailures?: Array<{ summary: string; failure_type: string; agent_name: string | null }>;
 }
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -183,9 +185,13 @@ export function buildAgentPrompt(ctx: PromptContext): string {
 
   const engineHintLine = ctx.engineHint ? `\n${ctx.engineHint}` : "";
 
+  const failuresBlock = ctx.pastFailures?.length
+    ? `\n\n## Past Failures (avoid repeating these)\n${ctx.pastFailures.map((f) => `- [${f.failure_type}] ${f.summary}`).join("\n")}\n`
+    : "";
+
   return `${roleDesc}${langLine}${projectLine}${specBlock}
 ${securityRules}${playbookBlock}${repoBlock}${modeHeader}${extraRules}${engineHintLine}
-Your task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descriptionBlock}
+Your task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descriptionBlock}${failuresBlock}
 ${apiDocsBlock}
 ${completionInstructions}
 

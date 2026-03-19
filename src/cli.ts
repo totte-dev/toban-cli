@@ -234,6 +234,10 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       const contextNotes = (task as Record<string, unknown>).context_notes as string | undefined;
       const fullDescription = [task.description, contextNotes].filter(Boolean).join("\n\n") || undefined;
 
+      // Fetch past failures for prompt injection
+      let pastFailures: Array<{ summary: string; failure_type: string; agent_name: string | null }> = [];
+      try { pastFailures = await api.fetchRelevantFailures(); } catch { /* non-fatal */ }
+
       const prompt = buildAgentPrompt({
         role: agentName, projectName: ctx.workspaceName, projectSpec: ctx.workspaceSpec,
         taskId: task.id, taskTitle: task.title,
@@ -244,6 +248,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         playbookRules: (await ctx.api.fetchPlaybookPrompt(agentName)) || ctx.playbookRules,
         targetRepo: task.target_repo ?? undefined,
         apiDocs: apiDocs || undefined, engineHint: getEngine(cliArgs.engine).promptHint,
+        pastFailures: pastFailures.length > 0 ? pastFailures : undefined,
       });
 
       try {

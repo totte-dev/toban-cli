@@ -101,6 +101,7 @@ export interface ApiClient {
   fetchApiDocs(agentName: string): Promise<string>;
   fetchAgentMemories(agentName: string): Promise<AgentMemory[]>;
   putAgentMemory(agentName: string, key: string, data: { type: string; content: string }): Promise<void>;
+  fetchRelevantFailures(): Promise<Array<{ summary: string; failure_type: string; agent_name: string | null; created_at: string }>>;
 }
 
 export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
@@ -317,6 +318,16 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         });
       } catch {
         // Non-fatal
+      }
+    },
+
+    async fetchRelevantFailures(): Promise<Array<{ summary: string; failure_type: string; agent_name: string | null; created_at: string }>> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/failures/relevant?limit=5`, { headers });
+        if (!res.ok) return [];
+        return (await res.json()) as Array<{ summary: string; failure_type: string; agent_name: string | null; created_at: string }>;
+      } catch {
+        return [];
       }
     },
   };
