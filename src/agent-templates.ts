@@ -8,6 +8,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+
+/** Track retry counts per task to prevent infinite NEEDS_CHANGES loops */
+const retryTracker = new Map<string, number>();
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
@@ -244,10 +247,18 @@ export async function executeActions(
       switch (action.type) {
         case "update_task": {
           const updates = { ...(action.params ?? {}) } as Record<string, unknown>;
-          // If review verdict is NEEDS_CHANGES, override status to todo instead of review
+          // If review verdict is NEEDS_CHANGES, check retry count
           if (updates.status === "review" && ctx.reviewVerdict === "NEEDS_CHANGES") {
-            updates.status = "todo";
-            ui.warn(`[${phase}] Review verdict: NEEDS_CHANGES — resetting task to todo`);
+            const MAX_RETRIES = 3;
+            const retryCount = (retryTracker.get(ctx.task.id) ?? 0) + 1;
+            retryTracker.set(ctx.task.id, retryCount);
+            if (retryCount >= MAX_RETRIES) {
+              updates.status = "blocked";
+              ui.error(`[${phase}] Task failed ${retryCount} times — blocked for human review`);
+            } else {
+              updates.status = "todo";
+              ui.warn(`[${phase}] Review verdict: NEEDS_CHANGES (attempt ${retryCount}/${MAX_RETRIES}) — resetting to todo`);
+            }
           }
           await ctx.api.updateTask(ctx.task.id, updates as Partial<Task>);
           ctx.onDataUpdate?.("task", ctx.task.id, updates);
