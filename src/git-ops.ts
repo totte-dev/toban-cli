@@ -14,15 +14,29 @@ import * as ui from "./ui.js";
  */
 export function setupGitCredentialHelper(tobanHome: string, apiUrl: string, apiKey: string): string {
   const helperPath = join(tobanHome, "git-credential-helper.sh");
+  const cachePath = join(tobanHome, ".git-token-cache");
   const script = `#!/bin/sh
 # Toban git credential helper — fetches fresh GitHub App token on demand
+# Caches token for 50 minutes (GitHub App tokens expire in 1 hour)
 if [ "$1" = "get" ]; then
+  CACHE_FILE="${cachePath}"
+  CACHE_MAX_AGE=3000
+  if [ -f "$CACHE_FILE" ]; then
+    CACHE_AGE=$(( $(date +%s) - $(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0) ))
+    if [ "$CACHE_AGE" -lt "$CACHE_MAX_AGE" ]; then
+      cat "$CACHE_FILE"
+      exit 0
+    fi
+  fi
   TOKEN=$(curl -sf -H "Authorization: Bearer ${apiKey}" "${apiUrl}/api/v1/workspace/git-token" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
   if [ -n "$TOKEN" ]; then
-    echo "protocol=https"
-    echo "host=github.com"
-    echo "username=x-access-token"
-    echo "password=$TOKEN"
+    OUTPUT="protocol=https
+host=github.com
+username=x-access-token
+password=$TOKEN"
+    echo "$OUTPUT" > "$CACHE_FILE"
+    chmod 600 "$CACHE_FILE"
+    echo "$OUTPUT"
   fi
 fi
 `;
