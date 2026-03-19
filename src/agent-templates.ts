@@ -208,6 +208,8 @@ export interface ActionContext {
   };
   /** Agent exit code (only available in post_actions) */
   exitCode?: number | null;
+  /** Agent worktree branch name (e.g. agent/builder-abc12345) */
+  agentBranch?: string;
   /** Merge function (injected from runner) */
   onMerge?: () => boolean;
   /** Retro submit function (injected from runner) */
@@ -279,10 +281,15 @@ export async function executeActions(
 
           // Find the agent's worktree branch
           try {
-            const branches = gitExec("git branch", { cwd: repoDir, stdio: "pipe" }).toString();
-            const worktreeBranch = branches.split("\n")
-              .map((b) => b.trim().replace(/^[*+]\s+/, ""))
-              .find((b) => b.startsWith("agent/"));
+            // Prefer the branch name from context (set by spawner) to avoid picking up wrong branches
+            let worktreeBranch = ctx.agentBranch || null;
+            if (!worktreeBranch) {
+              // Fallback: scan for agent/ branches (legacy, less reliable with parallel agents)
+              const branches = gitExec("git branch", { cwd: repoDir, stdio: "pipe" }).toString();
+              worktreeBranch = branches.split("\n")
+                .map((b) => b.trim().replace(/^[*+]\s+/, ""))
+                .find((b) => b.startsWith("agent/")) || null;
+            }
 
             if (worktreeBranch) {
               // Find worktree path for cleanup

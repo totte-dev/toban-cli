@@ -284,6 +284,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
         // All post-completion logic (merge, push, retro, notify, status) is in template
         actionCtx.exitCode = exitCode;
+        actionCtx.agentBranch = runningAgent.branch;
         actionCtx.onDataUpdate = (entity, id, changes) => {
           ctx.wsServer?.broadcast({
             type: WS_MSG.DATA_UPDATE,
