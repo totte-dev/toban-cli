@@ -694,10 +694,12 @@ export async function executeActions(
             setTimeout(() => { if (!resolved) { resolved = true; try { child.kill(); } catch {} resolve(out || ""); } }, REVIEWER_TIMEOUT);
           });
 
-          // Parse COMPLETION_JSON from reviewer output
+          // Parse COMPLETION_JSON from reviewer output (supports COMPLETION_JSON: prefix and ```json blocks)
           let verdict: "APPROVE" | "NEEDS_CHANGES" = "NEEDS_CHANGES";
           let reviewComment = "";
-          const completionMatch = reviewResult.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m);
+          const completionMatch = reviewResult.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m)
+            || reviewResult.match(/```json\s*(\{[\s\S]*?"verdict"[\s\S]*?\})\s*```/m)
+            || reviewResult.match(/(\{[\s\S]*?"verdict"\s*:\s*"(?:APPROVE|NEEDS_CHANGES)"[\s\S]*?\})\s*$/m);
           if (completionMatch) {
             try {
               const report = JSON.parse(completionMatch[1]) as Record<string, unknown>;

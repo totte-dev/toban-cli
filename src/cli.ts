@@ -730,7 +730,9 @@ async function handleReview(apiUrl: string, apiKey: string, taskId?: string, ski
   s.stop("Review complete");
 
   // Parse and display
-  const match = result.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m);
+  const match = result.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m)
+    || result.match(/```json\s*(\{[\s\S]*?"verdict"[\s\S]*?\})\s*```/m)
+    || result.match(/(\{[\s\S]*?"verdict"\s*:\s*"(?:APPROVE|NEEDS_CHANGES)"[\s\S]*?\})\s*$/m);
   if (match) {
     try {
       const report = JSON.parse(match[1]);
