@@ -306,7 +306,7 @@ export async function executeActions(
                 break;
               }
 
-              // Safety check: verify diff contains real code changes (not just CLAUDE.md / .toban-messages.md)
+              // Safety check: verify diff contains real code changes
               const diffFiles = gitExec(
                 `git diff ${baseBranch}..${worktreeBranch} --name-only`,
                 { cwd: repoDir, stdio: "pipe" }
@@ -651,6 +651,15 @@ ${diffForReview}
               : "";
             fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
             injected = memories.length;
+          }
+
+          // Mark CLAUDE.md as assume-unchanged so inject_memory additions don't get committed
+          // Agent can still read the file, but git won't track the memory block changes
+          if (injected > 0 && hasClaudeMd) {
+            try {
+              const { execSync: gitExec2 } = await import("node:child_process");
+              gitExec2("git update-index --assume-unchanged CLAUDE.md", { cwd: ctx.config.workingDir, stdio: "pipe" });
+            } catch { /* non-fatal — worktree may not support this */ }
           }
 
           if (injected > 0 || !hasClaudeMd) {
