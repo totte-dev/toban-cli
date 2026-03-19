@@ -140,6 +140,82 @@ DO NOT: git add, git commit, git push, or modify any files. Only read and analyz
       ],
     },
   },
+  {
+    id: "content",
+    name: "Content / Documentation",
+    match: {
+      task_types: ["content", "docs", "documentation"],
+    },
+    tools: "all",
+    pre_actions: [
+      { type: "git_auth_check", label: "Verify git push credentials" },
+      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
+      { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
+      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
+    ],
+    post_actions: [
+      { type: "collect_memory", when: "success", label: "Collect agent memory" },
+      { type: "git_merge", when: "success", label: "Merge branch to base" },
+      { type: "git_push", when: "success", label: "Push main to remote" },
+      { type: "review_changes", when: "success", label: "Auto-review content changes" },
+      { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
+      { type: "submit_retro", when: "success", label: "Submit retrospective" },
+      { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
+      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
+      { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
+    ],
+    prompt: {
+      completion: `You are writing documentation or content. Focus on clarity, accuracy, and consistency.
+IMPORTANT: Only modify files in docs/ or content directories. Do NOT change application code.
+Do NOT run git push — the CLI will handle pushing after you finish.
+
+When completing a task:
+1. Commit your changes: git add -A && git commit -m "<message>"
+2. Output a completion report on a new line in this exact format:
+COMPLETION_JSON:{"review_comment":"<summary: what docs were created/updated, key changes>","commits":"<commit hashes>"}`,
+      rules: [
+        "Only modify documentation files (docs/, README, etc.)",
+        "Do NOT change application source code",
+        "Verify all links and references are valid",
+      ],
+    },
+  },
+  {
+    id: "strategy",
+    name: "Strategy / Planning",
+    match: {
+      task_types: ["strategy", "planning"],
+    },
+    tools: ["Read", "Grep", "Glob", "Bash", "Agent", "WebSearch", "WebFetch"],
+    pre_actions: [
+      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
+      { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
+      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
+    ],
+    post_actions: [
+      { type: "collect_memory", when: "success", label: "Collect agent memory" },
+      { type: "submit_retro", when: "success", label: "Submit retrospective" },
+      { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
+      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
+      { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
+    ],
+    prompt: {
+      mode_header: "## STRATEGY MODE — Analyze, plan, and propose. Do NOT modify code or infrastructure.",
+      completion: `You are a strategist. Research, analyze, and produce actionable recommendations.
+Use WebSearch and WebFetch for market research, Read/Grep for codebase analysis.
+Do NOT call curl or any API endpoints directly.
+
+When your analysis is complete:
+1. Write a clear, structured report with findings and recommendations.
+2. Output a completion report on a new line:
+COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>"}`,
+      rules: [
+        "You MUST NOT create, edit, write, or delete any files.",
+        "Focus on analysis and recommendations, not implementation.",
+        "Back claims with data or evidence from your research.",
+      ],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -491,15 +567,28 @@ export async function executeActions(
               }
               const diffForReview = (filteredDiff.join("\n") || diffContent).slice(0, 6000);
               const lang = ctx.config.language === "ja" ? "Japanese" : "English";
-              const reviewPrompt = `Review this AI agent's code change. Reply in ${lang}. JSON only, no markdown.
+              const taskType = (ctx.task as Record<string, unknown>).type as string || "implementation";
 
-Task: ${ctx.task.title}
-${ctx.task.description ? `Desc: ${ctx.task.description.slice(0, 200)}` : ""}
+              // Build review prompt from templates (customizable via prompts/templates.ts)
+              const { PROMPT_TEMPLATES } = await import("./prompts/templates.js");
+              const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
+              const reviewSystem = interpolate(PROMPT_TEMPLATES["reviewer-system"] || "", {
+                projectName: ctx.config.workingDir.split("/").pop() || "unknown",
+                language: lang,
+                taskTitle: ctx.task.title,
+                taskType,
+                taskDescription: ctx.task.description || "(no description)",
+                taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
+                customReviewRules: "", // Future: inject from Playbook
+              });
+              const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
+
+              const reviewPrompt = `${reviewSystem}
 
 Diff (${filesChanged.length} files, ${lines} lines):
 ${diffForReview}
 
-{"requirement_match":"met or not","files_changed":"file: summary","code_quality":"issues or No issues","test_coverage":"tested or not","risks":"risks or None","verdict":"APPROVE or NEEDS_CHANGES"}`;
+${outputFormat}`;
 
               const env = { ...process.env };
               delete env.CLAUDECODE;
