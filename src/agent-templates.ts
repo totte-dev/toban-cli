@@ -22,7 +22,7 @@ import { logError, CLI_ERR } from "./error-logger.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -78,7 +78,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "git_push", when: "success", label: "Push main to remote" },
-      { type: "review_changes", when: "success", label: "Auto-review code changes" },
+      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for code review" },
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
       { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
@@ -157,7 +157,7 @@ DO NOT: git add, git commit, git push, or modify any files. Only read and analyz
       { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "git_push", when: "success", label: "Push main to remote" },
-      { type: "review_changes", when: "success", label: "Auto-review content changes" },
+      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for content review" },
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
       { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
@@ -213,6 +213,42 @@ COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>
         "You MUST NOT create, edit, write, or delete any files.",
         "Focus on analysis and recommendations, not implementation.",
         "Back claims with data or evidence from your research.",
+      ],
+    },
+  },
+  {
+    id: "reviewer",
+    name: "Code Reviewer",
+    match: {
+      roles: ["reviewer"],
+    },
+    tools: ["Read", "Grep", "Glob", "Bash", "Agent"],
+    pre_actions: [],
+    post_actions: [],
+    prompt: {
+      mode_header: "## REVIEW MODE — Analyze code changes, run tests, report verdict. Do NOT modify any files.",
+      completion: `You are reviewing code changes for a task. Your job:
+
+1. Run: git diff {{diffRef}} to see the changes
+2. Read relevant source files for context
+3. Run: npm test (check if tests pass)
+4. Evaluate against the criteria below
+
+## Review Criteria
+{{reviewCriteria}}
+
+## Project Review Rules
+{{customReviewRules}}
+
+IMPORTANT: Do NOT modify any files. Do NOT commit. Do NOT push. Only analyze and report.
+
+When done, output your verdict on a new line in this exact format:
+COMPLETION_JSON:{"verdict":"APPROVE or NEEDS_CHANGES","requirement_match":"met/partial/not — explain","files_changed":"file: summary","code_quality":"issues or clean","test_coverage":"tested or not","risks":"risks or none"}`,
+      rules: [
+        "You MUST NOT create, edit, write, or delete any files.",
+        "You MUST NOT run git add, git commit, git push.",
+        "Run tests and read code to inform your review.",
+        "Be strict: if changes don't match the task, verdict = NEEDS_CHANGES.",
       ],
     },
   },
@@ -511,6 +547,132 @@ export async function executeActions(
             await ctx.onRetro();
             ui.info( `[${phase}] ${label}`);
           }
+          break;
+        }
+        case "spawn_reviewer": {
+          ctx.onReviewUpdate?.(ctx.task.id, "started");
+          const { execSync: revExec2 } = await import("node:child_process");
+          const { existsSync: revExists2 } = await import("node:fs");
+          const { spawn: reviewSpawn2 } = await import("node:child_process");
+
+          // Resolve repo root
+          const reviewRepoDir = (() => {
+            if (revExists2(ctx.config.workingDir)) {
+              try {
+                return revExec2("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
+                  .toString().trim().replace(/\/.git$/, "");
+              } catch { /* fall through */ }
+            }
+            return ctx.config.workingDir;
+          })();
+
+          // Get diff ref for the reviewer prompt
+          const diffRef = (() => {
+            try {
+              const parents = revExec2("git cat-file -p HEAD", { cwd: reviewRepoDir, stdio: "pipe" }).toString();
+              const parentCount = (parents.match(/^parent /gm) || []).length;
+              return parentCount === 0 ? "--root HEAD" : "HEAD~1..HEAD";
+            } catch { return "HEAD~1..HEAD"; }
+          })();
+
+          // Get diff stat for context
+          let filesChanged: string[] = [];
+          try {
+            const diffStat = revExec2(`git diff ${diffRef} --stat`, { cwd: reviewRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
+            filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
+          } catch { /* empty */ }
+
+          // Build reviewer prompt
+          const taskType = (ctx.task as Record<string, unknown>).type as string || "implementation";
+          const { PROMPT_TEMPLATES } = await import("./prompts/templates.js");
+          const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
+
+          let customRules = "";
+          try { customRules = await ctx.api.fetchPlaybookPrompt("reviewer") || ""; } catch { /* non-fatal */ }
+
+          const reviewerTemplate = DEFAULT_TEMPLATES.find((t) => t.id === "reviewer")!;
+          const reviewCriteria = [
+            "1. REQUIREMENT MATCH: Do changes address the task description? Unrelated = NEEDS_CHANGES",
+            "2. SCOPE: Limited to what the task asks? Out-of-scope = NEEDS_CHANGES",
+            "3. MEANINGFUL CHANGES: Real code/content? Metadata-only = NEEDS_CHANGES",
+            "4. CODE QUALITY: Readability, security, error handling",
+            `5. ${typeHints[taskType] || typeHints.implementation || ""}`,
+            "",
+            "If tests fail, verdict MUST be NEEDS_CHANGES.",
+            "If changes don't match the task, verdict MUST be NEEDS_CHANGES.",
+          ].join("\n");
+
+          const reviewPrompt = interpolate(reviewerTemplate.prompt.completion, {
+            diffRef,
+            taskTitle: ctx.task.title,
+            taskDescription: ctx.task.description || "(no description)",
+            taskType,
+            reviewCriteria,
+            customReviewRules: customRules ? `\n${customRules}` : "",
+          });
+
+          const fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\nFiles changed: ${filesChanged.join(", ") || "unknown"}\n\n${reviewPrompt}`;
+
+          // Spawn reviewer as agent process
+          ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
+          ui.info(`[${phase}] ${label}: spawning Reviewer agent (${filesChanged.length} files)`);
+
+          const REVIEWER_TIMEOUT = 300_000; // 5 minutes
+          const reviewResult = await new Promise<string>((resolve) => {
+            const env = { ...process.env };
+            delete env.CLAUDECODE;
+            const child = reviewSpawn2("claude", [
+              "--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "5", fullPrompt,
+            ], {
+              env, cwd: reviewRepoDir, stdio: ["ignore", "pipe", "pipe"], timeout: REVIEWER_TIMEOUT,
+            });
+            let out = "";
+            let resolved = false;
+            child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
+            child.stderr?.on("data", () => {}); // consume stderr
+            child.on("close", () => { if (!resolved) { resolved = true; resolve(out); } });
+            child.on("error", () => { if (!resolved) { resolved = true; resolve(out || ""); } });
+            setTimeout(() => { if (!resolved) { resolved = true; try { child.kill(); } catch {} resolve(out || ""); } }, REVIEWER_TIMEOUT);
+          });
+
+          // Parse COMPLETION_JSON from reviewer output
+          let verdict: "APPROVE" | "NEEDS_CHANGES" = "NEEDS_CHANGES";
+          let reviewComment = "";
+          const completionMatch = reviewResult.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m);
+          if (completionMatch) {
+            try {
+              const report = JSON.parse(completionMatch[1]) as Record<string, unknown>;
+              // Normalize verdict
+              const v = String(report.verdict || "").toUpperCase();
+              verdict = (v.includes("APPROVE") && !v.includes("NEEDS")) ? "APPROVE" : "NEEDS_CHANGES";
+              report.verdict = verdict;
+              reviewComment = JSON.stringify(report);
+
+              // Save structured review
+              try {
+                await fetch(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
+                  body: JSON.stringify(report),
+                });
+              } catch { /* fallback below */ }
+            } catch {
+              reviewComment = reviewResult.slice(-2000);
+            }
+          } else {
+            // No COMPLETION_JSON — use raw output as review
+            reviewComment = reviewResult.slice(-2000) || "Reviewer agent produced no output";
+          }
+
+          // Save review comment if not saved via review-report
+          if (!completionMatch) {
+            await ctx.api.updateTask(ctx.task.id, { review_comment: reviewComment } as Partial<Task>);
+          }
+
+          ctx.reviewVerdict = verdict;
+          ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewComment });
+          ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewComment);
+          ui.info(`[${phase}] ${label}: verdict = ${verdict}`);
           break;
         }
         case "review_changes": {
