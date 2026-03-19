@@ -61,10 +61,10 @@ You (PM)          Toban Dashboard          toban-cli              Agents
 
 ```bash
 # Using command-line flags
-npx toban-cli@latest start --api-url https://api.toban.example.com --api-key tb_...
+npx toban-cli@latest start --api-url https://api.toban.dev --api-key tb_...
 
 # Using environment variables
-export TOBAN_API_URL=https://api.toban.example.com
+export TOBAN_API_URL=https://api.toban.dev
 export TOBAN_API_KEY=tb_wsXXX_sk_XXX
 npx toban-cli@latest start
 ```
@@ -95,15 +95,15 @@ npx toban-cli@latest start
 
 | Engine | Status | Description |
 |--------|--------|-------------|
-| Claude Code | Stable | Primary engine via `@anthropic-ai/claude-code` CLI |
-| Codex CLI | Beta | OpenAI Codex CLI integration |
-| Gemini CLI | Beta | Google Gemini CLI integration |
+| Claude Code | Stable | Primary and recommended engine via `@anthropic-ai/claude-code` CLI |
+| Codex CLI | Planned | OpenAI Codex CLI integration |
+| Gemini CLI | Planned | Google Gemini CLI integration |
 
 ## Documentation
 
-- [Getting Started](https://toban.dev/docs/getting-started) -- Full setup walkthrough
-- [Architecture](https://toban.dev/docs/architecture) -- How Toban works under the hood
-- [Agent Execution](https://toban.dev/docs/agent-execution) -- Git worktree isolation model
+- [Getting Started](https://app.toban.dev/docs/getting-started) -- Full setup walkthrough
+- [Architecture](https://app.toban.dev/docs/architecture) -- How Toban works under the hood
+- [Security](https://app.toban.dev/docs/security) -- Security model and agent isolation
 
 ## License
 
