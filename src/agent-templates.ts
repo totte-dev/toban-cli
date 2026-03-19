@@ -641,6 +641,14 @@ export async function executeActions(
           let customRules = "";
           try { customRules = await ctx.api.fetchPlaybookPrompt("reviewer") || ""; } catch { /* non-fatal */ }
 
+          // Inject skills knowledge if task has skills defined
+          const taskSkills = (ctx.task as Record<string, unknown>).skills as string[] | null;
+          if (taskSkills && taskSkills.length > 0) {
+            const { getSkillKnowledge } = await import("./prompts/skills/index.js");
+            const skillRules = getSkillKnowledge(taskSkills);
+            if (skillRules) customRules += "\n\n" + skillRules;
+          }
+
           const reviewerTemplate = DEFAULT_TEMPLATES.find((t) => t.id === "reviewer")!;
           const reviewCriteria = [
             "1. REQUIREMENT MATCH: Do changes address the task description? Unrelated = NEEDS_CHANGES",
@@ -809,10 +817,14 @@ export async function executeActions(
                 taskDescription: ctx.task.description || "(no description)",
                 taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
                 customReviewRules: await (async () => {
-                  try {
-                    const rules = await ctx.api.fetchPlaybookPrompt("reviewer");
-                    return rules ? `\n## Project-Specific Review Rules\n${rules}` : "";
-                  } catch { return ""; }
+                  let rules = "";
+                  try { rules = await ctx.api.fetchPlaybookPrompt("reviewer") || ""; } catch { /* */ }
+                  const taskSkills = (ctx.task as Record<string, unknown>).skills as string[] | null;
+                  if (taskSkills?.length) {
+                    const { getSkillKnowledge } = await import("./prompts/skills/index.js");
+                    rules += "\n\n" + getSkillKnowledge(taskSkills);
+                  }
+                  return rules ? `\n## Project-Specific Review Rules\n${rules}` : "";
                 })()
               });
               const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';

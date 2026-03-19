@@ -651,7 +651,7 @@ async function handleSprintComplete(apiUrl: string, apiKey: string, push: boolea
 // Review command
 // ---------------------------------------------------------------------------
 
-async function handleReview(apiUrl: string, apiKey: string, taskId?: string): Promise<void> {
+async function handleReview(apiUrl: string, apiKey: string, taskId?: string, skills?: string[]): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
   const { spawn } = await import("node:child_process");
   const { execSync: revExec } = await import("node:child_process");
@@ -693,6 +693,14 @@ async function handleReview(apiUrl: string, apiKey: string, taskId?: string): Pr
 
   let customRules = "";
   try { customRules = await api.fetchPlaybookPrompt("reviewer") || ""; } catch { /* non-fatal */ }
+
+  // Inject skills knowledge
+  const activeSkills = skills || (task as Record<string, unknown>).skills as string[] | null || [];
+  if (activeSkills.length > 0) {
+    const { getSkillKnowledge } = await import("./prompts/skills/index.js");
+    customRules += "\n\n" + getSkillKnowledge(activeSkills);
+    ui.info(`[review] Skills injected: ${activeSkills.join(", ")}`);
+  }
 
   const reviewSystem = interpolate(PROMPT_TEMPLATES["reviewer-system"] || "", {
     projectName: cwd.split("/").pop() || "unknown",
@@ -761,7 +769,9 @@ const cliArgs = parseArgs(process.argv);
 if (cliArgs.command === "review") {
   const rawArgs = process.argv.slice(2);
   const taskId = rawArgs[1] && !rawArgs[1].startsWith("--") ? rawArgs[1] : undefined;
-  handleReview(cliArgs.apiUrl, cliArgs.apiKey, taskId).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  const skillIdx = rawArgs.indexOf("--skill");
+  const skills = skillIdx !== -1 && rawArgs[skillIdx + 1] ? rawArgs[skillIdx + 1].split(",") : undefined;
+  handleReview(cliArgs.apiUrl, cliArgs.apiKey, taskId, skills).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
 } else if (cliArgs.command === "sprint") {
   const rawArgs = process.argv.slice(2);
   if (rawArgs[1] === "complete") {
