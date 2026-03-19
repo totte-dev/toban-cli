@@ -224,7 +224,12 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       };
 
       try { await executeActions(agentTemplate.pre_actions, actionCtx, "pre"); }
-      catch (err) { logError(CLI_ERR.ACTION_FAILED, `Pre-actions failed: ${err}`, { taskId: task.id, phase: "pre" }, err); ui.error(`[task] Pre-actions failed: ${err}`); continue; }
+      catch (err) {
+        logError(CLI_ERR.ACTION_FAILED, `Pre-actions failed: ${err}`, { taskId: task.id, phase: "pre" }, err);
+        ui.error(`[task] Pre-actions failed: ${err}`);
+        try { await api.updateTask(task.id, { status: "todo" } as Partial<Task>); } catch { /* non-fatal: reset task status */ }
+        continue;
+      }
 
       const contextNotes = (task as Record<string, unknown>).context_notes as string | undefined;
       const fullDescription = [task.description, contextNotes].filter(Boolean).join("\n\n") || undefined;
@@ -485,7 +490,12 @@ async function handleSprintComplete(apiUrl: string, apiKey: string, push: boolea
   if (sprint.status !== "completed") {
     s.start(`Completing sprint #${sprint.number}...`);
     try { await api.completeSprint(sprint.number); s.stop(`Sprint #${sprint.number} completed`); }
-    catch (err) { s.stop("Failed"); ui.error(`${err}`); process.exit(1); }
+    catch (err) {
+      s.stop("Failed");
+      logError(CLI_ERR.ACTION_FAILED, `Sprint completion failed`, { sprintNumber: sprint.number }, err);
+      ui.error(`Sprint completion failed: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   } else { ui.info(`Sprint #${sprint.number} already completed`); }
 
   const tagName = `sprint-${sprint.number}`;
@@ -501,7 +511,11 @@ async function handleSprintComplete(apiUrl: string, apiKey: string, push: boolea
 
   if (push) {
     try { execSync(`git push origin "${tagName}"`, { stdio: "inherit" }); ui.step(`Pushed ${tagName}`); }
-    catch (err) { ui.error(`Failed to push tag: ${err}`); process.exit(1); }
+    catch (err) {
+      logError(CLI_ERR.ACTION_FAILED, `Failed to push tag ${tagName}`, { tagName }, err);
+      ui.error(`Failed to push tag: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
   }
   ui.outro(`Sprint #${sprint.number} complete`);
 }

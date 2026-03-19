@@ -220,8 +220,10 @@ export class AgentRunner {
       stopDockerAgent(managed.agent.config.name, managed.agent.config.taskId);
     } else if (managed.process.pid) {
       try {
+        // Try killing entire process group first
         process.kill(-managed.process.pid, "SIGTERM");
       } catch {
+        // Group kill may fail (e.g. no process group); fall back to individual process
         managed.process.kill("SIGTERM");
       }
     } else {
