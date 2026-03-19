@@ -227,25 +227,30 @@ COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>
     post_actions: [],
     prompt: {
       mode_header: "## REVIEW MODE — Analyze code changes, run tests, report verdict. Do NOT modify any files.",
-      completion: `You are reviewing code changes for a task. Your job:
+      completion: `You are reviewing code changes for a task. You have LIMITED TURNS — be fast and direct.
 
-1. Run: git diff {{diffRef}} to see the changes
-2. Read relevant source files for context
-3. Run: npm test (check if tests pass)
-4. Evaluate against the criteria below
+## Step 1 (Turn 1): Run these two commands immediately
+- git diff {{diffRef}} --stat
+- npm test 2>&1 | tail -20
+
+## Step 2 (Turn 2-3): Quick analysis
+- If tests failed → verdict is NEEDS_CHANGES, skip to Step 3
+- If diff is empty or metadata-only → verdict is NEEDS_CHANGES, skip to Step 3
+- Glance at changed files — do they match the task description?
+
+## Step 3: Output verdict IMMEDIATELY
+Output COMPLETION_JSON right now. Do NOT do more analysis. Do NOT read additional files.
 
 ## Review Criteria
 {{reviewCriteria}}
 
-## Project Review Rules
 {{customReviewRules}}
 
-IMPORTANT:
-- Do NOT modify any files. Do NOT commit. Do NOT push. Only analyze and report.
-- Be efficient: run git diff and npm test first, then output your verdict. Do not explore the entire codebase.
-- You MUST output COMPLETION_JSON before running out of turns.
+CRITICAL RULES:
+- Do NOT modify any files. Do NOT commit. Do NOT push.
+- Do NOT explore the codebase beyond the diff. Do NOT read unrelated files.
+- Output COMPLETION_JSON within your FIRST 3 TURNS. Every turn without COMPLETION_JSON is wasted.
 
-When done, output your verdict on a new line in this exact format:
 COMPLETION_JSON:{"verdict":"APPROVE or NEEDS_CHANGES","requirement_match":"met/partial/not — explain","files_changed":"file: summary","code_quality":"issues or clean","test_coverage":"tested or not","risks":"risks or none"}`,
       rules: [
         "You MUST NOT create, edit, write, or delete any files.",
@@ -625,7 +630,7 @@ export async function executeActions(
             const env = { ...process.env };
             delete env.CLAUDECODE;
             const child = reviewSpawn2("claude", [
-              "--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "10", fullPrompt,
+              "--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "5", fullPrompt,
             ], {
               env, cwd: reviewRepoDir, stdio: ["ignore", "pipe", "pipe"], timeout: REVIEWER_TIMEOUT,
             });
