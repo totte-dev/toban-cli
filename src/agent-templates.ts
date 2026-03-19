@@ -335,6 +335,8 @@ export interface ActionContext {
   agentBranch?: string;
   /** Review verdict from LLM review (set by review_changes action) */
   reviewVerdict?: "APPROVE" | "NEEDS_CHANGES";
+  /** Hash of HEAD before merge (set by git_merge, used by reviewer for accurate diff) */
+  preMergeHash?: string;
   /** Merge function (injected from runner) */
   onMerge?: () => boolean;
   /** Retro submit function (injected from runner) */
@@ -474,6 +476,8 @@ export async function executeActions(
               }
 
               ui.info(`[${phase}] ${label}: ${agentCommits.split("\n").length} commit(s), ${meaningfulFiles.length} file(s)`);
+              // Record pre-merge hash for accurate diff in reviewer
+              try { ctx.preMergeHash = gitExec("git rev-parse HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(); } catch { /* non-fatal */ }
               gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
               gitExec(`git merge --no-ff "${worktreeBranch}" -m "merge: ${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
               ui.info( `[${phase}] ${label}: merged ${worktreeBranch}`);
@@ -574,8 +578,9 @@ export async function executeActions(
             return ctx.config.workingDir;
           })();
 
-          // Get diff ref for the reviewer prompt
+          // Get diff ref for the reviewer prompt — use preMergeHash for accurate agent-only diff
           const diffRef = (() => {
+            if (ctx.preMergeHash) return `${ctx.preMergeHash}..HEAD`;
             try {
               const parents = revExec2("git cat-file -p HEAD", { cwd: reviewRepoDir, stdio: "pipe" }).toString();
               const parentCount = (parents.match(/^parent /gm) || []).length;
