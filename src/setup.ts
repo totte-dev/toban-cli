@@ -43,6 +43,7 @@ export interface CliArgs {
   wsPort: number;
   debug: boolean;
   engine: AgentType;
+  autoTag: boolean;
 }
 
 /** All state produced by the setup phase, consumed by the main loop */

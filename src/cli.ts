@@ -97,6 +97,7 @@ function parseArgs(argv: string[]): CliArgs {
     wsPort: parseInt(getFlag("--ws-port") ?? "4000", 10),
     debug: args.includes("--debug") || process.env.DEBUG === "1",
     engine: (getFlag("--engine") ?? "claude") as AgentType,
+    autoTag: args.includes("--auto-tag"),
   };
 }
 
@@ -124,8 +125,21 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       continue;
     }
 
-    // Timebox: auto-transition to review if deadline has passed
+    // Auto-tag on sprint completion (opt-in via workspace setting or CLI flag)
     const sprint = sprintData.sprint as Record<string, unknown> | undefined;
+    if (sprint?.status === "completed" && cliArgs.autoTag) {
+      const tagName = `sprint-${sprint.number}`;
+      try {
+        const existing = execSync(`git tag -l "${tagName}"`, { stdio: "pipe" }).toString().trim();
+        if (!existing) {
+          execSync(`git tag "${tagName}"`, { stdio: "pipe" });
+          try { execSync(`git push origin "${tagName}"`, { stdio: "pipe" }); } catch { /* push may fail */ }
+          ui.step(`[sprint] Tagged ${tagName}`);
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // Timebox: auto-transition to review if deadline has passed
     if (sprint?.status === "active" && sprint?.deadline) {
       const deadline = new Date(sprint.deadline as string).getTime();
       if (Date.now() > deadline) {
