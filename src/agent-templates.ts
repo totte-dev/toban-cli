@@ -579,7 +579,12 @@ export async function executeActions(
                 taskType,
                 taskDescription: ctx.task.description || "(no description)",
                 taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
-                customReviewRules: "", // Future: inject from Playbook
+                customReviewRules: await (async () => {
+                  try {
+                    const rules = await ctx.api.fetchPlaybookPrompt("reviewer");
+                    return rules ? `\n## Project-Specific Review Rules\n${rules}` : "";
+                  } catch { return ""; }
+                })()
               });
               const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
 

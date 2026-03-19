@@ -186,6 +186,14 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
       ui.step(`Starting task: ${task.title}`);
 
+      // Pre-check: reject tasks with no meaningful description
+      const desc = task.description || "";
+      if (desc.length < 20 && !(task as Record<string, unknown>).type?.toString().match(/^(chore)$/)) {
+        ui.warn(`[task] Skipping "${task.title}" — description too short (${desc.length} chars). Add details to the task.`);
+        try { await api.updateTask(task.id, { status: "blocked" } as Partial<Task>); } catch { /* non-fatal */ }
+        continue;
+      }
+
       const taskWorkingDir = resolveTaskWorkingDir(
         task, repos, tobanHome, cliArgs.agentName,
         ctx.workingDir, gitToken, gitUserInfo, credentialHelperPath,
