@@ -337,6 +337,8 @@ export interface ActionContext {
   reviewVerdict?: "APPROVE" | "NEEDS_CHANGES";
   /** Hash of HEAD before merge (set by git_merge, used by reviewer for accurate diff) */
   preMergeHash?: string;
+  /** Set to true if git_merge was skipped (no agent commits or metadata-only) */
+  mergeSkipped?: boolean;
   /** Merge function (injected from runner) */
   onMerge?: () => boolean;
   /** Retro submit function (injected from runner) */
@@ -443,6 +445,7 @@ export async function executeActions(
 
               if (!agentCommits) {
                 ui.warn(`[${phase}] ${label}: no agent commits on ${worktreeBranch} — skipping merge`);
+                ctx.mergeSkipped = true;
                 // Clean up the empty branch
                 if (gitExists(worktreeDir)) {
                   const { rmSync } = await import("node:fs");
@@ -466,6 +469,7 @@ export async function executeActions(
 
               if (meaningfulFiles.length === 0) {
                 ui.warn(`[${phase}] ${label}: only metadata files changed (${diffFiles.join(", ")}) — skipping merge`);
+                ctx.mergeSkipped = true;
                 if (gitExists(worktreeDir)) {
                   const { rmSync } = await import("node:fs");
                   try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
@@ -522,6 +526,7 @@ export async function executeActions(
           break;
         }
         case "git_push": {
+          if (ctx.mergeSkipped) { ui.info(`[${phase}] ${label}: skipped (no merge)`); break; }
           const { execSync: pushExec } = await import("node:child_process");
           // Resolve repo root (workingDir may be a worktree)
           const pushRepoDir = pushExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
@@ -562,6 +567,11 @@ export async function executeActions(
           break;
         }
         case "spawn_reviewer": {
+          if (ctx.mergeSkipped) {
+            ui.info(`[${phase}] ${label}: skipped (no merge)`);
+            ctx.reviewVerdict = "NEEDS_CHANGES";
+            break;
+          }
           ctx.onReviewUpdate?.(ctx.task.id, "started");
           const { execSync: revExec2 } = await import("node:child_process");
           const { existsSync: revExists2 } = await import("node:fs");
