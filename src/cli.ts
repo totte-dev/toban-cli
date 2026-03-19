@@ -188,7 +188,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
       const taskWorkingDir = resolveTaskWorkingDir(
         task, repos, tobanHome, cliArgs.agentName,
-        ctx.workingDir, gitToken, gitUserInfo, credentialHelperPath
+        ctx.workingDir, gitToken, gitUserInfo, credentialHelperPath,
+        ctx.mainGithubRepo
       );
 
       const agentName = task.owner ?? "builder";

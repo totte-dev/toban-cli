@@ -172,15 +172,20 @@ export function resolveTaskWorkingDir(
   defaultWorkingDir: string,
   gitToken?: string,
   gitUser?: { name: string; email: string },
-  credHelper?: string
+  credHelper?: string,
+  mainRepo?: string | null
 ): string {
   if (!task.target_repo) {
-    // Use the first registered repo if available (not CLI's CWD)
-    if (repos.length > 0) {
+    // Prefer workspace's main repo (github_repo), then first registered repo
+    const preferred = mainRepo
+      ? repos.find((r) => r.repo_name === mainRepo || r.repo_path.includes(mainRepo))
+      : null;
+    const fallback = preferred || repos[0];
+    if (fallback) {
       try {
-        return ensureAgentRepo(tobanHome, agentName, repos[0], gitToken, gitUser, credHelper);
+        return ensureAgentRepo(tobanHome, agentName, fallback, gitToken, gitUser, credHelper);
       } catch (err) {
-        ui.warn(`Failed to setup default repo ${repos[0].repo_name}: ${err}`);
+        ui.warn(`Failed to setup default repo ${fallback.repo_name}: ${err}`);
       }
     }
     return defaultWorkingDir;

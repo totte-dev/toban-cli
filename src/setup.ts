@@ -62,6 +62,7 @@ export interface SetupResult {
   workspaceSpec: string | undefined;
   playbookRules: string | undefined;
   language: string | undefined;
+  mainGithubRepo: string | undefined;
 }
 
 export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<SetupResult> {
@@ -273,5 +274,6 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
     api, mgr, wsServer, wsPort: actualWsPort, workingDir, tobanHome,
     repos, gitToken, gitUserInfo, credentialHelperPath, sprintData: sprintData!,
     workspaceName, workspaceSpec, playbookRules, language: wsLanguage,
+    mainGithubRepo,
   };
 }
