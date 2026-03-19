@@ -22,11 +22,20 @@
   },
   "keywords": [
     "ai",
+    "ai-agent",
     "agent",
+    "agent-orchestration",
     "cli",
-    "orchestration",
     "claude",
-    "coding-agent"
+    "claude-code",
+    "coding-agent",
+    "scrum",
+    "sprint",
+    "code-review",
+    "devtools",
+    "automation",
+    "git",
+    "worktree"
   ],
   "license": "MIT",
   "engines": {
