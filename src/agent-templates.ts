@@ -605,6 +605,34 @@ export async function executeActions(
             filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
           } catch { /* empty */ }
 
+          // Check diff size — too large means task should be split
+          let diffLineCount = 0;
+          try {
+            const diffRaw = revExec2(`git diff ${diffRef} --stat`, { cwd: reviewRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
+            const lastLine = diffRaw.trim().split("\n").pop() || "";
+            const insertMatch = lastLine.match(/(\d+) insertion/);
+            const deleteMatch = lastLine.match(/(\d+) deletion/);
+            diffLineCount = (parseInt(insertMatch?.[1] || "0") + parseInt(deleteMatch?.[1] || "0"));
+          } catch { /* non-fatal */ }
+
+          if (diffLineCount > 300) {
+            ui.warn(`[${phase}] ${label}: diff too large (${diffLineCount} lines) — NEEDS_CHANGES`);
+            ctx.reviewVerdict = "NEEDS_CHANGES";
+            try {
+              await ctx.api.updateTask(ctx.task.id, {
+                review_comment: JSON.stringify({
+                  verdict: "NEEDS_CHANGES",
+                  requirement_match: "not assessed — diff too large",
+                  files_changed: filesChanged.join(", "),
+                  code_quality: "not assessed",
+                  test_coverage: "not assessed",
+                  risks: `Diff is ${diffLineCount} lines. Task should be split into smaller subtasks for reliable review.`,
+                }),
+              } as Partial<Task>);
+            } catch { /* non-fatal */ }
+            break;
+          }
+
           // Build reviewer prompt
           const taskType = (ctx.task as Record<string, unknown>).type as string || "implementation";
           const { PROMPT_TEMPLATES } = await import("./prompts/templates.js");

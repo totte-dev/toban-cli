@@ -172,7 +172,32 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     const todoForAgents = allTasks.filter((t) => t.status === "todo" && t.owner && agentRoles.includes(t.owner));
 
     // Auto-transition todo → in_progress for agent-owned tasks
+    // SP >= 5 tasks are auto-split into subtasks first
     for (const t of todoForAgents) {
+      const sp = (t as Record<string, unknown>).story_points as number | null;
+      if (sp && sp >= 5) {
+        ui.info(`[auto-split] ${t.id.slice(0, 8)}: SP=${sp} — splitting into subtasks`);
+        try {
+          const subtasks = await splitTaskWithLLM(t, cliArgs);
+          if (subtasks.length > 0) {
+            const sprintNum = (sprintData.sprint as Record<string, unknown>).number as number;
+            for (const sub of subtasks) {
+              await fetch(`${cliArgs.apiUrl}/api/v1/tasks`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
+                body: JSON.stringify({ ...sub, sprint: sprintNum, parent_task: t.id, status: "todo" }),
+              });
+            }
+            await api.updateTask(t.id, { status: "blocked" } as Partial<Task>);
+            ui.info(`[auto-split] Created ${subtasks.length} subtasks, parent blocked`);
+            wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: t.id, changes: { status: "blocked" }, timestamp: new Date().toISOString() });
+            continue;
+          }
+        } catch (err) {
+          ui.warn(`[auto-split] Failed: ${err}`);
+        }
+      }
+
       try {
         await api.updateTask(t.id, { status: "in_progress" } as Partial<Task>);
         t.status = "in_progress" as Task["status"];
@@ -498,6 +523,56 @@ function waitForAgent(runner: AgentRunner, agentName: string): Promise<void> {
     const interval = setInterval(() => {
       if (!runner.status().find((s) => s.name === agentName)) { clearInterval(interval); resolve(); }
     }, 2000);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Auto-split large tasks
+// ---------------------------------------------------------------------------
+
+interface SubtaskDef {
+  title: string;
+  description: string;
+  owner: string;
+  type: string;
+  priority: string;
+  story_points: number;
+}
+
+async function splitTaskWithLLM(task: Task, cliArgs: { apiUrl: string; apiKey: string }): Promise<SubtaskDef[]> {
+  const { spawn } = await import("node:child_process");
+  const prompt = `Split this task into 2-4 smaller subtasks (each 1-3 story points, 1-2 files max).
+
+Task: ${task.title}
+Description: ${task.description || "(none)"}
+Owner: ${task.owner || "builder"}
+Type: ${(task as Record<string, unknown>).type || "feature"}
+
+Output ONLY a JSON array, no markdown:
+[{"title":"...","description":"specific files and acceptance criteria","owner":"builder","type":"feature","priority":"p2","story_points":2}]`;
+
+  return new Promise((resolve) => {
+    const child = spawn("claude", ["--print", "--model", "claude-haiku-4-5-20251001", "--max-turns", "1", prompt], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+    });
+    let out = "";
+    child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
+    child.on("close", () => {
+      try {
+        // Extract JSON array from output
+        const match = out.match(/\[[\s\S]*\]/);
+        if (match) {
+          const subtasks = JSON.parse(match[0]) as SubtaskDef[];
+          if (Array.isArray(subtasks) && subtasks.length >= 2) {
+            resolve(subtasks);
+            return;
+          }
+        }
+      } catch { /* parse failed */ }
+      resolve([]);
+    });
+    child.on("error", () => resolve([]));
   });
 }
 
