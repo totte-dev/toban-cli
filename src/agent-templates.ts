@@ -210,6 +210,8 @@ export interface ActionContext {
   exitCode?: number | null;
   /** Agent worktree branch name (e.g. agent/builder-abc12345) */
   agentBranch?: string;
+  /** Review verdict from LLM review (set by review_changes action) */
+  reviewVerdict?: "APPROVE" | "NEEDS_CHANGES";
   /** Merge function (injected from runner) */
   onMerge?: () => boolean;
   /** Retro submit function (injected from runner) */
@@ -241,7 +243,12 @@ export async function executeActions(
     try {
       switch (action.type) {
         case "update_task": {
-          const updates = action.params ?? {};
+          const updates = { ...(action.params ?? {}) } as Record<string, unknown>;
+          // If review verdict is NEEDS_CHANGES, override status to todo instead of review
+          if (updates.status === "review" && ctx.reviewVerdict === "NEEDS_CHANGES") {
+            updates.status = "todo";
+            ui.warn(`[${phase}] Review verdict: NEEDS_CHANGES — resetting task to todo`);
+          }
           await ctx.api.updateTask(ctx.task.id, updates as Partial<Task>);
           ctx.onDataUpdate?.("task", ctx.task.id, updates);
           ui.info( `[${phase}] ${label}`);
@@ -525,6 +532,7 @@ ${diffForReview}
                 risks: "Manual review required — automated review was not completed",
                 verdict: "NEEDS_CHANGES",
               });
+              ctx.reviewVerdict = "NEEDS_CHANGES";
               ui.info("[review] Generated fallback review (LLM timeout)");
             }
 
@@ -556,6 +564,7 @@ ${diffForReview}
                 });
                 if (res.ok) {
                   reviewSaved = true;
+                  ctx.reviewVerdict = report.verdict as "APPROVE" | "NEEDS_CHANGES";
                   const reviewJson = JSON.stringify(report);
                   ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewJson, commits: commitHash });
                   ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewJson);
