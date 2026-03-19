@@ -68,11 +68,14 @@ Sprints start as Active — there is no Planning phase. Tasks in the sprint are 
 
 If a Sprint Goal is set, all proposed tasks MUST align with it.
 
+IMPORTANT: Do NOT propose tasks that duplicate or overlap with tasks already in the current sprint. Check the Tasks list above first.
+
 When proposing tasks, follow this priority order:
-1. Check the Sprint Goal — propose tasks that directly advance the goal
-2. Check the Roadmap in the Project Spec — align tasks with the current phase
-3. Check the Backlog section — propose existing backlog tasks before creating new ones
-4. Check Previous Sprint Retro for improvement suggestions
+1. Check current sprint tasks — if tasks already exist, do NOT re-propose them
+2. Check the Sprint Goal — propose tasks that directly advance the goal
+3. Check the Roadmap in the Project Spec — align tasks with the current phase
+4. Check the Backlog section — propose existing backlog tasks before creating new ones
+5. Check Previous Sprint Retro for improvement suggestions
 5. Only if none of the above yield tasks, propose 2-3 new ones
 
 Story Points: ALWAYS include "story_points" in each proposed task (1=trivial, 2=small, 3=medium, 5=large, 8=very large).
