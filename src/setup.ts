@@ -5,6 +5,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
+import { fetchAndResetToRemote } from "./git-ops.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AgentRunner } from "./runner.js";
@@ -108,9 +109,7 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
       if (existsSync(join(repoDir, ".git"))) {
         s.start(`Pulling latest for ${ws.github_repo}...`);
         try {
-          execSync("git fetch origin", { cwd: repoDir, stdio: "pipe" });
-          try { execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" }); }
-          catch { execSync("git reset --hard origin/main 2>/dev/null || git reset --hard origin/master", { cwd: repoDir, stdio: "pipe", shell: "/bin/sh" }); }
+          fetchAndResetToRemote(repoDir);
           s.stop(`Repo updated: ${ws.github_repo}`);
         } catch (pullErr) {
           s.stop(`Repo: ${ws.github_repo} (pull failed, using existing)`);
