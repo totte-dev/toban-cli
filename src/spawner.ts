@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execSync } from "node:child_process";
-import { rmSync, existsSync, mkdirSync } from "node:fs";
+import { rmSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import type { AgentConfig, RunningAgent } from "./types.js";
 import { getTerminal, buildShellCommand, type TerminalInfo } from "./terminal.js";
@@ -55,6 +55,22 @@ export function createWorktree(
     } catch { /* branch may already exist */ }
     return repoDir;
   }
+
+  // Symlink node_modules from main repo so tests and builds work in worktree
+  try {
+    const mainNodeModules = path.join(repoDir, "node_modules");
+    const wtNodeModules = path.join(worktreeDir, "node_modules");
+    if (existsSync(mainNodeModules) && !existsSync(wtNodeModules)) {
+      symlinkSync(mainNodeModules, wtNodeModules, "dir");
+    }
+    // Also symlink api/node_modules if it exists (monorepo)
+    const apiMainNm = path.join(repoDir, "api", "node_modules");
+    const apiWtDir = path.join(worktreeDir, "api");
+    const apiWtNm = path.join(apiWtDir, "node_modules");
+    if (existsSync(apiMainNm) && existsSync(apiWtDir) && !existsSync(apiWtNm)) {
+      symlinkSync(apiMainNm, apiWtNm, "dir");
+    }
+  } catch { /* non-fatal — tests may fail but agent can still work */ }
 
   return worktreeDir;
 }
