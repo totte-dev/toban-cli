@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execSync } from "node:child_process";
-import { rmSync, existsSync } from "node:fs";
+import { rmSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { AgentConfig, RunningAgent } from "./types.js";
 import { getTerminal, buildShellCommand, type TerminalInfo } from "./terminal.js";
@@ -35,10 +35,24 @@ export function createWorktree(
   try { execSync("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
   try { execSync(`git branch -D "${branchName}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* may not exist */ }
 
-  execSync(
-    `git worktree add -b "${branchName}" "${worktreeDir}" "${baseBranch}"`,
-    { cwd: repoDir, stdio: "pipe" }
-  );
+  // Check if base branch exists (empty repos may not have any branches)
+  let hasBaseBranch = false;
+  try {
+    execSync(`git rev-parse --verify "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
+    hasBaseBranch = true;
+  } catch { /* branch doesn't exist */ }
+
+  if (hasBaseBranch) {
+    execSync(
+      `git worktree add -b "${branchName}" "${worktreeDir}" "${baseBranch}"`,
+      { cwd: repoDir, stdio: "pipe" }
+    );
+  } else {
+    // Empty repo — create worktree as orphan branch
+    mkdirSync(worktreeDir, { recursive: true });
+    execSync(`git worktree add --detach "${worktreeDir}"`, { cwd: repoDir, stdio: "pipe" });
+    execSync(`git checkout -b "${branchName}"`, { cwd: worktreeDir, stdio: "pipe" });
+  }
 
   return worktreeDir;
 }

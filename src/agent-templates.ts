@@ -352,7 +352,8 @@ export async function executeActions(
         case "git_auth_check": {
           const { execSync: exec } = await import("node:child_process");
           try {
-            exec("git ls-remote --exit-code origin HEAD", {
+            // Use ls-remote without --exit-code (empty repos return exit 2 with --exit-code)
+            exec("git ls-remote origin", {
               cwd: ctx.config.workingDir,
               stdio: "pipe",
               timeout: 15_000,
@@ -360,7 +361,12 @@ export async function executeActions(
             ui.info( `[${phase}] ${label}: ok`);
           } catch (authErr) {
             const msg = authErr instanceof Error ? authErr.message : String(authErr);
-            throw new Error(`Git auth check failed — push will not work. Fix credentials before spawning agent.\n${msg.slice(0, 200)}`);
+            // 403/401 = auth failure, other errors might be network
+            if (msg.includes("403") || msg.includes("401") || msg.includes("denied")) {
+              throw new Error(`Git auth check failed — push will not work. Fix credentials before spawning agent.\n${msg.slice(0, 200)}`);
+            }
+            // Non-auth errors (empty repo, network timeout) — warn but continue
+            ui.warn(`[${phase}] ${label}: ${msg.slice(0, 100)} (continuing anyway)`);
           }
           break;
         }
