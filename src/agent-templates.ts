@@ -437,9 +437,9 @@ export async function executeActions(
             // Get the merge commit and its details
             const lastCommit = revExec("git log --oneline -1", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
             const commitBody = revExec("git log -1 --format=%b", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
-            // Use merge commit diff (HEAD^..HEAD for merge, HEAD~1 for regular)
+            // Use merge commit diff (HEAD^..HEAD for merge, HEAD~1 for regular, --root for initial)
             const parentCount = (revExec("git cat-file -p HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().match(/^parent /gm) || []).length;
-            const diffRef = parentCount >= 2 ? "HEAD^..HEAD" : "HEAD~1";
+            const diffRef = parentCount >= 2 ? "HEAD^..HEAD" : parentCount === 1 ? "HEAD~1" : "--root HEAD";
             const diffStat = revExec(`git diff ${diffRef} --stat`, { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
             const diffContent = revExec(`git diff ${diffRef} --no-color`, { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
 
