@@ -48,10 +48,12 @@ export function createWorktree(
       { cwd: repoDir, stdio: "pipe" }
     );
   } else {
-    // Empty repo — create worktree as orphan branch
-    mkdirSync(worktreeDir, { recursive: true });
-    execSync(`git worktree add --detach "${worktreeDir}"`, { cwd: repoDir, stdio: "pipe" });
-    execSync(`git checkout -b "${branchName}"`, { cwd: worktreeDir, stdio: "pipe" });
+    // Empty repo (no commits, no HEAD) — work directly in the repo dir
+    // Worktrees require at least one commit, so skip worktree creation
+    try {
+      execSync(`git checkout -b "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
+    } catch { /* branch may already exist */ }
+    return repoDir;
   }
 
   return worktreeDir;
