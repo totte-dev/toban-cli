@@ -115,6 +115,15 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
 
   const POLL_INTERVAL_MS = 30_000;
 
+  // Parallel agent slots
+  const { SlotScheduler } = await import("./slot-scheduler.js");
+  const { MergeLock } = await import("./merge-lock.js");
+  const scheduler = new SlotScheduler([
+    { role: "builder", maxConcurrency: 2 },
+    { role: "cloud-engineer", maxConcurrency: 1 },
+  ]);
+  const mergeLock = new MergeLock();
+
   while (!shuttingDown) {
     try {
       sprintData = await api.fetchSprintData();
@@ -198,7 +207,20 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
     for (const task of todoTasks) {
       if (shuttingDown) { ui.warn("Shutting down, skipping remaining tasks"); break; }
 
-      ui.step(`Starting task: ${task.title}`);
+      // Skip if already assigned to a slot
+      if (scheduler.isTaskAssigned(task.id)) continue;
+
+      // Try to acquire a slot
+      const role = task.owner ?? "builder";
+      const slotName = scheduler.acquireSlot(role);
+      if (!slotName) {
+        ui.info(`[parallel] All ${role} slots busy, skipping ${task.id.slice(0, 8)}`);
+        continue;
+      }
+      scheduler.assignTask(slotName, task.id);
+
+      ui.step(`Starting task: ${task.title} [slot: ${slotName}]`);
+      // Note: currently still sequential per slot. Full async dispatch in Phase 2.
 
       // Pre-check: reject tasks with no meaningful description
       const desc = task.description || "";
@@ -453,6 +475,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         // Use failure post_actions to reset task and notify user
         actionCtx.exitCode = 1;
         await executeActions(agentTemplate.post_actions, actionCtx, "post");
+      } finally {
+        scheduler.releaseSlot(slotName);
       }
     }
 
