@@ -240,7 +240,10 @@ COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>
 ## Project Review Rules
 {{customReviewRules}}
 
-IMPORTANT: Do NOT modify any files. Do NOT commit. Do NOT push. Only analyze and report.
+IMPORTANT:
+- Do NOT modify any files. Do NOT commit. Do NOT push. Only analyze and report.
+- Be efficient: run git diff and npm test first, then output your verdict. Do not explore the entire codebase.
+- You MUST output COMPLETION_JSON before running out of turns.
 
 When done, output your verdict on a new line in this exact format:
 COMPLETION_JSON:{"verdict":"APPROVE or NEEDS_CHANGES","requirement_match":"met/partial/not — explain","files_changed":"file: summary","code_quality":"issues or clean","test_coverage":"tested or not","risks":"risks or none"}`,
@@ -622,7 +625,7 @@ export async function executeActions(
             const env = { ...process.env };
             delete env.CLAUDECODE;
             const child = reviewSpawn2("claude", [
-              "--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "5", fullPrompt,
+              "--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "10", fullPrompt,
             ], {
               env, cwd: reviewRepoDir, stdio: ["ignore", "pipe", "pipe"], timeout: REVIEWER_TIMEOUT,
             });
