@@ -311,8 +311,10 @@ export async function executeActions(
                 `git diff ${baseBranch}..${worktreeBranch} --name-only`,
                 { cwd: repoDir, stdio: "pipe" }
               ).toString().trim().split("\n").filter(Boolean);
+              // Filter out inject_memory artifacts only (.claude/ memory dirs, .toban- messages)
+              // CLAUDE.md is meaningful (agent may create/update it as part of the task)
               const meaningfulFiles = diffFiles.filter(
-                (f) => !f.startsWith("CLAUDE.md") && !f.startsWith(".claude/") && !f.startsWith(".toban-")
+                (f) => !f.startsWith(".claude/") && !f.startsWith(".toban-")
               );
 
               if (meaningfulFiles.length === 0) {
