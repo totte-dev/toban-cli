@@ -65,9 +65,13 @@ const ENGINE_MODEL_MAP: Record<string, string> = {
   "claude-opus": "claude-opus-4-6",
   "claude-sonnet": "claude-sonnet-4-6",
   "claude-haiku": "claude-haiku-4-5-20251001",
-  // Legacy names
+  // Provider IDs (stored by Setup as engine type, not model)
+  "claude-code": "claude-sonnet-4-6",
+  "claude-api": "claude-sonnet-4-6",
+  // Legacy model names
   "claude-opus-4-20250514": "claude-opus-4-6",
   "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+  "claude-sonnet-4-5-20250514": "claude-sonnet-4-6",
 };
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
