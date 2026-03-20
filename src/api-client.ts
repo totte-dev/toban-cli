@@ -102,6 +102,7 @@ export interface ApiClient {
   fetchAgentMemories(agentName: string): Promise<AgentMemory[]>;
   putAgentMemory(agentName: string, key: string, data: { type: string; content: string }): Promise<void>;
   fetchRelevantFailures(): Promise<Array<{ summary: string; failure_type: string; agent_name: string | null; created_at: string }>>;
+  recordFailure(data: { task_id: string; failure_type: string; summary: string; agent_name?: string; sprint?: number; review_comment?: string; files_involved?: string }): Promise<void>;
 }
 
 export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
@@ -329,6 +330,16 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       } catch {
         return [];
       }
+    },
+
+    async recordFailure(data: { task_id: string; failure_type: string; summary: string; agent_name?: string; sprint?: number; review_comment?: string; files_involved?: string }): Promise<void> {
+      try {
+        await fetch(`${apiUrl}/api/v1/failures`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(data),
+        });
+      } catch { /* best-effort */ }
     },
   };
 }

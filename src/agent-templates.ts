@@ -56,6 +56,8 @@ export interface AgentTemplate {
     /** Additional rules injected into the prompt */
     rules?: string[];
   };
+  /** Allow task to pass review when agent reports completion without code commits */
+  allow_no_commit_completion?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +70,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
     name: "Implementation (default)",
     match: {},
     tools: "all",
+    allow_no_commit_completion: true,
     pre_actions: [
       { type: "git_auth_check", label: "Verify git push credentials" },
       { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
@@ -103,6 +106,7 @@ The CLI will automatically update the task status and submit this data. Do NOT m
   {
     id: "research",
     name: "Research / Investigation",
+    allow_no_commit_completion: true,
     match: {
       task_types: ["research", "investigation", "analysis", "audit"],
     },
@@ -143,6 +147,7 @@ DO NOT: git add, git commit, git push, or modify any files. Only read and analyz
   {
     id: "content",
     name: "Content / Documentation",
+    allow_no_commit_completion: true,
     match: {
       task_types: ["content", "docs", "documentation"],
     },
@@ -183,6 +188,7 @@ COMPLETION_JSON:{"review_comment":"<summary: what docs were created/updated, key
   {
     id: "strategy",
     name: "Strategy / Planning",
+    allow_no_commit_completion: true,
     match: {
       task_types: ["strategy", "planning"],
     },
@@ -339,6 +345,12 @@ export interface ActionContext {
   preMergeHash?: string;
   /** Set to true if git_merge was skipped (no agent commits or metadata-only) */
   mergeSkipped?: boolean;
+  /** Parsed COMPLETION_JSON from agent output (set by cli.ts after agent finishes) */
+  completionJson?: { review_comment?: string; commits?: string };
+  /** The matched template for this task */
+  template?: AgentTemplate;
+  /** Per-task logger for debugging */
+  taskLog?: { event(name: string, data?: Record<string, unknown>): void };
   /** Merge function (injected from runner) */
   onMerge?: () => boolean;
   /** Retro submit function (injected from runner) */
@@ -376,9 +388,24 @@ export async function executeActions(
             const MAX_RETRIES = 3;
             const retryCount = (retryTracker.get(ctx.task.id) ?? 0) + 1;
             retryTracker.set(ctx.task.id, retryCount);
+
+            // Record failure to Failure DB
+            const reviewComment = typeof ctx.task.review_comment === "string" ? ctx.task.review_comment : undefined;
+            ctx.api.recordFailure({
+              task_id: ctx.task.id,
+              failure_type: "reject",
+              summary: retryCount >= MAX_RETRIES
+                ? `Blocked after ${retryCount} failed attempts: ${ctx.task.title}`
+                : `NEEDS_CHANGES (attempt ${retryCount}): ${ctx.task.title}`,
+              agent_name: ctx.config.agentName,
+              sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+              review_comment: reviewComment,
+            }).catch(() => { /* best-effort */ });
+
             if (retryCount >= MAX_RETRIES) {
-              updates.status = "blocked";
-              ui.error(`[${phase}] Task failed ${retryCount} times — blocked for human review`);
+              updates.status = "review";
+              updates.review_comment = `Blocked: task failed ${retryCount} times. Needs human intervention.`;
+              ui.error(`[${phase}] Task failed ${retryCount} times — moved to review for human intervention`);
             } else {
               updates.status = "todo";
               ui.warn(`[${phase}] Review verdict: NEEDS_CHANGES (attempt ${retryCount}/${MAX_RETRIES}) — resetting to todo`);
@@ -568,8 +595,13 @@ export async function executeActions(
         }
         case "spawn_reviewer": {
           if (ctx.mergeSkipped) {
-            ui.info(`[${phase}] ${label}: skipped (no merge)`);
-            ctx.reviewVerdict = "NEEDS_CHANGES";
+            const allowNoCommit = ctx.template?.allow_no_commit_completion ?? false;
+            if (allowNoCommit && ctx.completionJson?.review_comment) {
+              ui.info(`[${phase}] ${label}: no code changes, agent reported completion — sending to human review`);
+            } else {
+              ui.info(`[${phase}] ${label}: skipped (no merge${!ctx.completionJson ? ", no completion" : ""})`);
+              ctx.reviewVerdict = "NEEDS_CHANGES";
+            }
             break;
           }
           ctx.onReviewUpdate?.(ctx.task.id, "started");
@@ -1093,9 +1125,11 @@ ${outputFormat}`;
         default:
           ui.warn(`[template] Unknown action type: ${action.type}`);
       }
+      ctx.taskLog?.event("action_ok", { action: action.type, label });
     } catch (err) {
       logError(CLI_ERR.ACTION_FAILED, `${phase} action "${label}" failed`, { taskId: ctx.task.id, action: action.type, phase }, err);
       ui.warn(`[template] ${phase} action "${label}" failed: ${err}`);
+      ctx.taskLog?.event("action_error", { action: action.type, label, error: err instanceof Error ? err.message : String(err) });
     }
   }
 }

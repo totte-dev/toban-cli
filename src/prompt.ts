@@ -46,6 +46,8 @@ export interface PromptContext {
   engineHint?: string;
   /** Past failures relevant to this task (from Failure Database) */
   pastFailures?: Array<{ summary: string; failure_type: string; agent_name: string | null }>;
+  /** Previous review comment from a failed attempt (injected on retry) */
+  previousReview?: string;
 }
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -189,6 +191,10 @@ export function buildAgentPrompt(ctx: PromptContext): string {
     ? `\n\n## Past Failures (avoid repeating these)\n${ctx.pastFailures.map((f) => `- [${f.failure_type}] ${f.summary}`).join("\n")}\n`
     : "";
 
+  const previousReviewBlock = ctx.previousReview
+    ? `\n\n## Previous Review (IMPORTANT — fix these issues)\nThis task was previously attempted and rejected. You MUST address the reviewer's feedback:\n${ctx.previousReview}\n`
+    : "";
+
   // Context budget: estimate tokens (chars / 4) and trim low-priority sections
   const TOKEN_BUDGET = 30_000;
   const estimateTokens = (s: string) => Math.ceil(s.length / 4);
@@ -196,6 +202,7 @@ export function buildAgentPrompt(ctx: PromptContext): string {
   // Fixed sections (always included)
   const fixedParts = [roleDesc, langLine, projectLine, modeHeader, extraRules, engineHintLine,
     `\nYour task: ${ctx.taskTitle}${priorityLine}${typeLine}${targetRepoLine}${descriptionBlock}`,
+    previousReviewBlock,
     completionInstructions];
   const fixedCost = fixedParts.reduce((sum, p) => sum + estimateTokens(p), 0);
 

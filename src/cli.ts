@@ -18,6 +18,7 @@ import { ChatPoller } from "./chat-poller.js";
 import { MessagePoller } from "./message-poller.js";
 import { WS_MSG } from "./ws-types.js";
 import { resolveTaskWorkingDir } from "./git-ops.js";
+import { createTaskLogger } from "./task-logger.js";
 import { logError, CLI_ERR } from "./error-logger.js";
 import { ensureGitUser } from "./spawner.js";
 import { setup, type CliArgs, type SetupResult } from "./setup.js";
@@ -268,8 +269,11 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       const isReadOnly = agentTemplate.tools !== "all";
       ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
 
+      const taskLog = createTaskLogger(task.id);
+      taskLog.event("pickup", { agent: agentName, template: agentTemplate.id, title: task.title, taskType, hasReviewComment: !!(task as Record<string, unknown>).review_comment });
+
       const actionCtx: ActionContext = {
-        api, task, agentName,
+        api, task, agentName, template: agentTemplate, taskLog,
         config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({
@@ -308,6 +312,31 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       let pastFailures: Array<{ summary: string; failure_type: string; agent_name: string | null }> = [];
       try { pastFailures = await api.fetchRelevantFailures(); } catch { /* non-fatal */ }
 
+      // Extract previous review feedback for retry injection
+      let previousReview: string | undefined;
+      const taskReviewComment = (task as Record<string, unknown>).review_comment as string | undefined;
+      if (taskReviewComment) {
+        try {
+          const r = JSON.parse(taskReviewComment);
+          if (r.verdict === "NEEDS_CHANGES") {
+            const parts = [`Verdict: ${r.verdict}`];
+            if (r.requirement_match) parts.push(`Requirements: ${r.requirement_match}`);
+            if (r.code_quality) parts.push(`Code quality: ${r.code_quality}`);
+            if (r.risks) parts.push(`Risks: ${r.risks}`);
+            previousReview = parts.join("\n");
+          }
+        } catch {
+          if (taskReviewComment.startsWith("Blocked:") || taskReviewComment.includes("NEEDS_CHANGES")) {
+            previousReview = taskReviewComment;
+          }
+        }
+      }
+
+      if (previousReview) {
+        ui.warn(`Injecting previous review feedback into agent prompt`);
+        taskLog.event("previous_review_injected", { preview: previousReview.slice(0, 200) });
+      }
+
       const prompt = buildAgentPrompt({
         role: agentName, projectName: ctx.workspaceName, projectSpec: ctx.workspaceSpec,
         taskId: task.id, taskTitle: task.title,
@@ -319,6 +348,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         targetRepo: task.target_repo ?? undefined,
         apiDocs: apiDocs || undefined, engineHint: getEngine(cliArgs.engine).promptHint,
         pastFailures: pastFailures.length > 0 ? pastFailures : undefined,
+        previousReview,
       });
 
       try {
@@ -386,6 +416,30 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
           });
         };
         // Extract COMPLETION_JSON from agent stdout → enrich post_action update_task
+        // Extract COMPLETION_JSON or stream result from agent stdout
+        // Fallback: if no COMPLETION_JSON found, check stream-json result event
+        if (!actionCtx.completionJson) {
+          for (const l of runningAgent.stdout) {
+            try {
+              const ev = JSON.parse(l);
+              if (ev.type === "result" && ev.subtype === "success" && typeof ev.result === "string") {
+                // Agent completed successfully but didn't output COMPLETION_JSON
+                // Use the result text as review_comment
+                const resultText = ev.result.slice(0, 2000);
+                actionCtx.completionJson = { review_comment: resultText, commits: "" };
+                for (const action of agentTemplate.post_actions) {
+                  if (action.type === "update_task" && action.when === "success" && action.params?.status === "review") {
+                    action.params = { ...action.params, review_comment: resultText, commits: "" };
+                    break;
+                  }
+                }
+                ui.info(`[completion] Extracted completion from stream result (no COMPLETION_JSON)`);
+                taskLog.event("completion_parse", { source: "stream_result", review_comment: resultText.slice(0, 200) });
+                break;
+              }
+            } catch { /* skip */ }
+          }
+        }
         for (const line of runningAgent.stdout) {
           const completionLine = line.startsWith("COMPLETION_JSON:") ? line : null;
           if (completionLine) {
@@ -398,7 +452,9 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
                   break;
                 }
               }
+              actionCtx.completionJson = { review_comment: json.review_comment, commits: json.commits };
               ui.info(`[completion] Parsed COMPLETION_JSON: ${json.review_comment?.slice(0, 80)}...`);
+              taskLog.event("completion_parse", { source: "completion_json", review_comment: json.review_comment?.slice(0, 200), commits: json.commits });
               // Broadcast review comment immediately for real-time dashboard update
               if (json.review_comment) {
                 actionCtx.onReviewUpdate?.(task.id, "agent_submitted", json.review_comment);
@@ -419,6 +475,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
                     break;
                   }
                 }
+                actionCtx.completionJson = { review_comment: json.review_comment, commits: json.commits };
                 ui.info(`[completion] Parsed COMPLETION_JSON from stream: ${json.review_comment?.slice(0, 80)}...`);
                 // Broadcast review comment immediately for real-time dashboard update
                 if (json.review_comment) {
@@ -493,13 +550,18 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
             }
           }
         };
+        taskLog.stdout(runningAgent.stdout);
+        taskLog.event("post_actions_start", { exitCode, mergeSkipped: actionCtx.mergeSkipped, hasCompletion: !!actionCtx.completionJson, reviewVerdict: actionCtx.reviewVerdict });
         await executeActions(agentTemplate.post_actions, actionCtx, "post");
+        taskLog.event("post_actions_done", { reviewVerdict: actionCtx.reviewVerdict });
+        taskLog.close();
       } catch (err) {
         logError(CLI_ERR.AGENT_SPAWN_FAILED, `Error spawning agent for task ${task.id}: ${err}`, { taskId: task.id, agentName }, err);
         ui.error(`Error spawning agent for task ${task.id}: ${err}`);
-        // Use failure post_actions to reset task and notify user
+        taskLog.event("error", { message: err instanceof Error ? err.message : String(err) });
         actionCtx.exitCode = 1;
         await executeActions(agentTemplate.post_actions, actionCtx, "post");
+        taskLog.close();
       } finally {
         scheduler.releaseSlot(slotName);
       }
