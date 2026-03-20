@@ -203,6 +203,12 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       }
     }
 
+    // Only pick up tasks during active phase — don't start work during review/retro
+    if (sprint?.status !== "active") {
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+
     // Pick up in_progress tasks + auto-start todo tasks owned by agents
     const allTasks = sprintData.tasks as Task[];
     const agentRoles = ["builder", "cloud-engineer", "strategist", "marketer", "operator"];
