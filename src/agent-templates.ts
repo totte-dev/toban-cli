@@ -1035,16 +1035,44 @@ ${outputFormat}`;
             } catch { /* non-fatal */ }
           }
 
-          // Inject agent memories
+          // Inject agent memories + shared memories
           const memories = await ctx.api.fetchAgentMemories(ctx.agentName);
-          if (memories.length > 0) {
+          // Fetch shared memories matching task labels
+          const taskLabels: string[] = (() => {
+            const raw = (ctx.task as Record<string, unknown>).labels;
+            if (Array.isArray(raw)) return raw;
+            if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return []; } }
+            return [];
+          })();
+          let sharedMemories: AgentMemory[] = [];
+          try {
+            const res = await fetch(`${ctx.config.apiUrl}/api/v1/agents/memories/shared${taskLabels.length ? `?tags=${taskLabels.join(",")}` : ""}`, {
+              headers: { Authorization: `Bearer ${ctx.config.apiKey}`, "Content-Type": "application/json" },
+            });
+            if (res.ok) {
+              const data = (await res.json()) as { memories: AgentMemory[] };
+              // Exclude own memories (already in `memories`)
+              const ownKeys = new Set(memories.map((m) => m.key));
+              sharedMemories = data.memories.filter((m) => !ownKeys.has(m.key));
+            }
+          } catch { /* non-fatal */ }
+
+          const allMemories = [...memories, ...sharedMemories];
+          if (allMemories.length > 0) {
+            const ownBlock = memories.length > 0
+              ? memories.map((m) => `## ${m.type}: ${m.key}\n${m.content}`).join("\n\n")
+              : "";
+            const sharedBlock = sharedMemories.length > 0
+              ? `\n# Shared Team Knowledge\n\n${sharedMemories.map((m) => `## ${m.type}: ${m.key} (from @${m.agent_name})\n${m.content}`).join("\n\n")}`
+              : "";
             const memoryBlock = [
               "<!-- TOBAN_MEMORY_START -->",
               "# Agent Memory (auto-injected by Toban)",
               "",
-              ...memories.map((m) => `## ${m.type}: ${m.key}\n${m.content}`),
+              ownBlock,
+              sharedBlock,
               "<!-- TOBAN_MEMORY_END -->",
-            ].join("\n");
+            ].filter(Boolean).join("\n");
 
             let existing = fs.existsSync(claudeMdPath)
               ? fs.readFileSync(claudeMdPath, "utf-8")
@@ -1052,7 +1080,7 @@ ${outputFormat}`;
             // Remove existing memory block to prevent duplicates
             existing = existing.replace(/<!-- TOBAN_MEMORY_START -->[\s\S]*?<!-- TOBAN_MEMORY_END -->\n?/g, "").trimEnd();
             fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
-            injected = memories.length;
+            injected = allMemories.length;
           }
 
           // Mark CLAUDE.md as assume-unchanged so inject_memory additions don't get committed
@@ -1113,7 +1141,13 @@ ${outputFormat}`;
               const memType = getType[1].trim();
               if (!["identity", "feedback", "project", "reference"].includes(memType)) continue;
 
-              await ctx.api.putAgentMemory(ctx.agentName, key, { type: memType, content: body });
+              // Parse optional shared and tags from frontmatter
+              const getShared = frontmatter.match(/^shared:\s*(true|false)$/m);
+              const getTags = frontmatter.match(/^tags:\s*(.+)$/m);
+              const shared = getShared?.[1] === "true";
+              const tags = getTags?.[1]?.trim() || undefined;
+
+              await ctx.api.putAgentMemory(ctx.agentName, key, { type: memType, content: body, shared, tags });
               saved++;
             } catch {
               // Skip unparseable files

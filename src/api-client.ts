@@ -75,6 +75,9 @@ export interface AgentMemory {
   key: string;
   type: string;
   content: string;
+  agent_name?: string;
+  shared?: boolean;
+  tags?: string;
 }
 
 export interface ApiClient {
@@ -100,7 +103,7 @@ export interface ApiClient {
   fetchMySecrets(): Promise<Record<string, string>>;
   fetchApiDocs(agentName: string): Promise<string>;
   fetchAgentMemories(agentName: string): Promise<AgentMemory[]>;
-  putAgentMemory(agentName: string, key: string, data: { type: string; content: string }): Promise<void>;
+  putAgentMemory(agentName: string, key: string, data: { type: string; content: string; shared?: boolean; tags?: string }): Promise<void>;
   fetchRelevantFailures(): Promise<Array<{ summary: string; failure_type: string; agent_name: string | null; created_at: string }>>;
   recordFailure(data: { task_id: string; failure_type: string; summary: string; agent_name?: string; sprint?: number; review_comment?: string; files_involved?: string }): Promise<void>;
 }
@@ -313,7 +316,7 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       }
     },
 
-    async putAgentMemory(agentName: string, key: string, data: { type: string; content: string }): Promise<void> {
+    async putAgentMemory(agentName: string, key: string, data: { type: string; content: string; shared?: boolean; tags?: string }): Promise<void> {
       try {
         await fetch(`${apiUrl}/api/v1/agents/${encodeURIComponent(agentName)}/memories/${encodeURIComponent(key)}`, {
           method: "PUT",
