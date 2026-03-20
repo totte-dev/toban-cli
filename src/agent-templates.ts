@@ -16,6 +16,16 @@ import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
 import { resolveModelForRole } from "./agent-engine.js";
 
+/** Retry fetch on 5xx (D1 transient failures) */
+async function fetchRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
+  for (let i = 0; i <= retries; i++) {
+    const res = await fetch(url, options);
+    if (res.ok || res.status < 500 || i === retries) return res;
+    await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+  }
+  return fetch(url, options);
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -774,7 +784,7 @@ Output format: ${outputFormat}`;
 
               // Save structured review
               try {
-                await fetch(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
+                await fetchRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
                   body: JSON.stringify(report),
@@ -973,7 +983,7 @@ ${outputFormat}`;
                     report.verdict = "APPROVE";
                   }
                 }
-                const res = await fetch(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
+                const res = await fetchRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
                   body: JSON.stringify(report),

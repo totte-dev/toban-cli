@@ -108,6 +108,16 @@ export interface ApiClient {
   recordFailure(data: { task_id: string; failure_type: string; summary: string; agent_name?: string; sprint?: number; review_comment?: string; files_involved?: string }): Promise<void>;
 }
 
+/** Retry a fetch call on 5xx errors (D1 transient failures) */
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(url, options);
+    if (res.ok || res.status < 500 || attempt === maxRetries) return res;
+    await new Promise((r) => setTimeout(r, 500 * (attempt + 1))); // 500ms, 1000ms
+  }
+  return fetch(url, options); // unreachable, but type-safe
+}
+
 export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
   const headers = {
     "Content-Type": "application/json",
@@ -184,7 +194,7 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
     },
 
     async updateTask(id: string, data: Partial<Task>): Promise<void> {
-      const res = await fetch(`${apiUrl}/api/v1/tasks/${id}`, {
+      const res = await fetchWithRetry(`${apiUrl}/api/v1/tasks/${id}`, {
         method: "PATCH",
         headers,
         body: JSON.stringify(data),
