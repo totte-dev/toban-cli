@@ -597,13 +597,14 @@ export async function executeActions(
         case "spawn_reviewer": {
           if (ctx.mergeSkipped) {
             const allowNoCommit = ctx.template?.allow_no_commit_completion ?? false;
-            if (allowNoCommit && ctx.completionJson?.review_comment) {
-              ui.info(`[${phase}] ${label}: no code changes, agent reported completion — sending to human review`);
-            } else {
+            if (!allowNoCommit || !ctx.completionJson?.review_comment) {
               ui.info(`[${phase}] ${label}: skipped (no merge${!ctx.completionJson ? ", no completion" : ""})`);
               ctx.reviewVerdict = "NEEDS_CHANGES";
+              break;
             }
-            break;
+            // No commits but agent reported completion — still run Reviewer
+            // to verify the claim (e.g. "already implemented")
+            ui.info(`[${phase}] ${label}: no code changes, running Reviewer to verify completion`);
           }
           ctx.onReviewUpdate?.(ctx.task.id, "started");
           const { execSync: revExec2 } = await import("node:child_process");
@@ -681,28 +682,52 @@ export async function executeActions(
           })();
           try { customRules = await ctx.api.fetchPlaybookPrompt("reviewer", taskLabels) || ""; } catch { /* non-fatal */ }
 
-          const reviewerTemplate = DEFAULT_TEMPLATES.find((t) => t.id === "reviewer")!;
-          const reviewCriteria = [
-            "1. REQUIREMENT MATCH: Do changes address the task description? Unrelated = NEEDS_CHANGES",
-            "2. SCOPE: Limited to what the task asks? Out-of-scope = NEEDS_CHANGES",
-            "3. MEANINGFUL CHANGES: Real code/content? Metadata-only = NEEDS_CHANGES",
-            "4. CODE QUALITY: Readability, security, error handling",
-            `5. ${typeHints[taskType] || typeHints.implementation || ""}`,
-            "",
-            "If tests fail, verdict MUST be NEEDS_CHANGES.",
-            "If changes don't match the task, verdict MUST be NEEDS_CHANGES.",
-          ].join("\n");
+          let fullPrompt: string;
 
-          const reviewPrompt = interpolate(reviewerTemplate.prompt.completion, {
-            diffRef,
-            taskTitle: ctx.task.title,
-            taskDescription: ctx.task.description || "(no description)",
-            taskType,
-            reviewCriteria,
-            customReviewRules: customRules ? `\n${customRules}` : "",
-          });
+          if (ctx.mergeSkipped && ctx.completionJson?.review_comment) {
+            // No code changes — Reviewer verifies the agent's completion claim
+            const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
+            fullPrompt = `You are a strict code reviewer for project.
+Task: ${ctx.task.title}
+Type: ${taskType}
+Description: ${ctx.task.description || "(no description)"}
 
-          const fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\nFiles changed: ${filesChanged.join(", ") || "unknown"}\n\n${reviewPrompt}`;
+The Builder agent reported NO CODE CHANGES were needed:
+"${ctx.completionJson.review_comment}"
+
+Verify this claim:
+1. Check if the task requirements are actually already met in the codebase
+2. Run tests if applicable (npm test)
+3. If the agent's claim is correct and the task is truly complete, verdict = APPROVE
+4. If the task is NOT actually complete, verdict = NEEDS_CHANGES with explanation
+
+${customRules}
+
+Output format: ${outputFormat}`;
+          } else {
+            const reviewerTemplate = DEFAULT_TEMPLATES.find((t) => t.id === "reviewer")!;
+            const reviewCriteria = [
+              "1. REQUIREMENT MATCH: Do changes address the task description? Unrelated = NEEDS_CHANGES",
+              "2. SCOPE: Limited to what the task asks? Out-of-scope = NEEDS_CHANGES",
+              "3. MEANINGFUL CHANGES: Real code/content? Metadata-only = NEEDS_CHANGES",
+              "4. CODE QUALITY: Readability, security, error handling",
+              `5. ${typeHints[taskType] || typeHints.implementation || ""}`,
+              "",
+              "If tests fail, verdict MUST be NEEDS_CHANGES.",
+              "If changes don't match the task, verdict MUST be NEEDS_CHANGES.",
+            ].join("\n");
+
+            const reviewPrompt = interpolate(reviewerTemplate.prompt.completion, {
+              diffRef,
+              taskTitle: ctx.task.title,
+              taskDescription: ctx.task.description || "(no description)",
+              taskType,
+              reviewCriteria,
+              customReviewRules: customRules ? `\n${customRules}` : "",
+            });
+
+            fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\nFiles changed: ${filesChanged.join(", ") || "unknown"}\n\n${reviewPrompt}`;
+          }
 
           // Spawn reviewer as agent process
           ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
