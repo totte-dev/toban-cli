@@ -10,6 +10,7 @@ function mockFetchResponse(body: unknown, ok = true, status = 200) {
     status,
     statusText: ok ? "OK" : "Internal Server Error",
     json: () => Promise.resolve(body),
+    text: () => Promise.resolve(typeof body === "string" ? body : JSON.stringify(body)),
   });
 }
 

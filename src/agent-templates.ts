@@ -389,18 +389,18 @@ export async function executeActions(
             const retryCount = (retryTracker.get(ctx.task.id) ?? 0) + 1;
             retryTracker.set(ctx.task.id, retryCount);
 
-            // Record failure to Failure DB
-            const reviewComment = typeof ctx.task.review_comment === "string" ? ctx.task.review_comment : undefined;
-            ctx.api.recordFailure({
-              task_id: ctx.task.id,
-              failure_type: "reject",
-              summary: retryCount >= MAX_RETRIES
-                ? `Blocked after ${retryCount} failed attempts: ${ctx.task.title}`
-                : `NEEDS_CHANGES (attempt ${retryCount}): ${ctx.task.title}`,
-              agent_name: ctx.config.agentName,
-              sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
-              review_comment: reviewComment,
-            }).catch(() => { /* best-effort */ });
+            // Record failure to Failure DB (only on first attempt — avoid retry noise)
+            if (retryCount === 1) {
+              const reviewComment = typeof ctx.task.review_comment === "string" ? ctx.task.review_comment : undefined;
+              ctx.api.recordFailure({
+                task_id: ctx.task.id,
+                failure_type: "reject",
+                summary: `NEEDS_CHANGES: ${ctx.task.title}`,
+                agent_name: ctx.agentName,
+                sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+                review_comment: reviewComment,
+              }).catch(() => { /* best-effort */ });
+            }
 
             if (retryCount >= MAX_RETRIES) {
               updates.status = "review";
