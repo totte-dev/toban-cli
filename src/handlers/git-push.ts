@@ -6,6 +6,7 @@
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
+import { resolveRepoRoot } from "../git-ops.js";
 
 export async function handleGitPush(
   action: TemplateAction,
@@ -16,8 +17,7 @@ export async function handleGitPush(
   if (ctx.mergeSkipped) { ui.info(`[${phase}] ${label}: skipped (no merge)`); return; }
   const { execSync: pushExec } = await import("node:child_process");
   // Resolve repo root (workingDir may be a worktree)
-  const pushRepoDir = pushExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
-    .toString().trim().replace(/\/.git$/, "");
+  const pushRepoDir = resolveRepoRoot(ctx.config.workingDir);
   // Stash any unstaged changes (e.g. inject_memory's CLAUDE.md modifications)
   try {
     pushExec("git stash --include-untracked", { cwd: pushRepoDir, stdio: "pipe" });

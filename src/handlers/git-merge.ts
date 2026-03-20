@@ -6,6 +6,7 @@
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
+import { resolveRepoRoot } from "../git-ops.js";
 
 export async function handleGitMerge(
   action: TemplateAction,
@@ -17,10 +18,8 @@ export async function handleGitMerge(
   const { existsSync: gitExists } = await import("node:fs");
   const { join: gitJoin } = await import("node:path");
   // workingDir is the worktree path — we need the main repo root
-  // Worktree is at <repo>/.worktrees/<branch>/, so repo root is 2 levels up
   const worktreePath = ctx.config.workingDir;
-  const repoDir = gitExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: worktreePath, stdio: "pipe" })
-    .toString().trim().replace(/\/.git$/, "");
+  const repoDir = resolveRepoRoot(worktreePath);
   const baseBranch = ctx.config.baseBranch;
 
   // Find the agent's worktree branch

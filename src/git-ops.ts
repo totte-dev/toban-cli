@@ -9,6 +9,20 @@ import type { WorkspaceRepository } from "./api-client.js";
 import * as ui from "./ui.js";
 
 /**
+ * Resolve the git repo root from a working directory (handles worktrees).
+ * Falls back to the given directory if resolution fails.
+ */
+export function resolveRepoRoot(workingDir: string): string {
+  if (!existsSync(workingDir)) return workingDir;
+  try {
+    return execSync("git rev-parse --path-format=absolute --git-common-dir", { cwd: workingDir, stdio: "pipe" })
+      .toString().trim().replace(/\/.git$/, "");
+  } catch {
+    return workingDir;
+  }
+}
+
+/**
  * Create a git credential helper script that fetches fresh tokens from the Toban API.
  * GitHub App installation tokens expire after 1 hour, so we need to refresh on each git operation.
  */

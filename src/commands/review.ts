@@ -3,13 +3,13 @@
  */
 
 import { createApiClient, type Task } from "../api-client.js";
-import { resolveModelForRole } from "../agent-engine.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
+import { spawnClaudeOnce } from "../utils/spawn-claude.js";
+import { TIMEOUTS } from "../constants.js";
 
 export async function handleReview(apiUrl: string, apiKey: string, taskId?: string, skills?: string[]): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
-  const { spawn } = await import("node:child_process");
   const { execSync: revExec } = await import("node:child_process");
 
   ui.intro();
@@ -69,16 +69,8 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
   const prompt = `${reviewSystem}\n\nRun: git diff ${diffRef}\nRun: npm test 2>&1 | tail -20\n\nThen output verdict.\n\n${outputFormat}`;
 
   s.start("Running Reviewer agent...");
-  const result = await new Promise<string>((resolve) => {
-    const env = { ...process.env };
-    delete env.CLAUDECODE;
-    const child = spawn("claude", ["--print", "--model", resolveModelForRole("reviewer"), "--max-turns", "5", prompt], {
-      env, cwd, stdio: ["ignore", "pipe", "pipe"], timeout: 300_000,
-    });
-    let out = "";
-    child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
-    child.on("close", () => resolve(out));
-    child.on("error", () => resolve(""));
+  const result = await spawnClaudeOnce(prompt, {
+    role: "reviewer", maxTurns: 5, timeout: TIMEOUTS.REVIEWER, cwd,
   });
   s.stop("Review complete");
 

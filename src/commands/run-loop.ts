@@ -19,6 +19,8 @@ import { execSync } from "node:child_process";
 import { handlePropose } from "./propose.js";
 import type { ShutdownState } from "./shutdown.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
+import { extractCompletionJson } from "../utils/completion-parser.js";
+import { TIMEOUTS, INTERVALS } from "../constants.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,7 +64,7 @@ Output ONLY a JSON array, no markdown:
   return new Promise((resolve) => {
     const child = spawn("claude", ["--print", "--model", resolveModel("claude-haiku"), "--max-turns", "1", prompt], {
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: 30_000,
+      timeout: TIMEOUTS.SPLIT_TASK,
     });
     let out = "";
     child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
@@ -96,16 +98,14 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   const { api, wsServer, tobanHome, repos, gitToken, gitUserInfo, credentialHelperPath } = ctx;
   let { sprintData } = ctx;
 
-  const POLL_INTERVAL_MS = 30_000;
+  const POLL_INTERVAL_MS = INTERVALS.POLL;
 
   // Parallel agent slots
   const { SlotScheduler } = await import("../slot-scheduler.js");
-  const { MergeLock } = await import("../merge-lock.js");
   const scheduler = new SlotScheduler([
     { role: "builder", maxConcurrency: 2 },
     { role: "cloud-engineer", maxConcurrency: 1 },
   ]);
-  const mergeLock = new MergeLock();
 
   while (!shutdownState.shuttingDown) {
     try {
@@ -456,87 +456,15 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           });
         };
         // Extract COMPLETION_JSON from agent stdout → enrich post_action update_task
-        // Extract COMPLETION_JSON or stream result from agent stdout
-        // Fallback: if no COMPLETION_JSON found, check stream-json result event
         if (!actionCtx.completionJson) {
-          for (const l of runningAgent.stdout) {
-            try {
-              const ev = JSON.parse(l);
-              if (ev.type === "result" && ev.subtype === "success" && typeof ev.result === "string") {
-                // Try to extract COMPLETION_JSON from result text
-                const cjMatch = ev.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
-                let resultText: string;
-                if (cjMatch) {
-                  try {
-                    const cj = JSON.parse(cjMatch[1]);
-                    actionCtx.completionJson = { review_comment: cj.review_comment, commits: cj.commits };
-                    resultText = cj.review_comment || ev.result.slice(0, 2000);
-                  } catch {
-                    resultText = ev.result.slice(0, 2000);
-                    actionCtx.completionJson = { review_comment: resultText, commits: "" };
-                  }
-                } else {
-                  resultText = ev.result.slice(0, 2000);
-                  actionCtx.completionJson = { review_comment: resultText, commits: "" };
-                }
-                for (const action of agentTemplate.post_actions) {
-                  if (action.type === "update_task" && action.when === "success" && action.params?.status === "review") {
-                    action.params = { ...action.params, review_comment: resultText, commits: "" };
-                    break;
-                  }
-                }
-                ui.info(`[completion] Extracted completion from stream result (no COMPLETION_JSON)`);
-                taskLog.event("completion_parse", { source: "stream_result", review_comment: resultText.slice(0, 200) });
-                break;
-              }
-            } catch { /* skip */ }
+          const parsed = extractCompletionJson(runningAgent.stdout, agentTemplate.post_actions, {
+            onReviewUpdate: (tid, phase, comment) => actionCtx.onReviewUpdate?.(tid, phase, comment),
+            taskId: task.id,
+            taskLog,
+          });
+          if (parsed) {
+            actionCtx.completionJson = parsed;
           }
-        }
-        for (const line of runningAgent.stdout) {
-          const completionLine = line.startsWith("COMPLETION_JSON:") ? line : null;
-          if (completionLine) {
-            try {
-              const json = JSON.parse(completionLine.slice("COMPLETION_JSON:".length));
-              // Inject review_comment and commits into the update_task post_action params
-              for (const action of agentTemplate.post_actions) {
-                if (action.type === "update_task" && action.when === "success" && action.params?.status === "review") {
-                  action.params = { ...action.params, review_comment: json.review_comment, commits: json.commits };
-                  break;
-                }
-              }
-              actionCtx.completionJson = { review_comment: json.review_comment, commits: json.commits };
-              ui.info(`[completion] Parsed COMPLETION_JSON: ${json.review_comment?.slice(0, 80)}...`);
-              taskLog.event("completion_parse", { source: "completion_json", review_comment: json.review_comment?.slice(0, 200), commits: json.commits });
-              // Broadcast review comment immediately for real-time dashboard update
-              if (json.review_comment) {
-                actionCtx.onReviewUpdate?.(task.id, "agent_submitted", json.review_comment);
-              }
-              break;
-            } catch { /* skip */ }
-          }
-          // Also try stream-json events
-          try {
-            const event = JSON.parse(line);
-            if (event.type === "result" && typeof event.result === "string") {
-              const match = event.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
-              if (match) {
-                const json = JSON.parse(match[1]);
-                for (const action of agentTemplate.post_actions) {
-                  if (action.type === "update_task" && action.when === "success" && action.params?.status === "review") {
-                    action.params = { ...action.params, review_comment: json.review_comment, commits: json.commits };
-                    break;
-                  }
-                }
-                actionCtx.completionJson = { review_comment: json.review_comment, commits: json.commits };
-                ui.info(`[completion] Parsed COMPLETION_JSON from stream: ${json.review_comment?.slice(0, 80)}...`);
-                // Broadcast review comment immediately for real-time dashboard update
-                if (json.review_comment) {
-                  actionCtx.onReviewUpdate?.(task.id, "agent_submitted", json.review_comment);
-                }
-                break;
-              }
-            }
-          } catch { /* not JSON */ }
         }
 
         actionCtx.onRetro = async () => {

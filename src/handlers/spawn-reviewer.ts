@@ -8,8 +8,10 @@ import type { Task } from "../api-client.js";
 import { fetchWithRetry } from "../api-client.js";
 import { interpolate, getDefaultTemplates } from "../agent-templates.js";
 import * as ui from "../ui.js";
-import { resolveModelForRole } from "../agent-engine.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
+import { spawnClaudeOnce } from "../utils/spawn-claude.js";
+import { resolveRepoRoot } from "../git-ops.js";
+import { TIMEOUTS, LIMITS } from "../constants.js";
 
 export async function handleSpawnReviewer(
   action: TemplateAction,
@@ -31,19 +33,9 @@ export async function handleSpawnReviewer(
   }
   ctx.onReviewUpdate?.(ctx.task.id, "started");
   const { execSync: revExec2 } = await import("node:child_process");
-  const { existsSync: revExists2 } = await import("node:fs");
-  const { spawn: reviewSpawn2 } = await import("node:child_process");
 
   // Resolve repo root
-  const reviewRepoDir = (() => {
-    if (revExists2(ctx.config.workingDir)) {
-      try {
-        return revExec2("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
-          .toString().trim().replace(/\/.git$/, "");
-      } catch { /* fall through */ }
-    }
-    return ctx.config.workingDir;
-  })();
+  const reviewRepoDir = resolveRepoRoot(ctx.config.workingDir);
 
   // Get diff ref for the reviewer prompt — use preMergeHash for accurate agent-only diff
   const diffRef = (() => {
@@ -72,7 +64,7 @@ export async function handleSpawnReviewer(
     diffLineCount = (parseInt(insertMatch?.[1] || "0") + parseInt(deleteMatch?.[1] || "0"));
   } catch { /* non-fatal */ }
 
-  if (diffLineCount > 300) {
+  if (diffLineCount > LIMITS.MAX_DIFF_LINES) {
     ui.warn(`[${phase}] ${label}: diff too large (${diffLineCount} lines) — NEEDS_CHANGES`);
     ctx.reviewVerdict = "NEEDS_CHANGES";
     try {
@@ -151,22 +143,8 @@ Output format: ${outputFormat}`;
   ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
   ui.info(`[${phase}] ${label}: spawning Reviewer agent (${filesChanged.length} files)`);
 
-  const REVIEWER_TIMEOUT = 300_000; // 5 minutes
-  const reviewResult = await new Promise<string>((resolve) => {
-    const env = { ...process.env };
-    delete env.CLAUDECODE;
-    const child = reviewSpawn2("claude", [
-      "--print", "--model", resolveModelForRole("reviewer"), "--max-turns", "5", fullPrompt,
-    ], {
-      env, cwd: reviewRepoDir, stdio: ["ignore", "pipe", "pipe"], timeout: REVIEWER_TIMEOUT,
-    });
-    let out = "";
-    let resolved = false;
-    child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
-    child.stderr?.on("data", () => {}); // consume stderr
-    child.on("close", () => { if (!resolved) { resolved = true; resolve(out); } });
-    child.on("error", () => { if (!resolved) { resolved = true; resolve(out || ""); } });
-    setTimeout(() => { if (!resolved) { resolved = true; try { child.kill(); } catch {} resolve(out || ""); } }, REVIEWER_TIMEOUT);
+  const reviewResult = await spawnClaudeOnce(fullPrompt, {
+    role: "reviewer", maxTurns: 5, timeout: TIMEOUTS.REVIEWER, cwd: reviewRepoDir,
   });
 
   // Parse COMPLETION_JSON from reviewer output (supports COMPLETION_JSON: prefix and ```json blocks)

@@ -10,8 +10,10 @@ import type { Task } from "../api-client.js";
 import { fetchWithRetry } from "../api-client.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
-import { resolveModelForRole } from "../agent-engine.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
+import { spawnClaudeOnce } from "../utils/spawn-claude.js";
+import { resolveRepoRoot } from "../git-ops.js";
+import { TIMEOUTS } from "../constants.js";
 
 export async function handleReviewChanges(
   action: TemplateAction,
@@ -24,13 +26,8 @@ export async function handleReviewChanges(
   const { existsSync: revExists } = await import("node:fs");
   // workingDir may be a deleted worktree after git_merge — resolve repo root
   const revRepoDir = (() => {
-    // Try workingDir first (may be worktree or repo root)
-    if (revExists(ctx.config.workingDir)) {
-      try {
-        return revExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
-          .toString().trim().replace(/\/.git$/, "");
-      } catch { /* fall through */ }
-    }
+    const resolved = resolveRepoRoot(ctx.config.workingDir);
+    if (resolved !== ctx.config.workingDir) return resolved;
     // Worktree deleted — walk up to find the repo root
     // dirname imported at module top
     let dir = ctx.config.workingDir;
@@ -75,7 +72,6 @@ export async function handleReviewChanges(
     ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
     let llmReview = "";
     try {
-      const { spawn: reviewSpawn } = await import("node:child_process");
       // Keep full diff context but filter out test files for size reduction
       const diffLines = diffContent.split("\n");
       const filteredDiff: string[] = [];
@@ -120,30 +116,10 @@ If tests failed, verdict MUST be NEEDS_CHANGES.
 
 ${outputFormat}`;
 
-      const env = { ...process.env };
-      delete env.CLAUDECODE;
-      const LLM_TIMEOUT = 120_000; // 2 minutes
-      llmReview = await new Promise<string>((resolve) => {
-        const child = reviewSpawn("claude", ["--print", "--model", resolveModelForRole("reviewer"), "--max-turns", "1", reviewPrompt], {
-          env, stdio: ["ignore", "pipe", "pipe"], timeout: LLM_TIMEOUT,
-        });
-        let out = "";
-        let resolved = false;
-        child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
-        child.on("close", (code) => {
-          if (!resolved) { resolved = true; resolve(out.trim()); }
-          if (code !== 0) ui.warn(`[review] LLM exited with code ${code}`);
-        });
-        child.on("error", (err) => {
-          if (!resolved) { resolved = true; resolve(""); }
-          ui.warn(`[review] LLM spawn error: ${err.message}`);
-        });
-        setTimeout(() => {
-          if (!resolved) { resolved = true; resolve(""); }
-          try { child.kill(); } catch {}
-          ui.warn("[review] LLM review timed out (120s)");
-        }, LLM_TIMEOUT);
+      llmReview = await spawnClaudeOnce(reviewPrompt, {
+        role: "reviewer", maxTurns: 1, timeout: TIMEOUTS.REVIEW_LLM,
       });
+      llmReview = llmReview.trim();
     } catch (llmErr) {
       logError(CLI_ERR.REVIEW_LLM_FAILED, `LLM review failed`, { taskId: ctx.task.id }, llmErr);
       ui.warn(`[review] LLM review failed: ${llmErr instanceof Error ? llmErr.message : llmErr}`);
