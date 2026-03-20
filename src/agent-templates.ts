@@ -384,6 +384,12 @@ export async function executeActions(
       switch (action.type) {
         case "update_task": {
           const updates = { ...(action.params ?? {}) } as Record<string, unknown>;
+          // If Reviewer already saved a structured review via review-report API,
+          // don't overwrite with Builder's COMPLETION_JSON text
+          if (ctx.reviewVerdict && updates.review_comment && updates.status === "review") {
+            delete updates.review_comment;
+            delete updates.commits;
+          }
           // If review verdict is NEEDS_CHANGES, check retry count
           if (updates.status === "review" && ctx.reviewVerdict === "NEEDS_CHANGES") {
             const MAX_RETRIES = 3;

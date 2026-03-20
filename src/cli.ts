@@ -465,10 +465,22 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
             try {
               const ev = JSON.parse(l);
               if (ev.type === "result" && ev.subtype === "success" && typeof ev.result === "string") {
-                // Agent completed successfully but didn't output COMPLETION_JSON
-                // Use the result text as review_comment
-                const resultText = ev.result.slice(0, 2000);
-                actionCtx.completionJson = { review_comment: resultText, commits: "" };
+                // Try to extract COMPLETION_JSON from result text
+                const cjMatch = ev.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
+                let resultText: string;
+                if (cjMatch) {
+                  try {
+                    const cj = JSON.parse(cjMatch[1]);
+                    actionCtx.completionJson = { review_comment: cj.review_comment, commits: cj.commits };
+                    resultText = cj.review_comment || ev.result.slice(0, 2000);
+                  } catch {
+                    resultText = ev.result.slice(0, 2000);
+                    actionCtx.completionJson = { review_comment: resultText, commits: "" };
+                  }
+                } else {
+                  resultText = ev.result.slice(0, 2000);
+                  actionCtx.completionJson = { review_comment: resultText, commits: "" };
+                }
                 for (const action of agentTemplate.post_actions) {
                   if (action.type === "update_task" && action.when === "success" && action.params?.status === "review") {
                     action.params = { ...action.params, review_comment: resultText, commits: "" };
