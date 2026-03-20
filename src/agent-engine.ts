@@ -438,7 +438,7 @@ function parseStreamJsonEvents(event: Record<string, unknown>): AgentActivity[] 
   return activities;
 }
 
-function summarizeToolInput(toolName: string, input?: Record<string, unknown>): string {
+export function summarizeToolInput(toolName: string, input?: Record<string, unknown>): string {
   if (!input) return toolName;
   switch (toolName) {
     case "Read":

@@ -16,7 +16,7 @@ export interface ClaudeCliOptions {
  * Spawn Claude CLI with --print and return the response text.
  * Handles timeout, ENOENT, and non-zero exit codes.
  */
-export function callClaudeCli(opts: ClaudeCliOptions): Promise<string> {
+function callClaudeCli(opts: ClaudeCliOptions): Promise<string> {
   return callClaudeCliStream({ ...opts });
 }
 
@@ -37,7 +37,7 @@ export interface ClaudeCliStreamOptions extends ClaudeCliOptions {
  * Spawn Claude CLI with --print and stream output via onChunk callback.
  * Returns the full response text on completion.
  */
-export function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<string> {
+function callClaudeCliStream(opts: ClaudeCliStreamOptions): Promise<string> {
   const { systemPrompt, history, userMessage, model, timeoutMs = 300_000, onChunk, cwd, enableTools, permissionMode, allowedTools } = opts;
 
   const contextLines = history.slice(-6).map((m) => {

@@ -88,7 +88,7 @@ export class MessagePoller {
       for (const msg of newMessages) {
         this.deliveredIds.add(msg.id);
         this.appendToFile(msg);
-        ui.chatMessage(msg.from, this.channel, msg.content);;
+        ui.chatMessage(msg.from, this.channel, msg.content);
       }
 
       this.lastSeenTimestamp = newMessages[newMessages.length - 1].created_at;

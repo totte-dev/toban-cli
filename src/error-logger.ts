@@ -113,7 +113,7 @@ export function logError(
  * Wrap an async function with error logging.
  * Returns the result or undefined on error.
  */
-export async function withErrorLog<T>(
+async function withErrorLog<T>(
   code: CliErrorCode,
   context: Record<string, unknown>,
   fn: () => Promise<T>,

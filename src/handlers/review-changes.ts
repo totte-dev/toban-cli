@@ -3,11 +3,13 @@
  * Reviews code changes using LLM (legacy single-turn review).
  */
 
+import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import { interpolate } from "../agent-templates.js";
 import type { Task } from "../api-client.js";
-import { fetchWithRetry } from "../api-client.js";
+import { createAuthHeaders, fetchWithRetry } from "../api-client.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
@@ -22,8 +24,8 @@ export async function handleReviewChanges(
 ): Promise<void> {
   const label = action.label ?? "review_changes";
   ctx.onReviewUpdate?.(ctx.task.id, "started");
-  const { execSync: revExec } = await import("node:child_process");
-  const { existsSync: revExists } = await import("node:fs");
+  const revExec = execSync;
+  const revExists = existsSync;
   // workingDir may be a deleted worktree after git_merge — resolve repo root
   const revRepoDir = (() => {
     const resolved = resolveRepoRoot(ctx.config.workingDir);
@@ -165,7 +167,7 @@ ${outputFormat}`;
         }
         const res = await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
+          headers: createAuthHeaders(ctx.config.apiKey),
           body: JSON.stringify(report),
         });
         if (res.ok) {

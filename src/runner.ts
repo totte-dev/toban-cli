@@ -19,8 +19,6 @@ import {
 import type { RetroCommentInput } from "./api-client.js";
 import * as ui from "./ui.js";
 
-export { detectTerminal, getTerminal } from "./terminal.js";
-export type { TerminalInfo } from "./terminal.js";
 export type { AgentConfig, AgentStatusReport, RunningAgent } from "./types.js";
 
 interface ManagedAgent {
@@ -383,7 +381,7 @@ function buildDockerBranchName(agentName: string, taskId: string): string {
  * Used after Docker container exits — the entrypoint created the branch
  * inside the container, but it persists on the host via bind mount.
  */
-export function mergeAgentBranch(
+function mergeAgentBranch(
   repoDir: string,
   branchName: string,
   baseBranch: string

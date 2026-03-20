@@ -2,7 +2,7 @@
  * Sprint Plan command (Strategist agent)
  */
 
-import { createApiClient, type Task } from "../api-client.js";
+import { createApiClient, createAuthHeaders, type Task } from "../api-client.js";
 import { resolveModelForRole } from "../agent-engine.js";
 import * as ui from "../ui.js";
 
@@ -20,7 +20,7 @@ export async function handleSprintPlan(apiUrl: string, apiKey: string): Promise<
 
     ui.info(`[strategist] Planning Sprint #${sprint.number}...`);
 
-    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
+    const headers = createAuthHeaders(apiKey);
 
     // Fetch backlog, analytics, failures, retro
     const [backlogRes, analyticsRes, failuresRes] = await Promise.all([

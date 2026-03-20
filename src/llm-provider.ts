@@ -11,6 +11,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { summarizeToolInput } from "./agent-engine.js";
 import * as ui from "./ui.js";
 
 // ---------------------------------------------------------------------------
@@ -129,7 +130,7 @@ export class ClaudeCliProvider implements LlmProvider {
               if (event.type === "content_block_start") {
                 const block = event.content_block as Record<string, unknown> | undefined;
                 if (block?.type === "tool_use" && typeof block.name === "string") {
-                  onToolUse?.(block.name, summarizeTool(block.name, block.input as Record<string, unknown>));
+                  onToolUse?.(block.name, summarizeToolInput(block.name, block.input as Record<string, unknown>));
                 }
               }
               if (event.type === "assistant") {
@@ -248,18 +249,6 @@ export class OpenAiApiProvider implements LlmProvider {
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
-
-/** Brief summary of a tool invocation for UI display */
-function summarizeTool(name: string, input?: Record<string, unknown>): string {
-  if (!input) return name;
-  switch (name) {
-    case "Read": return input.file_path ? `Read ${String(input.file_path).split("/").slice(-2).join("/")}` : "Read";
-    case "Grep": return input.pattern ? `Grep "${input.pattern}"` : "Grep";
-    case "Glob": return input.pattern ? `Glob ${input.pattern}` : "Glob";
-    case "Bash": { const cmd = input.command as string | undefined; return cmd ? `Bash: ${cmd.slice(0, 50)}` : "Bash"; }
-    default: return name;
-  }
-}
 
 /**
  * Create the appropriate LLM provider based on configuration.

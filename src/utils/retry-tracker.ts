@@ -3,7 +3,7 @@
  */
 
 /** Map of task ID -> retry count */
-export const retryTracker = new Map<string, number>();
+const retryTracker = new Map<string, number>();
 
 const MAX_RETRIES = 3;
 

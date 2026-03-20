@@ -2,7 +2,7 @@
  * Review command
  */
 
-import { createApiClient, type Task } from "../api-client.js";
+import { createApiClient, createAuthHeaders, type Task } from "../api-client.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";
@@ -92,7 +92,7 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
       try {
         await fetch(`${apiUrl}/api/v1/tasks/${task.id}/review-report`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          headers: createAuthHeaders(apiKey),
           body: JSON.stringify(report),
         });
         console.log("\nReview saved to API.");

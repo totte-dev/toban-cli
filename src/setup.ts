@@ -5,7 +5,6 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { fetchAndResetToRemote } from "./git-ops.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AgentRunner } from "./runner.js";

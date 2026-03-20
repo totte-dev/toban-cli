@@ -6,6 +6,7 @@
  * templates can be loaded from the API or a YAML config file.
  */
 
+import { execSync } from "node:child_process";
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
@@ -447,7 +448,7 @@ export async function executeActions(
           break;
         }
         case "git_auth_check": {
-          const { execSync: exec } = await import("node:child_process");
+          const exec = execSync;
           try {
             // Use ls-remote without --exit-code (empty repos return exit 2 with --exit-code)
             exec("git ls-remote origin", {
@@ -502,7 +503,6 @@ export async function executeActions(
         case "shell": {
           const cmd = action.params?.command as string | undefined;
           if (cmd) {
-            const { execSync } = await import("node:child_process");
             execSync(cmd, { cwd: ctx.config.workingDir, stdio: "pipe" });
             ui.info( `[${phase}] ${label}`);
           }
@@ -535,11 +535,3 @@ export function getDefaultTemplates(): AgentTemplate[] {
   return DEFAULT_TEMPLATES;
 }
 
-/**
- * Get the list of default templates.
- * In the future, this will merge system defaults with user-defined templates
- * loaded from the API or a config file.
- */
-export function getTemplates(): AgentTemplate[] {
-  return DEFAULT_TEMPLATES;
-}

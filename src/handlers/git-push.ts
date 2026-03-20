@@ -3,6 +3,7 @@
  * Pushes the base branch to the remote origin.
  */
 
+import { execSync } from "node:child_process";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
@@ -15,7 +16,7 @@ export async function handleGitPush(
 ): Promise<void> {
   const label = action.label ?? "git_push";
   if (ctx.mergeSkipped) { ui.info(`[${phase}] ${label}: skipped (no merge)`); return; }
-  const { execSync: pushExec } = await import("node:child_process");
+  const pushExec = execSync;
   // Resolve repo root (workingDir may be a worktree)
   const pushRepoDir = resolveRepoRoot(ctx.config.workingDir);
   // Stash any unstaged changes (e.g. inject_memory's CLAUDE.md modifications)

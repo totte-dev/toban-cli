@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
-import type { AgentMemory } from "../api-client.js";
+import { createAuthHeaders, type AgentMemory } from "../api-client.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 
@@ -46,7 +46,7 @@ export async function handleInjectMemory(
   let sharedMemories: AgentMemory[] = [];
   try {
     const res = await fetch(`${ctx.config.apiUrl}/api/v1/agents/memories/shared${taskLabels.length ? `?tags=${taskLabels.join(",")}` : ""}`, {
-      headers: { Authorization: `Bearer ${ctx.config.apiKey}`, "Content-Type": "application/json" },
+      headers: createAuthHeaders(ctx.config.apiKey),
     });
     if (res.ok) {
       const data = (await res.json()) as { memories: AgentMemory[] };

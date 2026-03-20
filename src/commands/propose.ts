@@ -2,7 +2,7 @@
  * Propose command (Strategist agent — analyze data sources and suggest improvement tasks)
  */
 
-import { createApiClient, type Task } from "../api-client.js";
+import { createApiClient, createAuthHeaders, type Task } from "../api-client.js";
 import { resolveModelForRole } from "../agent-engine.js";
 import * as ui from "../ui.js";
 
@@ -12,7 +12,7 @@ export async function handlePropose(apiUrl: string, apiKey: string): Promise<voi
 
   try {
     ui.info("[strategist] Analyzing data sources for improvement proposals...");
-    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
+    const headers = createAuthHeaders(apiKey);
 
     // Gather data sources
     const [failuresRes, backlogRes, analyticsRes] = await Promise.all([

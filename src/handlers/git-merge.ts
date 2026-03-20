@@ -3,6 +3,9 @@
  * Merges the agent's worktree branch into the base branch.
  */
 
+import { execSync } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
@@ -14,9 +17,9 @@ export async function handleGitMerge(
   phase: "pre" | "post"
 ): Promise<void> {
   const label = action.label ?? "git_merge";
-  const { execSync: gitExec } = await import("node:child_process");
-  const { existsSync: gitExists } = await import("node:fs");
-  const { join: gitJoin } = await import("node:path");
+  const gitExec = execSync;
+  const gitExists = existsSync;
+  const gitJoin = join;
   // workingDir is the worktree path — we need the main repo root
   const worktreePath = ctx.config.workingDir;
   const repoDir = resolveRepoRoot(worktreePath);
@@ -49,7 +52,6 @@ export async function handleGitMerge(
         ctx.mergeSkipped = true;
         // Clean up the empty branch
         if (gitExists(worktreeDir)) {
-          const { rmSync } = await import("node:fs");
           try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
         }
         try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
@@ -72,7 +74,6 @@ export async function handleGitMerge(
         ui.warn(`[${phase}] ${label}: only metadata files changed (${diffFiles.join(", ")}) — skipping merge`);
         ctx.mergeSkipped = true;
         if (gitExists(worktreeDir)) {
-          const { rmSync } = await import("node:fs");
           try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
         }
         try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
@@ -89,7 +90,6 @@ export async function handleGitMerge(
 
       // Clean up worktree
       if (gitExists(worktreeDir)) {
-        const { rmSync } = await import("node:fs");
         try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
       }
       try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }

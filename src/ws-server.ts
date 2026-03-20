@@ -12,7 +12,7 @@
 
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { createAuthHeaders } from "./llm-client.js";
+import { createAuthHeaders } from "./api-client.js";
 import { WS_MSG, type WsMsgType } from "./ws-types.js";
 import * as ui from "./ui.js";
 

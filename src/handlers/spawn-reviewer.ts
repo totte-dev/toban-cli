@@ -3,9 +3,10 @@
  * Spawns a Reviewer agent process to review code changes.
  */
 
+import { execSync } from "node:child_process";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import type { Task } from "../api-client.js";
-import { fetchWithRetry } from "../api-client.js";
+import { createAuthHeaders, fetchWithRetry } from "../api-client.js";
 import { interpolate, getDefaultTemplates } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
@@ -32,7 +33,7 @@ export async function handleSpawnReviewer(
     ui.info(`[${phase}] ${label}: no code changes, running Reviewer to verify completion`);
   }
   ctx.onReviewUpdate?.(ctx.task.id, "started");
-  const { execSync: revExec2 } = await import("node:child_process");
+  const revExec2 = execSync;
 
   // Resolve repo root
   const reviewRepoDir = resolveRepoRoot(ctx.config.workingDir);
@@ -166,7 +167,7 @@ Output format: ${outputFormat}`;
       try {
         await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
+          headers: createAuthHeaders(ctx.config.apiKey),
           body: JSON.stringify(report),
         });
       } catch { /* fallback below */ }

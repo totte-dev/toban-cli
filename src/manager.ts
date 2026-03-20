@@ -10,82 +10,35 @@
  *
  * The Manager is idle until an event arrives (WS message, poll tick).
  * On event: fetch enriched context → build prompt → call LLM → parse actions → execute.
+ *
+ * Action execution logic: see manager-actions.ts
+ * Prompt building logic: see manager-prompt.ts
  */
 
 import { execSync } from "node:child_process";
-import type { ApiClient, Task } from "./api-client.js";
+import { createAuthHeaders, type ApiClient } from "./api-client.js";
 import type { AgentRunner } from "./runner.js";
-import { createAuthHeaders, buildConversationHistory } from "./llm-client.js";
 import { createLlmProvider, type LlmProvider } from "./llm-provider.js";
-import { renderPrompt, loadPromptTemplate, renderTemplate, loadPhaseInstructions } from "./prompt-loader.js";
-import { buildSprintStats, formatSprintStats, type TaskInput } from "./sprint-stats.js";
 import { PollLoop } from "./poll-loop.js";
 import * as ui from "./ui.js";
+import {
+  parseResponse,
+  executeActions as executeManagerActions,
+  type ManagerContext,
+  type ManagerAction,
+  type ActionExecutionDeps,
+} from "./manager-actions.js";
+import {
+  buildCodebaseSummary,
+  buildSystemPrompt,
+  buildManagerConversationHistory,
+} from "./manager-prompt.js";
 
 // ---------------------------------------------------------------------------
-// Types
+// Types (re-export for external consumers)
 // ---------------------------------------------------------------------------
 
-interface ManagerContext {
-  workspace: {
-    name: string;
-    language: string;
-    description: string | null;
-    spec: string | null;
-  };
-  sprint: {
-    number: number;
-    status: string;
-    goal?: string | null;
-    deadline?: string | null;
-  } | null;
-  tasks: Array<{
-    id: string;
-    title: string;
-    description: string | null;
-    status: string;
-    priority: string;
-    owner: string | null;
-    type: string | null;
-    target_repo: string | null;
-  }>;
-  backlog_tasks?: Array<{
-    id: string;
-    title: string;
-    description: string | null;
-    priority: string;
-    owner: string | null;
-    type: string | null;
-  }>;
-  recently_done?: Array<{ title: string; sprint: number }>;
-  retro_comments?: string[];
-  adr_summary?: string;
-  agents: Array<{
-    name: string;
-    status: string;
-    activity: string | null;
-    engine: string | null;
-    last_seen: string | null;
-  }>;
-  recent_messages: Array<{
-    id: string;
-    from: string;
-    to: string;
-    content: string;
-    created_at: string;
-  }>;
-  playbook_rules: string;
-  analytics?: {
-    velocity: Array<{ sprint: number; points: number }>;
-    quality: Array<{ sprint: number; avg_score: number }>;
-  };
-}
-
-/** Parsed action from LLM response */
-interface ManagerAction {
-  type: "spawn_agent" | "update_task" | "create_task" | "transition_sprint" | "send_message" | "propose_tasks" | "plan_sprint";
-  params: Record<string, unknown>;
-}
+export type { ManagerContext, ManagerAction } from "./manager-actions.js";
 
 /** Pending spawn_agent approval */
 export interface PendingApproval {
@@ -169,56 +122,13 @@ export class Manager {
     });
     this.reposDir = options.reposDir;
     this.repositories = options.repositories ?? [];
-    this.codebaseSummary = this.buildCodebaseSummary();
+    this.codebaseSummary = buildCodebaseSummary(this.reposDir, this.repositories);
     ui.debug("manager", `LLM provider: ${this.llmProvider.id}`);
     this.poller = new PollLoop({
       name: "manager",
       intervalMs: this.pollIntervalMs,
       onTick: () => this.poll(),
     });
-  }
-
-  /**
-   * Build a static codebase summary at startup (no tool calls needed).
-   * Includes: directory structure, CLAUDE.md content, recent git log.
-   */
-  private buildCodebaseSummary(): string {
-    if (!this.reposDir || this.repositories.length === 0) return "";
-
-    const parts: string[] = [];
-    for (const repo of this.repositories) {
-      try {
-        // Directory tree (top 2 levels)
-        const tree = execSync("find . -maxdepth 2 -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' | head -50", {
-          cwd: repo.path, stdio: "pipe", timeout: 5000,
-        }).toString().trim();
-
-        // CLAUDE.md content (if exists)
-        let claudeMd = "";
-        try {
-          claudeMd = execSync("cat CLAUDE.md 2>/dev/null | head -80", {
-            cwd: repo.path, stdio: "pipe", timeout: 3000, shell: "/bin/sh",
-          }).toString().trim();
-        } catch { /* no CLAUDE.md */ }
-
-        // Recent commits
-        let recentCommits = "";
-        try {
-          recentCommits = execSync("git log --oneline -10 2>/dev/null", {
-            cwd: repo.path, stdio: "pipe", timeout: 3000, shell: "/bin/sh",
-          }).toString().trim();
-        } catch { /* no git history */ }
-
-        parts.push(`### ${repo.name}`);
-        if (claudeMd) parts.push(`CLAUDE.md:\n${claudeMd}`);
-        parts.push(`Files:\n${tree}`);
-        if (recentCommits) parts.push(`Recent commits:\n${recentCommits}`);
-      } catch {
-        parts.push(`### ${repo.name}\n(failed to read)`);
-      }
-    }
-
-    return parts.length > 0 ? `\n## Codebase Summary (cached at startup)\n${parts.join("\n\n")}` : "";
   }
 
   // ── Lifecycle ────────────────────────────────────────────
@@ -309,7 +219,7 @@ export class Manager {
     try {
       const context = await this.fetchContext();
       const { reply, actions, proposals } = await this.think(content, context);
-      await this.executeActions(actions, context);
+      await this.runActions(actions, context);
       ui.chatMessage("manager", "user", reply, "ws");
       await this.advanceLastSeen();
       return { reply, proposals };
@@ -373,7 +283,7 @@ export class Manager {
 
         const context = await this.fetchContext();
         const { reply, actions, proposals } = await this.think(enrichedContent, context);
-        await this.executeActions(actions, context);
+        await this.runActions(actions, context);
         await this.postReplyTo(msg.from, reply);
         if (isFromUser) {
           this.onReply?.(reply);
@@ -401,8 +311,12 @@ export class Manager {
     userMessage: string,
     context: ManagerContext
   ): Promise<{ reply: string; actions: ManagerAction[]; proposals?: Array<Record<string, string>> }> {
-    const systemPrompt = this.buildSystemPrompt(context);
-    const conversationHistory = this.buildManagerConversationHistory(context);
+    const systemPrompt = buildSystemPrompt(context, {
+      reposDir: this.reposDir,
+      repositories: this.repositories,
+      codebaseSummary: this.codebaseSummary,
+    });
+    const conversationHistory = buildManagerConversationHistory(context);
 
     // Only enable tools when the user asks about code/implementation details.
     // For sprint management (proposals, status, phase changes), use context data only — much faster.
@@ -425,8 +339,24 @@ export class Manager {
       allowedTools: useTools ? ["Read", "Grep", "Glob", "Bash", "Agent"] : undefined,
     });
 
-    const { reply, actions, proposals } = this.parseResponse(llmResponse);
+    const { reply, actions, proposals } = parseResponse(llmResponse);
     return { reply, actions, proposals };
+  }
+
+  // ── Action execution (delegates to manager-actions.ts) ──
+
+  private async runActions(actions: ManagerAction[], context: ManagerContext): Promise<void> {
+    const deps: ActionExecutionDeps = {
+      apiUrl: this.apiUrl,
+      apiKey: this.apiKey,
+      api: this.api,
+      lastUserMessage: this.lastUserMessage,
+      pendingApprovals: this.pendingApprovals,
+      onSpawnAgent: this.onSpawnAgent,
+      onDataUpdate: this.onDataUpdate,
+      onApprovalRequest: this.onApprovalRequest,
+    };
+    await executeManagerActions(actions, context, deps);
   }
 
   // ── Context fetching ─────────────────────────────────────
@@ -450,405 +380,6 @@ export class Manager {
         playbook_rules: "",
       };
     }
-  }
-
-  // ── System prompt ────────────────────────────────────────
-
-  private buildSystemPrompt(ctx: ManagerContext): string {
-    const lang = ctx.workspace.language === "ja" ? "Japanese" : "English";
-
-    // Parse project spec if available
-    let specBlock = "";
-    if (ctx.workspace.spec) {
-      try {
-        const spec = JSON.parse(ctx.workspace.spec) as Record<string, string>;
-        const labels: Record<string, string> = { vision: "Vision", target_users: "Target Users", tech_stack: "Tech Stack", mvp_requirements: "MVP Requirements", roadmap: "Roadmap", business_model: "Business Model", constraints: "Constraints" };
-        const sections = Object.entries(spec)
-          .filter(([, v]) => v?.trim())
-          .map(([k, v]) => `**${labels[k] ?? k}:** ${v.trim()}`)
-          .join("\n");
-        if (sections) specBlock = `\n## Project Spec\n${sections}\n`;
-      } catch { /* invalid JSON */ }
-    }
-
-    const sprintGoal = ctx.sprint?.goal;
-    const sprintDeadline = ctx.sprint?.deadline;
-    const sprintInfo = ctx.sprint
-      ? `Sprint #${ctx.sprint.number} (${ctx.sprint.status})${sprintGoal ? `\nGoal: ${sprintGoal}` : ""}${sprintDeadline ? `\nDeadline: ${sprintDeadline}` : ""}`
-      : "No active sprint";
-
-    const taskLines = ctx.tasks.length > 0
-      ? ctx.tasks.map((t) => {
-          const owner = t.owner ? ` @${t.owner}` : "";
-          return `  - [${t.status}] ${t.priority} ${t.title}${owner} (id: ${t.id.slice(0, 8)})`;
-        }).join("\n")
-      : "  (no tasks)";
-
-    const agentLines = ctx.agents.length > 0
-      ? ctx.agents.map((a) => {
-          const act = a.activity ? ` — ${a.activity}` : "";
-          let health = "";
-          if (a.last_seen) {
-            const seenAgo = Date.now() - new Date(a.last_seen).getTime();
-            if (a.status === "running" && seenAgo > 5 * 60 * 1000) {
-              health = " [UNRESPONSIVE — no heartbeat for " + Math.round(seenAgo / 60000) + "min]";
-            }
-          } else if (a.status === "running" || a.status === "starting") {
-            health = " [UNRESPONSIVE — never seen]";
-          }
-          return `  - ${a.name}: ${a.status}${act}${health}`;
-        }).join("\n")
-      : "  (no agents)";
-
-    const backlogLines = ctx.backlog_tasks?.length
-      ? ctx.backlog_tasks.map((t) => {
-          const owner = t.owner ? ` @${t.owner}` : "";
-          return `  - ${t.priority} ${t.title}${owner} (id: ${t.id.slice(0, 8)})`;
-        }).join("\n")
-      : "";
-
-    const recentlyDoneLines = ctx.recently_done?.length
-      ? ctx.recently_done.map((t) => `  - ${t.title} (Sprint #${t.sprint})`).join("\n")
-      : "";
-
-    const retroLines = ctx.retro_comments?.length
-      ? ctx.retro_comments.map((c) => `  - ${c}`).join("\n")
-      : "";
-
-    const rawPhaseInstructions = loadPhaseInstructions(ctx.sprint?.status ?? "unknown");
-    // Inject sprint stats into retrospective/completed phase instructions
-    const sprintStatsText = (ctx.sprint?.status === "retrospective" || ctx.sprint?.status === "completed")
-      ? formatSprintStats(buildSprintStats(ctx.tasks as TaskInput[]))
-      : "";
-    const phaseInstructions = renderTemplate(rawPhaseInstructions, { sprintStats: sprintStatsText });
-
-    // Build repo access section (only if repos are configured)
-    let repoAccess = "";
-    if (this.reposDir) {
-      const repoLines = this.repositories.length > 0
-        ? this.repositories.map((r) => {
-            const desc = r.description ? ` — ${r.description}` : "";
-            return `  - ${r.name}: ${r.path}${desc}`;
-          }).join("\n")
-        : "  (no repositories configured)";
-      repoAccess = renderPrompt("manager-repo-access", {
-        reposDir: this.reposDir,
-        repoLines,
-      });
-    }
-
-    // Assemble from templates
-    const system = renderPrompt("manager-system", {
-      projectName: ctx.workspace.name,
-      language: lang,
-      spec: specBlock,
-      sprintInfo,
-      repoAccess,
-      tasks: taskLines,
-      backlog: backlogLines ? `\n### Backlog (not in sprint)\n${backlogLines}` : "",
-      recentlyDone: recentlyDoneLines ? `\n### Recently Completed (do NOT re-propose these)\n${recentlyDoneLines}` : "",
-      retro: retroLines ? `\n### Previous Sprint Retro\n${retroLines}` : "",
-      agents: agentLines,
-      phaseInstructions,
-    });
-
-    const actions = loadPromptTemplate("manager-actions");
-    const rules = loadPromptTemplate("manager-rules");
-    const playbook = ctx.playbook_rules ? `\n## Playbook Rules\n${ctx.playbook_rules}` : "";
-    const adr = ctx.adr_summary ? `\n## Architecture Decision Records\n${ctx.adr_summary}\nYou MUST follow all ACCEPTED ADRs when making decisions.` : "";
-
-    let analyticsBlock = "";
-    if (ctx.analytics) {
-      const velLines = ctx.analytics.velocity.map((v) => `  Sprint #${v.sprint}: ${v.points}SP`).join("\n");
-      const qualLines = ctx.analytics.quality.map((q) => `  Sprint #${q.sprint}: ${q.avg_score}/100`).join("\n");
-      analyticsBlock = `\n## Sprint Analytics (recent trends)
-### Velocity (completed SP per sprint)
-${velLines || "  (no data)"}
-### Quality Score (avg review score)
-${qualLines || "  (no data)"}
-Use these trends to inform sprint planning — if velocity is declining, reduce scope. If quality is dropping, prioritize test/review improvements.\n`;
-    }
-
-    return `${system}\n${this.codebaseSummary}\n${actions}\n${rules}${playbook}${adr}${analyticsBlock}`;
-  }
-
-  // ── Conversation history ─────────────────────────────────
-
-  private buildManagerConversationHistory(
-    ctx: ManagerContext
-  ): Array<{ role: "user" | "assistant"; content: string }> {
-    return buildConversationHistory(ctx.recent_messages, { maxTurns: 10 });
-  }
-
-  // ── Response parsing ─────────────────────────────────────
-
-  private parseResponse(response: string): { reply: string; actions: ManagerAction[]; proposals?: Array<Record<string, string>> } {
-    const actions: ManagerAction[] = [];
-    const replyLines: string[] = [];
-    let proposals: Array<Record<string, string>> | undefined;
-
-    // Extract ACTION blocks — handles both single-line and multi-line JSON
-    // Strategy: find "ACTION: type" markers, then bracket-match the JSON that follows
-    let remaining = response;
-    const actionPattern = /ACTION:\s*(\w+)\s*/g;
-    let lastEnd = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = actionPattern.exec(remaining)) !== null) {
-      // Add text before this ACTION to reply
-      const before = remaining.slice(lastEnd, match.index);
-      if (before.trim()) replyLines.push(before.trim());
-
-      const type = match[1] as ManagerAction["type"];
-      const jsonStart = match.index + match[0].length;
-
-      // Find the JSON by bracket matching from jsonStart
-      const rest = remaining.slice(jsonStart);
-      const firstChar = rest.trimStart()[0];
-      const trimOffset = rest.length - rest.trimStart().length;
-
-      if (firstChar === "[" || firstChar === "{") {
-        const endChar = firstChar === "[" ? "]" : "}";
-        let depth = 0;
-        let end = -1;
-        const searchFrom = jsonStart + trimOffset;
-        for (let i = searchFrom; i < remaining.length; i++) {
-          if (remaining[i] === firstChar) depth++;
-          if (remaining[i] === endChar) depth--;
-          if (depth === 0) { end = i + 1; break; }
-        }
-        if (end > 0) {
-          const jsonStr = remaining.slice(searchFrom, end);
-          try {
-            const raw = JSON.parse(jsonStr);
-            if (type === "propose_tasks" && Array.isArray(raw)) {
-              proposals = raw as Array<Record<string, string>>;
-              actions.push({ type, params: { tasks: raw } });
-            } else {
-              actions.push({ type, params: raw as Record<string, unknown> });
-            }
-            lastEnd = end;
-            actionPattern.lastIndex = end;
-            continue;
-          } catch { /* fall through to line-based */ }
-        }
-      }
-
-      // Fallback: try single-line JSON on the same line
-      const lineEnd = remaining.indexOf("\n", jsonStart);
-      const lineJson = remaining.slice(jsonStart, lineEnd === -1 ? undefined : lineEnd).trim();
-      try {
-        const raw = JSON.parse(lineJson);
-        if (type === "propose_tasks" && Array.isArray(raw)) {
-          proposals = raw as Array<Record<string, string>>;
-          actions.push({ type, params: { tasks: raw } });
-        } else {
-          actions.push({ type, params: raw as Record<string, unknown> });
-        }
-        lastEnd = lineEnd === -1 ? remaining.length : lineEnd;
-        actionPattern.lastIndex = lastEnd;
-      } catch {
-        // Could not parse — keep as reply text
-        lastEnd = match.index + match[0].length;
-      }
-    }
-
-    // Add any remaining text after the last ACTION
-    const tail = remaining.slice(lastEnd).trim();
-    if (tail) replyLines.push(tail);
-
-    // Sanitize owner fields in proposals
-    if (proposals) {
-      const validOwners = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "user"];
-      for (const p of proposals) {
-        if (p.owner && !validOwners.includes(p.owner)) {
-          const base = p.owner.split("-")[0];
-          p.owner = validOwners.includes(base) ? base : "builder";
-        }
-      }
-    }
-
-    let reply = replyLines.join("\n").trim();
-    if (!reply && actions.length > 0) {
-      // LLM returned only ACTION lines — summarize what was done
-      const summaries = actions.map((a) => `${a.type}`);
-      reply = `(${summaries.join(", ")})`;
-    } else if (!reply) {
-      reply = "(no response)";
-    }
-    return { reply, actions, proposals };
-  }
-
-  // ── Action execution ─────────────────────────────────────
-
-  private async executeActions(
-    actions: ManagerAction[],
-    _context: ManagerContext
-  ): Promise<void> {
-    for (const action of actions) {
-      try {
-        switch (action.type) {
-          case "update_task": {
-            const { id, ...rawUpdates } = action.params as { id: string; [k: string]: unknown };
-            if (id && this.api) {
-              const allowedFields = ["title", "description", "owner", "priority", "status", "type", "sprint", "branch", "labels", "blocks", "blocked_by", "context_notes", "target_repo", "parent_task", "review_comment", "commits", "story_points"];
-              const VALID_STATUS = ["todo", "in_progress", "review", "done"];
-              const VALID_PRIORITY = ["p0", "p1", "p2", "p3"];
-              const VALID_TYPE = ["feature", "bug", "chore", "research", "docs", "infra", "content", "strategy", "task"];
-              const VALID_SP = [1, 2, 3, 5, 8];
-
-              const updates: Record<string, unknown> = {};
-              for (const [k, v] of Object.entries(rawUpdates)) {
-                if (!allowedFields.includes(k)) continue;
-                if (k === "status" && !VALID_STATUS.includes(v as string)) { ui.warn(`[manager] update_task: invalid status "${v}"`); continue; }
-                if (k === "priority" && !VALID_PRIORITY.includes(v as string)) { ui.warn(`[manager] update_task: invalid priority "${v}"`); continue; }
-                if (k === "type" && v != null && !VALID_TYPE.includes(v as string)) { ui.warn(`[manager] update_task: invalid type "${v}"`); continue; }
-                if (k === "story_points" && v != null && !VALID_SP.includes(v as number)) { ui.warn(`[manager] update_task: invalid story_points "${v}"`); continue; }
-                updates[k] = v;
-              }
-              if (Object.keys(updates).length === 0) {
-                ui.warn(`[manager] update_task ${id}: no valid fields`);
-                break;
-              }
-              const fullId = this.resolveTaskId(id, _context);
-              await this.api.updateTask(fullId, updates as Partial<Task>);
-              this.onDataUpdate?.("task", fullId, updates);
-              ui.info(`[manager] Updated task ${id}`);
-            }
-            break;
-          }
-          case "create_task": {
-            const { title, description, priority, owner, story_points } = action.params as {
-              title: string; description?: string; priority?: string; owner?: string; story_points?: number;
-            };
-            const validOwners = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "user"];
-            const safeOwner = owner && validOwners.includes(owner) ? owner : (owner?.split("-")[0] && validOwners.includes(owner?.split("-")[0]) ? owner.split("-")[0] : "builder");
-            const safePriority = priority && ["p0", "p1", "p2", "p3"].includes(priority) ? priority : "p1";
-            if (safePriority !== priority) ui.warn(`[manager] create_task: invalid priority "${priority}" → defaulted to "${safePriority}"`);
-            const safeSp = story_points && [1, 2, 3, 5, 8].includes(story_points) ? story_points : undefined;
-            if (story_points && !safeSp) ui.warn(`[manager] create_task: invalid story_points "${story_points}"`);
-            if (title) {
-              await this.createTask(title, description, safePriority, safeOwner, _context, this.lastUserMessage);
-              ui.info(`[manager] Created task: ${title}`);
-            }
-            break;
-          }
-          case "transition_sprint": {
-            const { status } = action.params as { status: string };
-            if (status && _context.sprint && this.api) {
-              // Validate transition: planning→active→review→retrospective→completed
-              const validTransitions: Record<string, string[]> = {
-                planning: ["active"],
-                active: ["review"],
-                review: ["retrospective", "active"],
-                retrospective: ["completed"],
-              };
-              const current = _context.sprint.status;
-              const allowed = validTransitions[current] ?? [];
-              if (!allowed.includes(status)) {
-                ui.warn(`[manager] transition_sprint blocked: ${current} → ${status} is not allowed`);
-                break;
-              }
-              if (status === "completed") {
-                await this.api.completeSprint(_context.sprint.number);
-              } else {
-                await fetch(`${this.apiUrl}/api/v1/sprints/${_context.sprint.number}`, {
-                  method: "PATCH",
-                  headers: this.authHeaders(),
-                  body: JSON.stringify({ status }),
-                });
-              }
-              this.onDataUpdate?.("sprint", String(_context.sprint.number), { status });
-              ui.info(`[manager] Sprint transitioned to ${status}`);
-            }
-            break;
-          }
-          case "send_message": {
-            const { to, content } = action.params as { to: string; content: string };
-            if (to && content && this.api) {
-              await this.api.sendMessage("manager", to, content);
-              ui.info(`[manager] Sent message to ${to}`);
-            }
-            break;
-          }
-          case "spawn_agent": {
-            const { role, task_ids } = action.params as { role: string; task_ids: string[] };
-            if (role) {
-              const fullIds = (task_ids ?? []).map((id) => this.resolveTaskId(id, _context));
-              const approval: PendingApproval = {
-                id: `approval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                role,
-                taskIds: fullIds,
-                createdAt: Date.now(),
-              };
-              this.pendingApprovals.set(approval.id, approval);
-              ui.info(`[manager] spawn_agent awaiting approval: ${role} (${approval.id})`);
-              this.onApprovalRequest?.(approval);
-            }
-            break;
-          }
-          case "propose_tasks": {
-            // propose_tasks params is an array directly (not wrapped in object)
-            // Already handled via proposals return from parseResponse
-            break;
-          }
-          case "plan_sprint": {
-            // Move backlog tasks to current sprint
-            const taskIds = (action.params as Record<string, unknown>).task_ids as string[] | undefined;
-            if (!taskIds?.length || !_context?.sprint) {
-              ui.warn("[manager] plan_sprint: missing task_ids or no active sprint");
-              break;
-            }
-            let moved = 0;
-            for (const shortId of taskIds) {
-              const fullId = this.resolveTaskId(shortId, _context);
-              try {
-                await this.api?.updateTask(fullId, { sprint: _context.sprint.number } as Partial<Task>);
-                moved++;
-                this.onDataUpdate?.("task", fullId, { sprint: _context.sprint.number });
-              } catch (err) {
-                ui.warn(`[manager] plan_sprint: failed to move ${shortId}: ${err}`);
-              }
-            }
-            if (moved > 0) ui.info(`[manager] Moved ${moved} tasks from backlog to Sprint #${_context.sprint.number}`);
-            break;
-          }
-          default:
-            ui.warn(`[manager] Unknown action type: ${action.type}`);
-        }
-      } catch (err) {
-        ui.error(`[manager] Failed to execute action ${action.type}: ${err}`);
-      }
-    }
-  }
-
-  /** Resolve a short 8-char task ID prefix to full ID */
-  private resolveTaskId(shortId: string, ctx: ManagerContext): string {
-    const match = ctx.tasks.find((t) => t.id.startsWith(shortId));
-    return match?.id ?? shortId;
-  }
-
-  private async createTask(
-    title: string,
-    description?: string,
-    priority?: string,
-    owner?: string,
-    ctx?: ManagerContext,
-    userMessage?: string
-  ): Promise<void> {
-    const body: Record<string, unknown> = { title };
-    if (description) body.description = description;
-    if (priority) body.priority = priority;
-    if (owner) body.owner = owner;
-    if (ctx?.sprint) body.sprint = ctx.sprint.number;
-    body.labels = ["ai-generated"];
-    if (userMessage) body.context_notes = `User request: ${userMessage}`;
-
-    await fetch(`${this.apiUrl}/api/v1/tasks`, {
-      method: "POST",
-      headers: this.authHeaders(),
-      body: JSON.stringify(body),
-    });
   }
 
   // ── Message handling (polling fallback) ──────────────────

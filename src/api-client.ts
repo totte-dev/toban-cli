@@ -117,6 +117,11 @@ export interface ApiClient {
   recordFailure(data: { task_id: string; failure_type: string; summary: string; agent_name?: string; sprint?: number; review_comment?: string; files_involved?: string }): Promise<void>;
 }
 
+/** Create standard auth headers for API requests. */
+export function createAuthHeaders(apiKey: string): Record<string, string> {
+  return { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
+}
+
 /** Retry a fetch call on 5xx errors (D1 transient failures) */
 export async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -128,10 +133,7 @@ export async function fetchWithRetry(url: string, options: RequestInit, maxRetri
 }
 
 export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
+  const headers = createAuthHeaders(apiKey);
 
   return {
     async fetchWorkspace(): Promise<WorkspaceInfo> {

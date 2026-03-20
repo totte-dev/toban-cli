@@ -3,7 +3,7 @@
  */
 
 import type { AgentRunner } from "../runner.js";
-import type { Task } from "../api-client.js";
+import { createAuthHeaders, type Task } from "../api-client.js";
 import { buildAgentPrompt } from "../prompt.js";
 import { getEngine, resolveModel, resolveModelForRole } from "../agent-engine.js";
 import { matchTemplate, executeActions, type ActionContext } from "../agent-templates.js";
@@ -141,7 +141,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     // Auto-run Strategist proposals when sprint enters retrospective (once only)
     if (sprint?.status === "retrospective") {
       try {
-        const headers = { Authorization: `Bearer ${cliArgs.apiKey}`, "Content-Type": "application/json" };
+        const headers = createAuthHeaders(cliArgs.apiKey);
         const plansRes = await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}/plan`, { headers });
         if (plansRes.ok) {
           const plan = (await plansRes.json()) as { status: string; id: string };
@@ -186,7 +186,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         try {
           await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}`, {
             method: "PATCH",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
+            headers: createAuthHeaders(cliArgs.apiKey),
             body: JSON.stringify({ status: "review" }),
           });
           wsServer?.broadcast({ type: "data_update" as const, entity: "sprint", task_id: String(sprint.number), changes: { status: "review" }, timestamp: new Date().toISOString() });
@@ -220,7 +220,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
             for (const sub of subtasks) {
               await fetch(`${cliArgs.apiUrl}/api/v1/tasks`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
+                headers: createAuthHeaders(cliArgs.apiKey),
                 body: JSON.stringify({ ...sub, sprint: sprintNum, parent_task: t.id, status: "todo" }),
               });
             }
@@ -515,7 +515,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
               await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprintData.sprint.number}/retro`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", Authorization: `Bearer ${cliArgs.apiKey}` },
+                headers: createAuthHeaders(cliArgs.apiKey),
                 body: JSON.stringify({
                   agent_name: agentConfig.name,
                   went_well: safeWentWell,
