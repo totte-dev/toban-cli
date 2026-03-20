@@ -5,6 +5,7 @@
 import { createApiClient, type Task } from "../api-client.js";
 import { resolveModelForRole } from "../agent-engine.js";
 import * as ui from "../ui.js";
+import { parseTaskLabels } from "../utils/parse-labels.js";
 
 export async function handleReview(apiUrl: string, apiKey: string, taskId?: string, skills?: string[]): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
@@ -43,16 +44,11 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
   // Build reviewer prompt
   const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
   const { interpolate } = await import("../agent-templates.js");
-  const taskType = (task as Record<string, unknown>).type as string || "implementation";
+  const taskType = task.type as string || "implementation";
   const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 
   // Fetch playbook rules including skill rules matching task labels or --skill args
-  const reviewTags = skills || (() => {
-    const raw = (task as Record<string, unknown>).labels;
-    if (Array.isArray(raw)) return raw as string[];
-    if (typeof raw === "string") { try { return JSON.parse(raw) as string[]; } catch { return []; } }
-    return [];
-  })();
+  const reviewTags = skills || parseTaskLabels(task);
   let customRules = "";
   try { customRules = await api.fetchPlaybookPrompt("reviewer", reviewTags) || ""; } catch { /* non-fatal */ }
   if (reviewTags.length > 0) {

@@ -795,22 +795,22 @@ Use these trends to inform sprint planning — if velocity is declining, reduce 
           case "plan_sprint": {
             // Move backlog tasks to current sprint
             const taskIds = (action.params as Record<string, unknown>).task_ids as string[] | undefined;
-            if (!taskIds?.length || !ctx?.sprint) {
+            if (!taskIds?.length || !_context?.sprint) {
               ui.warn("[manager] plan_sprint: missing task_ids or no active sprint");
               break;
             }
             let moved = 0;
             for (const shortId of taskIds) {
-              const fullId = this.resolveTaskId(shortId, ctx);
+              const fullId = this.resolveTaskId(shortId, _context);
               try {
-                await this.api?.updateTask(fullId, { sprint: ctx.sprint.number } as Partial<Task>);
+                await this.api?.updateTask(fullId, { sprint: _context.sprint.number } as Partial<Task>);
                 moved++;
-                this.onDataUpdate?.("task", fullId, { sprint: ctx.sprint.number });
+                this.onDataUpdate?.("task", fullId, { sprint: _context.sprint.number });
               } catch (err) {
                 ui.warn(`[manager] plan_sprint: failed to move ${shortId}: ${err}`);
               }
             }
-            if (moved > 0) ui.info(`[manager] Moved ${moved} tasks from backlog to Sprint #${ctx.sprint.number}`);
+            if (moved > 0) ui.info(`[manager] Moved ${moved} tasks from backlog to Sprint #${_context.sprint.number}`);
             break;
           }
           default:

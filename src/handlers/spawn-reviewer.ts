@@ -5,19 +5,11 @@
 
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import type { Task } from "../api-client.js";
+import { fetchWithRetry } from "../api-client.js";
 import { interpolate, getDefaultTemplates } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { resolveModelForRole } from "../agent-engine.js";
-
-/** Retry fetch on 5xx (D1 transient failures) */
-async function fetchRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
-  for (let i = 0; i <= retries; i++) {
-    const res = await fetch(url, options);
-    if (res.ok || res.status < 500 || i === retries) return res;
-    await new Promise((r) => setTimeout(r, 500 * (i + 1)));
-  }
-  return fetch(url, options);
-}
+import { parseTaskLabels } from "../utils/parse-labels.js";
 
 export async function handleSpawnReviewer(
   action: TemplateAction,
@@ -99,18 +91,13 @@ export async function handleSpawnReviewer(
   }
 
   // Build reviewer prompt
-  const taskType = (ctx.task as Record<string, unknown>).type as string || "implementation";
+  const taskType = ctx.task.type as string || "implementation";
   const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
   const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 
   // Fetch playbook rules for reviewer, including skill rules matching task labels
   let customRules = "";
-  const taskLabels: string[] = (() => {
-    const raw = (ctx.task as Record<string, unknown>).labels;
-    if (Array.isArray(raw)) return raw;
-    if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return []; } }
-    return [];
-  })();
+  const taskLabels = parseTaskLabels(ctx.task);
   try { customRules = await ctx.api.fetchPlaybookPrompt("reviewer", taskLabels) || ""; } catch { /* non-fatal */ }
 
   let fullPrompt: string;
@@ -199,7 +186,7 @@ Output format: ${outputFormat}`;
 
       // Save structured review
       try {
-        await fetchRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
+        await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
           body: JSON.stringify(report),

@@ -126,11 +126,11 @@ if (cliArgs.command === "plan") {
   const runner = new AgentRunner({
     useDocker: !cliArgs.noDocker,
     onStdout: (agentName, lines, stream) => {
-      if (shutdownState.activeWsServer && "broadcastStdout" in shutdownState.activeWsServer) (shutdownState.activeWsServer as any).broadcastStdout(agentName, lines, stream);
+      shutdownState.activeWsServer?.broadcastStdout(agentName, lines, stream);
     },
     onActivity: (agentName, activity) => {
-      if (shutdownState.activeWsServer && "broadcast" in shutdownState.activeWsServer) {
-        (shutdownState.activeWsServer as any).broadcast({
+      if (shutdownState.activeWsServer) {
+        shutdownState.activeWsServer.broadcast({
           type: WS_MSG.AGENT_ACTIVITY, agent_name: agentName,
           content: activity.summary, kind: activity.kind, tool: activity.tool, timestamp: activity.timestamp,
         });

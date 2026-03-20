@@ -3,22 +3,15 @@
  * Reviews code changes using LLM (legacy single-turn review).
  */
 
+import { dirname } from "node:path";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import { interpolate } from "../agent-templates.js";
 import type { Task } from "../api-client.js";
+import { fetchWithRetry } from "../api-client.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
 import { resolveModelForRole } from "../agent-engine.js";
-
-/** Retry fetch on 5xx (D1 transient failures) */
-async function fetchRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
-  for (let i = 0; i <= retries; i++) {
-    const res = await fetch(url, options);
-    if (res.ok || res.status < 500 || i === retries) return res;
-    await new Promise((r) => setTimeout(r, 500 * (i + 1)));
-  }
-  return fetch(url, options);
-}
+import { parseTaskLabels } from "../utils/parse-labels.js";
 
 export async function handleReviewChanges(
   action: TemplateAction,
@@ -39,7 +32,7 @@ export async function handleReviewChanges(
       } catch { /* fall through */ }
     }
     // Worktree deleted — walk up to find the repo root
-    const { dirname } = require("node:path");
+    // dirname imported at module top
     let dir = ctx.config.workingDir;
     for (let i = 0; i < 5; i++) {
       dir = dirname(dir);
@@ -95,7 +88,7 @@ export async function handleReviewChanges(
       }
       const diffForReview = (filteredDiff.join("\n") || diffContent).slice(0, 6000);
       const lang = ctx.config.language === "ja" ? "Japanese" : "English";
-      const taskType = (ctx.task as Record<string, unknown>).type as string || "implementation";
+      const taskType = ctx.task.type as string || "implementation";
 
       // Build review prompt from templates (customizable via prompts/templates.ts)
       const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
@@ -108,12 +101,7 @@ export async function handleReviewChanges(
         taskDescription: ctx.task.description || "(no description)",
         taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
         customReviewRules: await (async () => {
-          const labels: string[] = (() => {
-            const raw = (ctx.task as Record<string, unknown>).labels;
-            if (Array.isArray(raw)) return raw;
-            if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return []; } }
-            return [];
-          })();
+          const labels = parseTaskLabels(ctx.task);
           let rules = "";
           try { rules = await ctx.api.fetchPlaybookPrompt("reviewer", labels) || ""; } catch { /* */ }
           return rules ? `\n## Project-Specific Review Rules\n${rules}` : "";
@@ -199,7 +187,7 @@ ${outputFormat}`;
             report.verdict = "APPROVE";
           }
         }
-        const res = await fetchRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
+        const res = await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
           body: JSON.stringify(report),

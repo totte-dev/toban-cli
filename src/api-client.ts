@@ -12,6 +12,15 @@ export interface Task {
   owner?: string;
   agent?: string;
   target_repo?: string | null;
+  type?: string;
+  story_points?: number | null;
+  labels?: string[] | string;
+  review_comment?: string | null;
+  context_notes?: string | null;
+  sprint?: number | null;
+  parent_task?: string | null;
+  created_at?: string;
+  updated_at?: string;
   [key: string]: unknown;
 }
 
@@ -109,7 +118,7 @@ export interface ApiClient {
 }
 
 /** Retry a fetch call on 5xx errors (D1 transient failures) */
-async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
+export async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const res = await fetch(url, options);
     if (res.ok || res.status < 500 || attempt === maxRetries) return res;

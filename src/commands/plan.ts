@@ -40,7 +40,7 @@ export async function handleSprintPlan(apiUrl: string, apiKey: string): Promise<
     const failureLines = failuresRes.patterns?.map((p) => `${p.occurrences}x: ${p.pattern}`).join("\n") || "none";
 
     const backlogLines = backlog.map((t) => {
-      const sp = (t as Record<string, unknown>).story_points ?? "?";
+      const sp = t.story_points ?? "?";
       return `- [${t.priority}] ${sp}SP "${t.title}" (id:${t.id.slice(0, 8)})`;
     }).join("\n");
 

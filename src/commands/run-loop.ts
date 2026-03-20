@@ -18,6 +18,7 @@ import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
 import { handlePropose } from "./propose.js";
 import type { ShutdownState } from "./shutdown.js";
+import { parseTaskLabels } from "../utils/parse-labels.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,7 +54,7 @@ async function splitTaskWithLLM(task: Task, cliArgs: { apiUrl: string; apiKey: s
 Task: ${task.title}
 Description: ${task.description || "(none)"}
 Owner: ${task.owner || "builder"}
-Type: ${(task as Record<string, unknown>).type || "feature"}
+Type: ${task.type || "feature"}
 
 Output ONLY a JSON array, no markdown:
 [{"title":"...","description":"specific files and acceptance criteria","owner":"builder","type":"feature","priority":"p2","story_points":2}]`;
@@ -209,7 +210,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     // Auto-transition todo → in_progress for agent-owned tasks
     // SP >= 5 tasks are auto-split into subtasks first
     for (const t of todoForAgents) {
-      const sp = (t as Record<string, unknown>).story_points as number | null;
+      const sp = t.story_points as number | null;
       if (sp && sp >= 5) {
         ui.info(`[auto-split] ${t.id.slice(0, 8)}: SP=${sp} — splitting into subtasks`);
         try {
@@ -284,7 +285,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       // Pre-check: reject tasks with no meaningful description
       const desc = task.description || "";
-      if (desc.length < 20 && !(task as Record<string, unknown>).type?.toString().match(/^(chore)$/)) {
+      if (desc.length < 20 && !task.type?.toString().match(/^(chore)$/)) {
         ui.warn(`[task] Skipping "${task.title}" — description too short (${desc.length} chars). Add details to the task.`);
         try { await api.updateTask(task.id, { status: "blocked" } as Partial<Task>); } catch { /* non-fatal */ }
         continue;
@@ -298,15 +299,14 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       const agentName = task.owner ?? "builder";
       const apiDocs = await api.fetchApiDocs(agentName);
-      const taskType = (task as Record<string, unknown>).type as string | undefined;
-      const rawLabels = (task as Record<string, unknown>).labels;
-      const taskLabels: string[] = Array.isArray(rawLabels) ? rawLabels : typeof rawLabels === "string" ? (() => { try { return JSON.parse(rawLabels); } catch { return []; } })() : [];
+      const taskType = task.type as string | undefined;
+      const taskLabels = parseTaskLabels(task);
       const agentTemplate = matchTemplate(taskType, agentName);
       const isReadOnly = agentTemplate.tools !== "all";
       ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
 
       const taskLog = createTaskLogger(task.id);
-      taskLog.event("pickup", { agent: agentName, template: agentTemplate.id, title: task.title, taskType, hasReviewComment: !!(task as Record<string, unknown>).review_comment });
+      taskLog.event("pickup", { agent: agentName, template: agentTemplate.id, title: task.title, taskType, hasReviewComment: !!task.review_comment });
 
       const actionCtx: ActionContext = {
         api, task, agentName, template: agentTemplate, taskLog,
@@ -341,7 +341,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         continue;
       }
 
-      const contextNotes = (task as Record<string, unknown>).context_notes as string | undefined;
+      const contextNotes = task.context_notes as string | undefined;
       const fullDescription = [task.description, contextNotes].filter(Boolean).join("\n\n") || undefined;
 
       // Fetch past failures for prompt injection
@@ -350,7 +350,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       // Extract previous review feedback for retry injection
       let previousReview: string | undefined;
-      const taskReviewComment = (task as Record<string, unknown>).review_comment as string | undefined;
+      const taskReviewComment = task.review_comment as string | undefined;
       if (taskReviewComment) {
         try {
           const r = JSON.parse(taskReviewComment);

@@ -8,6 +8,7 @@ import path from "node:path";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import type { AgentMemory } from "../api-client.js";
 import * as ui from "../ui.js";
+import { parseTaskLabels } from "../utils/parse-labels.js";
 
 export async function handleInjectMemory(
   action: TemplateAction,
@@ -41,12 +42,7 @@ export async function handleInjectMemory(
   // Inject agent memories + shared memories
   const memories = await ctx.api.fetchAgentMemories(ctx.agentName);
   // Fetch shared memories matching task labels
-  const taskLabels: string[] = (() => {
-    const raw = (ctx.task as Record<string, unknown>).labels;
-    if (Array.isArray(raw)) return raw;
-    if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return []; } }
-    return [];
-  })();
+  const taskLabels = parseTaskLabels(ctx.task);
   let sharedMemories: AgentMemory[] = [];
   try {
     const res = await fetch(`${ctx.config.apiUrl}/api/v1/agents/memories/shared${taskLabels.length ? `?tags=${taskLabels.join(",")}` : ""}`, {
