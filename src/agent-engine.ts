@@ -61,18 +61,19 @@ export interface AgentEngineProvider {
 // ---------------------------------------------------------------------------
 
 /** Map DB engine short names to Claude model IDs */
+/** Map engine short names to Claude model IDs */
 const ENGINE_MODEL_MAP: Record<string, string> = {
   "claude-opus": "claude-opus-4-6",
   "claude-sonnet": "claude-sonnet-4-6",
   "claude-haiku": "claude-haiku-4-5-20251001",
-  // Provider IDs (stored by Setup as engine type, not model)
-  "claude-code": "claude-sonnet-4-6",
-  "claude-api": "claude-sonnet-4-6",
   // Legacy model names
   "claude-opus-4-20250514": "claude-opus-4-6",
   "claude-sonnet-4-20250514": "claude-sonnet-4-6",
   "claude-sonnet-4-5-20250514": "claude-sonnet-4-6",
 };
+
+/** Engine values that are provider types, not model selections — use role default */
+const PROVIDER_ENGINE_IDS = new Set(["claude-code", "claude-api", "claude", "codex", "gemini", "cursor", "custom"]);
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 
@@ -96,10 +97,13 @@ export function resolveModel(engine?: string | null): string {
 
 /**
  * Resolve model for a specific agent role.
- * Priority: DB engine setting > role default > global default.
+ * Priority: DB engine setting (if it's a model name) > role default > global default.
+ * Provider IDs (claude-code, claude-api, etc.) are ignored — use role default.
  */
 export function resolveModelForRole(role: string, engine?: string | null): string {
-  if (engine) return resolveModel(engine);
+  if (engine && !PROVIDER_ENGINE_IDS.has(engine)) {
+    return resolveModel(engine);
+  }
   return ROLE_DEFAULT_MODEL[role] ?? DEFAULT_MODEL;
 }
 
