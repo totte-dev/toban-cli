@@ -156,7 +156,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       } catch { /* non-fatal */ }
     }
 
-    // Auto-run Strategist proposals when sprint enters retrospective
+    // Auto-run Strategist proposals when sprint enters retrospective (once only)
     if (sprint?.status === "retrospective") {
       try {
         const headers = { Authorization: `Bearer ${cliArgs.apiKey}`, "Content-Type": "application/json" };
@@ -165,20 +165,31 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
           const plan = (await plansRes.json()) as { status: string; id: string };
           if (plan.status === "generating") {
             ui.info("[strategist] Sprint entered retrospective — generating improvement proposals...");
+            // Mark as in-progress immediately to prevent re-trigger on next poll
+            try {
+              await api.updateAgent({ name: "strategist", status: "working", activity: "Generating proposals..." });
+            } catch { /* non-fatal */ }
+
+            let success = false;
             try {
               await handlePropose(cliArgs.apiUrl, cliArgs.apiKey);
-              // Overwrite the generating plan with a completed one
-              await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}/plan`, {
-                method: "POST", headers,
-                body: JSON.stringify({ summary: "Proposals generated — review in Backlog > Proposals", tasks: [], total_sp: 0 }),
-              });
+              success = true;
             } catch (err) {
               ui.warn(`[strategist] Proposal generation failed: ${err}`);
-              // Mark as failed so Complete isn't blocked forever
+            }
+
+            // Always overwrite generating plan to prevent infinite loop
+            const planSummary = success
+              ? "Proposals generated — review in Backlog > Proposals"
+              : "Proposal generation failed";
+            try {
               await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}/plan`, {
                 method: "POST", headers,
-                body: JSON.stringify({ summary: "Proposal generation failed", tasks: [], total_sp: 0 }),
+                body: JSON.stringify({ summary: planSummary, tasks: [{ id: "done", title: planSummary, reason: "" }], total_sp: 0 }),
               });
+            } catch {
+              // If API is unreachable, update DB directly won't work — log and move on
+              ui.warn("[strategist] Could not update plan status — will retry next poll");
             }
           }
         }
@@ -919,12 +930,20 @@ Output ONLY valid JSON (no markdown):
     }
 
     // Save to API
-    const saveRes = await fetch(`${apiUrl}/api/v1/proposals/batch`, {
-      method: "POST", headers,
-      body: JSON.stringify(proposalList),
-    });
-    const saved = (await saveRes.json()) as { created: number };
-    ui.info(`[strategist] ${saved.created} proposals saved. Approve in dashboard > Backlog > Proposals.`);
+    try {
+      const saveRes = await fetch(`${apiUrl}/api/v1/proposals/batch`, {
+        method: "POST", headers,
+        body: JSON.stringify(proposalList),
+      });
+      if (saveRes.ok) {
+        const saved = (await saveRes.json()) as { created: number };
+        ui.info(`[strategist] ${saved.created} proposals saved. Approve in dashboard > Backlog > Proposals.`);
+      } else {
+        ui.warn(`[strategist] Failed to save proposals: ${saveRes.status} ${saveRes.statusText}`);
+      }
+    } catch (saveErr) {
+      ui.warn(`[strategist] Failed to save proposals: ${saveErr}`);
+    }
 
   } finally {
     try { await api.updateAgent({ name: "strategist", status: "idle", activity: `Proposals generated` }); } catch { /* non-fatal */ }
