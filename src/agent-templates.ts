@@ -6,25 +6,15 @@
  * templates can be loaded from the API or a YAML config file.
  */
 
-import fs from "node:fs";
-import path from "node:path";
-
-/** Track retry counts per task to prevent infinite NEEDS_CHANGES loops */
-const retryTracker = new Map<string, number>();
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
-import { resolveModelForRole } from "./agent-engine.js";
-
-/** Retry fetch on 5xx (D1 transient failures) */
-async function fetchRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
-  for (let i = 0; i <= retries; i++) {
-    const res = await fetch(url, options);
-    if (res.ok || res.status < 500 || i === retries) return res;
-    await new Promise((r) => setTimeout(r, 500 * (i + 1)));
-  }
-  return fetch(url, options);
-}
+import { trackRetry } from "./utils/retry-tracker.js";
+import { handleGitMerge } from "./handlers/git-merge.js";
+import { handleGitPush } from "./handlers/git-push.js";
+import { handleSpawnReviewer } from "./handlers/spawn-reviewer.js";
+import { handleReviewChanges } from "./handlers/review-changes.js";
+import { handleInjectMemory, handleCollectMemory } from "./handlers/memory.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -402,9 +392,7 @@ export async function executeActions(
           }
           // If review verdict is NEEDS_CHANGES, check retry count
           if (updates.status === "review" && ctx.reviewVerdict === "NEEDS_CHANGES") {
-            const MAX_RETRIES = 3;
-            const retryCount = (retryTracker.get(ctx.task.id) ?? 0) + 1;
-            retryTracker.set(ctx.task.id, retryCount);
+            const { retryCount, maxed } = trackRetry(ctx.task.id);
 
             // Record failure to Failure DB (only on first attempt — avoid retry noise)
             if (retryCount === 1) {
@@ -419,13 +407,13 @@ export async function executeActions(
               }).catch(() => { /* best-effort */ });
             }
 
-            if (retryCount >= MAX_RETRIES) {
+            if (maxed) {
               updates.status = "review";
               updates.review_comment = `Blocked: task failed ${retryCount} times. Needs human intervention.`;
               ui.error(`[${phase}] Task failed ${retryCount} times — moved to review for human intervention`);
             } else {
               updates.status = "todo";
-              ui.warn(`[${phase}] Review verdict: NEEDS_CHANGES (attempt ${retryCount}/${MAX_RETRIES}) — resetting to todo`);
+              ui.warn(`[${phase}] Review verdict: NEEDS_CHANGES (attempt ${retryCount}/3) — resetting to todo`);
             }
           }
           await ctx.api.updateTask(ctx.task.id, updates as Partial<Task>);
@@ -455,97 +443,7 @@ export async function executeActions(
           break;
         }
         case "git_merge": {
-          const { execSync: gitExec } = await import("node:child_process");
-          const { existsSync: gitExists } = await import("node:fs");
-          const { join: gitJoin } = await import("node:path");
-          // workingDir is the worktree path — we need the main repo root
-          // Worktree is at <repo>/.worktrees/<branch>/, so repo root is 2 levels up
-          const worktreePath = ctx.config.workingDir;
-          const repoDir = gitExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: worktreePath, stdio: "pipe" })
-            .toString().trim().replace(/\/.git$/, "");
-          const baseBranch = ctx.config.baseBranch;
-
-          // Find the agent's worktree branch
-          try {
-            // Prefer the branch name from context (set by spawner) to avoid picking up wrong branches
-            let worktreeBranch = ctx.agentBranch || null;
-            if (!worktreeBranch) {
-              // Fallback: scan for agent/ branches (legacy, less reliable with parallel agents)
-              const branches = gitExec("git branch", { cwd: repoDir, stdio: "pipe" }).toString();
-              worktreeBranch = branches.split("\n")
-                .map((b) => b.trim().replace(/^[*+]\s+/, ""))
-                .find((b) => b.startsWith("agent/")) || null;
-            }
-
-            if (worktreeBranch) {
-              // Find worktree path for cleanup
-              const worktreeDir = gitJoin(repoDir, ".worktrees", worktreeBranch.replace(/\//g, "-"));
-
-              // Safety check: verify agent actually made commits on the branch
-              const agentCommits = gitExec(
-                `git log ${baseBranch}..${worktreeBranch} --oneline`,
-                { cwd: repoDir, stdio: "pipe" }
-              ).toString().trim();
-
-              if (!agentCommits) {
-                ui.warn(`[${phase}] ${label}: no agent commits on ${worktreeBranch} — skipping merge`);
-                ctx.mergeSkipped = true;
-                // Clean up the empty branch
-                if (gitExists(worktreeDir)) {
-                  const { rmSync } = await import("node:fs");
-                  try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
-                }
-                try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-                try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-                break;
-              }
-
-              // Safety check: verify diff contains real code changes
-              const diffFiles = gitExec(
-                `git diff ${baseBranch}..${worktreeBranch} --name-only`,
-                { cwd: repoDir, stdio: "pipe" }
-              ).toString().trim().split("\n").filter(Boolean);
-              // Filter out inject_memory artifacts only (.claude/ memory dirs, .toban- messages)
-              // CLAUDE.md is meaningful (agent may create/update it as part of the task)
-              const meaningfulFiles = diffFiles.filter(
-                (f) => !f.startsWith(".claude/") && !f.startsWith(".toban-")
-              );
-
-              if (meaningfulFiles.length === 0) {
-                ui.warn(`[${phase}] ${label}: only metadata files changed (${diffFiles.join(", ")}) — skipping merge`);
-                ctx.mergeSkipped = true;
-                if (gitExists(worktreeDir)) {
-                  const { rmSync } = await import("node:fs");
-                  try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
-                }
-                try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-                try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-                break;
-              }
-
-              ui.info(`[${phase}] ${label}: ${agentCommits.split("\n").length} commit(s), ${meaningfulFiles.length} file(s)`);
-              // Record pre-merge hash for accurate diff in reviewer
-              try { ctx.preMergeHash = gitExec("git rev-parse HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(); } catch { /* non-fatal */ }
-              gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
-              gitExec(`git merge --no-ff "${worktreeBranch}" -m "merge: ${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
-              ui.info( `[${phase}] ${label}: merged ${worktreeBranch}`);
-
-              // Clean up worktree
-              if (gitExists(worktreeDir)) {
-                const { rmSync } = await import("node:fs");
-                try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
-              }
-              try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-              try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-            } else {
-              ui.info( `[${phase}] ${label}: no agent branch found, skipping`);
-            }
-          } catch (mergeErr) {
-            const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
-            logError(CLI_ERR.GIT_MERGE_FAILED, `git_merge failed: ${msg}`, { taskId: ctx.task.id }, mergeErr);
-            ui.warn(`[template] git_merge failed: ${msg}`);
-            try { gitExec("git merge --abort", { cwd: repoDir, stdio: "pipe" }); } catch { /* already clean */ }
-          }
+          await handleGitMerge(action, ctx, phase);
           break;
         }
         case "git_auth_check": {
@@ -570,37 +468,7 @@ export async function executeActions(
           break;
         }
         case "git_push": {
-          if (ctx.mergeSkipped) { ui.info(`[${phase}] ${label}: skipped (no merge)`); break; }
-          const { execSync: pushExec } = await import("node:child_process");
-          // Resolve repo root (workingDir may be a worktree)
-          const pushRepoDir = pushExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
-            .toString().trim().replace(/\/.git$/, "");
-          // Stash any unstaged changes (e.g. inject_memory's CLAUDE.md modifications)
-          try {
-            pushExec("git stash --include-untracked", { cwd: pushRepoDir, stdio: "pipe" });
-          } catch { /* nothing to stash */ }
-          try {
-            pushExec(`git push origin ${ctx.config.baseBranch}`, {
-              cwd: pushRepoDir,
-              stdio: "pipe",
-            });
-            ui.info( `[${phase}] ${label}: pushed ${ctx.config.baseBranch}`);
-          } catch {
-            // Push rejected (remote ahead) — pull rebase and retry
-            try {
-              pushExec(`git pull --rebase origin ${ctx.config.baseBranch}`, { cwd: pushRepoDir, stdio: "pipe" });
-              pushExec(`git push origin ${ctx.config.baseBranch}`, { cwd: pushRepoDir, stdio: "pipe" });
-              ui.info( `[${phase}] ${label}: pushed ${ctx.config.baseBranch} (after rebase)`);
-            } catch (retryErr) {
-              const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-              logError(CLI_ERR.GIT_PUSH_FAILED, `git_push failed after rebase: ${msg}`, { taskId: ctx.task.id, repoDir: pushRepoDir }, retryErr);
-              ui.warn(`[template] git_push failed after rebase: ${msg}`);
-            }
-          }
-          // Restore stashed changes (non-fatal if nothing was stashed)
-          try {
-            pushExec("git stash pop", { cwd: pushRepoDir, stdio: "pipe" });
-          } catch { /* no stash to pop */ }
+          await handleGitPush(action, ctx, phase);
           break;
         }
         case "submit_retro": {
@@ -611,424 +479,11 @@ export async function executeActions(
           break;
         }
         case "spawn_reviewer": {
-          if (ctx.mergeSkipped) {
-            const allowNoCommit = ctx.template?.allow_no_commit_completion ?? false;
-            if (!allowNoCommit || !ctx.completionJson?.review_comment) {
-              ui.info(`[${phase}] ${label}: skipped (no merge${!ctx.completionJson ? ", no completion" : ""})`);
-              ctx.reviewVerdict = "NEEDS_CHANGES";
-              break;
-            }
-            // No commits but agent reported completion — still run Reviewer
-            // to verify the claim (e.g. "already implemented")
-            ui.info(`[${phase}] ${label}: no code changes, running Reviewer to verify completion`);
-          }
-          ctx.onReviewUpdate?.(ctx.task.id, "started");
-          const { execSync: revExec2 } = await import("node:child_process");
-          const { existsSync: revExists2 } = await import("node:fs");
-          const { spawn: reviewSpawn2 } = await import("node:child_process");
-
-          // Resolve repo root
-          const reviewRepoDir = (() => {
-            if (revExists2(ctx.config.workingDir)) {
-              try {
-                return revExec2("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
-                  .toString().trim().replace(/\/.git$/, "");
-              } catch { /* fall through */ }
-            }
-            return ctx.config.workingDir;
-          })();
-
-          // Get diff ref for the reviewer prompt — use preMergeHash for accurate agent-only diff
-          const diffRef = (() => {
-            if (ctx.preMergeHash) return `${ctx.preMergeHash}..HEAD`;
-            try {
-              const parents = revExec2("git cat-file -p HEAD", { cwd: reviewRepoDir, stdio: "pipe" }).toString();
-              const parentCount = (parents.match(/^parent /gm) || []).length;
-              return parentCount === 0 ? "--root HEAD" : "HEAD~1..HEAD";
-            } catch { return "HEAD~1..HEAD"; }
-          })();
-
-          // Get diff stat for context
-          let filesChanged: string[] = [];
-          try {
-            const diffStat = revExec2(`git diff ${diffRef} --stat`, { cwd: reviewRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
-            filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
-          } catch { /* empty */ }
-
-          // Check diff size — too large means task should be split
-          let diffLineCount = 0;
-          try {
-            const diffRaw = revExec2(`git diff ${diffRef} --stat`, { cwd: reviewRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
-            const lastLine = diffRaw.trim().split("\n").pop() || "";
-            const insertMatch = lastLine.match(/(\d+) insertion/);
-            const deleteMatch = lastLine.match(/(\d+) deletion/);
-            diffLineCount = (parseInt(insertMatch?.[1] || "0") + parseInt(deleteMatch?.[1] || "0"));
-          } catch { /* non-fatal */ }
-
-          if (diffLineCount > 300) {
-            ui.warn(`[${phase}] ${label}: diff too large (${diffLineCount} lines) — NEEDS_CHANGES`);
-            ctx.reviewVerdict = "NEEDS_CHANGES";
-            try {
-              await ctx.api.updateTask(ctx.task.id, {
-                review_comment: JSON.stringify({
-                  verdict: "NEEDS_CHANGES",
-                  requirement_match: "not assessed — diff too large",
-                  files_changed: filesChanged.join(", "),
-                  code_quality: "not assessed",
-                  test_coverage: "not assessed",
-                  risks: `Diff is ${diffLineCount} lines. Task should be split into smaller subtasks for reliable review.`,
-                }),
-              } as Partial<Task>);
-            } catch { /* non-fatal */ }
-            break;
-          }
-
-          // Build reviewer prompt
-          const taskType = (ctx.task as Record<string, unknown>).type as string || "implementation";
-          const { PROMPT_TEMPLATES } = await import("./prompts/templates.js");
-          const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
-
-          // Fetch playbook rules for reviewer, including skill rules matching task labels
-          let customRules = "";
-          const taskLabels: string[] = (() => {
-            const raw = (ctx.task as Record<string, unknown>).labels;
-            if (Array.isArray(raw)) return raw;
-            if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return []; } }
-            return [];
-          })();
-          try { customRules = await ctx.api.fetchPlaybookPrompt("reviewer", taskLabels) || ""; } catch { /* non-fatal */ }
-
-          let fullPrompt: string;
-
-          if (ctx.mergeSkipped && ctx.completionJson?.review_comment) {
-            // No code changes — Reviewer verifies the agent's completion claim
-            const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
-            fullPrompt = `You are a strict code reviewer for project.
-Task: ${ctx.task.title}
-Type: ${taskType}
-Description: ${ctx.task.description || "(no description)"}
-
-The Builder agent reported NO CODE CHANGES were needed:
-"${ctx.completionJson.review_comment}"
-
-Verify this claim:
-1. Check if the task requirements are actually already met in the codebase
-2. Run tests if applicable (npm test)
-3. If the agent's claim is correct and the task is truly complete, verdict = APPROVE
-4. If the task is NOT actually complete, verdict = NEEDS_CHANGES with explanation
-
-${customRules}
-
-Output format: ${outputFormat}`;
-          } else {
-            const reviewerTemplate = DEFAULT_TEMPLATES.find((t) => t.id === "reviewer")!;
-            const reviewCriteria = [
-              "1. REQUIREMENT MATCH: Do changes address the task description? Unrelated = NEEDS_CHANGES",
-              "2. SCOPE: Limited to what the task asks? Out-of-scope = NEEDS_CHANGES",
-              "3. MEANINGFUL CHANGES: Real code/content? Metadata-only = NEEDS_CHANGES",
-              "4. CODE QUALITY: Readability, security, error handling",
-              `5. ${typeHints[taskType] || typeHints.implementation || ""}`,
-              "",
-              "If tests fail, verdict MUST be NEEDS_CHANGES.",
-              "If changes don't match the task, verdict MUST be NEEDS_CHANGES.",
-            ].join("\n");
-
-            const reviewPrompt = interpolate(reviewerTemplate.prompt.completion, {
-              diffRef,
-              taskTitle: ctx.task.title,
-              taskDescription: ctx.task.description || "(no description)",
-              taskType,
-              reviewCriteria,
-              customReviewRules: customRules ? `\n${customRules}` : "",
-            });
-
-            fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\nFiles changed: ${filesChanged.join(", ") || "unknown"}\n\n${reviewPrompt}`;
-          }
-
-          // Spawn reviewer as agent process
-          ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
-          ui.info(`[${phase}] ${label}: spawning Reviewer agent (${filesChanged.length} files)`);
-
-          const REVIEWER_TIMEOUT = 300_000; // 5 minutes
-          const reviewResult = await new Promise<string>((resolve) => {
-            const env = { ...process.env };
-            delete env.CLAUDECODE;
-            const child = reviewSpawn2("claude", [
-              "--print", "--model", resolveModelForRole("reviewer"), "--max-turns", "5", fullPrompt,
-            ], {
-              env, cwd: reviewRepoDir, stdio: ["ignore", "pipe", "pipe"], timeout: REVIEWER_TIMEOUT,
-            });
-            let out = "";
-            let resolved = false;
-            child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
-            child.stderr?.on("data", () => {}); // consume stderr
-            child.on("close", () => { if (!resolved) { resolved = true; resolve(out); } });
-            child.on("error", () => { if (!resolved) { resolved = true; resolve(out || ""); } });
-            setTimeout(() => { if (!resolved) { resolved = true; try { child.kill(); } catch {} resolve(out || ""); } }, REVIEWER_TIMEOUT);
-          });
-
-          // Parse COMPLETION_JSON from reviewer output (supports COMPLETION_JSON: prefix and ```json blocks)
-          let verdict: "APPROVE" | "NEEDS_CHANGES" = "NEEDS_CHANGES";
-          let reviewComment = "";
-          const completionMatch = reviewResult.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m)
-            || reviewResult.match(/```json\s*(\{[\s\S]*?"verdict"[\s\S]*?\})\s*```/m)
-            || reviewResult.match(/(\{[\s\S]*?"verdict"\s*:\s*"(?:APPROVE|NEEDS_CHANGES)"[\s\S]*?\})\s*$/m);
-          if (completionMatch) {
-            try {
-              const report = JSON.parse(completionMatch[1]) as Record<string, unknown>;
-              // Normalize verdict
-              const v = String(report.verdict || "").toUpperCase();
-              verdict = (v.includes("APPROVE") && !v.includes("NEEDS")) ? "APPROVE" : "NEEDS_CHANGES";
-              report.verdict = verdict;
-              reviewComment = JSON.stringify(report);
-
-              // Save structured review
-              try {
-                await fetchRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
-                  body: JSON.stringify(report),
-                });
-              } catch { /* fallback below */ }
-            } catch {
-              reviewComment = reviewResult.slice(-2000);
-            }
-          } else {
-            // No COMPLETION_JSON — use raw output as review
-            reviewComment = reviewResult.slice(-2000) || "Reviewer agent produced no output";
-          }
-
-          // Save review comment if not saved via review-report
-          if (!completionMatch) {
-            await ctx.api.updateTask(ctx.task.id, { review_comment: reviewComment } as Partial<Task>);
-          }
-
-          ctx.reviewVerdict = verdict;
-          ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewComment });
-          ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewComment);
-          ui.info(`[${phase}] ${label}: verdict = ${verdict}`);
+          await handleSpawnReviewer(action, ctx, phase, actions);
           break;
         }
         case "review_changes": {
-          ctx.onReviewUpdate?.(ctx.task.id, "started");
-          const { execSync: revExec } = await import("node:child_process");
-          const { existsSync: revExists } = await import("node:fs");
-          // workingDir may be a deleted worktree after git_merge — resolve repo root
-          const revRepoDir = (() => {
-            // Try workingDir first (may be worktree or repo root)
-            if (revExists(ctx.config.workingDir)) {
-              try {
-                return revExec("git rev-parse --path-format=absolute --git-common-dir", { cwd: ctx.config.workingDir, stdio: "pipe" })
-                  .toString().trim().replace(/\/.git$/, "");
-              } catch { /* fall through */ }
-            }
-            // Worktree deleted — walk up to find the repo root
-            const { dirname } = require("node:path");
-            let dir = ctx.config.workingDir;
-            for (let i = 0; i < 5; i++) {
-              dir = dirname(dir);
-              if (revExists(dir + "/.git")) return dir;
-            }
-            return ctx.config.workingDir;
-          })();
-          try {
-            ui.debug("review", `repo dir: ${revRepoDir}`);
-            // Get the merge commit and its details
-            const lastCommit = revExec("git log --oneline -1", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
-            const commitBody = revExec("git log -1 --format=%b", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
-            // Use merge commit diff (HEAD^..HEAD for merge, HEAD~1 for regular, --root for initial)
-            const parentCount = (revExec("git cat-file -p HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().match(/^parent /gm) || []).length;
-            const diffRef = parentCount >= 2 ? "HEAD^..HEAD" : parentCount === 1 ? "HEAD~1" : "--root HEAD";
-            const diffStat = revExec(`git diff ${diffRef} --stat`, { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
-            const diffContent = revExec(`git diff ${diffRef} --no-color`, { cwd: revRepoDir, stdio: "pipe", timeout: 10_000 }).toString();
-
-            // Build review summary with commit description + file stats
-            const lines = diffContent.split("\n").length;
-            const filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
-
-            // Run tests before review to include results in the prompt
-            let testResult = "";
-            try {
-              ctx.onReviewUpdate?.(ctx.task.id, "testing");
-              const testOutput = revExec("npm test 2>&1 || true", {
-                cwd: revRepoDir, stdio: "pipe", timeout: 60_000,
-              }).toString().trim();
-              const lastLines = testOutput.split("\n").slice(-10).join("\n");
-              const passed = testOutput.includes("passed") && !testOutput.includes("failed");
-              testResult = passed
-                ? "Tests: ALL PASSED"
-                : `Tests: SOME FAILED\n${lastLines}`;
-            } catch {
-              testResult = "Tests: could not run (no test script or timeout)";
-            }
-
-            // LLM review: ask Claude to review the diff against the task requirements
-            ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
-            let llmReview = "";
-            try {
-              const { spawn: reviewSpawn } = await import("node:child_process");
-              // Keep full diff context but filter out test files for size reduction
-              const diffLines = diffContent.split("\n");
-              const filteredDiff: string[] = [];
-              let inTestFile = false;
-              for (const line of diffLines) {
-                if (line.startsWith("diff --git")) {
-                  inTestFile = /test|spec|__tests__/i.test(line);
-                }
-                if (!inTestFile) filteredDiff.push(line);
-              }
-              const diffForReview = (filteredDiff.join("\n") || diffContent).slice(0, 6000);
-              const lang = ctx.config.language === "ja" ? "Japanese" : "English";
-              const taskType = (ctx.task as Record<string, unknown>).type as string || "implementation";
-
-              // Build review prompt from templates (customizable via prompts/templates.ts)
-              const { PROMPT_TEMPLATES } = await import("./prompts/templates.js");
-              const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
-              const reviewSystem = interpolate(PROMPT_TEMPLATES["reviewer-system"] || "", {
-                projectName: ctx.config.workingDir.split("/").pop() || "unknown",
-                language: lang,
-                taskTitle: ctx.task.title,
-                taskType,
-                taskDescription: ctx.task.description || "(no description)",
-                taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
-                customReviewRules: await (async () => {
-                  const labels: string[] = (() => {
-                    const raw = (ctx.task as Record<string, unknown>).labels;
-                    if (Array.isArray(raw)) return raw;
-                    if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return []; } }
-                    return [];
-                  })();
-                  let rules = "";
-                  try { rules = await ctx.api.fetchPlaybookPrompt("reviewer", labels) || ""; } catch { /* */ }
-                  return rules ? `\n## Project-Specific Review Rules\n${rules}` : "";
-                })()
-              });
-              const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
-
-              const reviewPrompt = `${reviewSystem}
-
-${testResult}
-
-Diff (${filesChanged.length} files, ${lines} lines):
-${diffForReview}
-
-If tests failed, verdict MUST be NEEDS_CHANGES.
-
-${outputFormat}`;
-
-              const env = { ...process.env };
-              delete env.CLAUDECODE;
-              const LLM_TIMEOUT = 120_000; // 2 minutes
-              llmReview = await new Promise<string>((resolve) => {
-                const child = reviewSpawn("claude", ["--print", "--model", resolveModelForRole("reviewer"), "--max-turns", "1", reviewPrompt], {
-                  env, stdio: ["ignore", "pipe", "pipe"], timeout: LLM_TIMEOUT,
-                });
-                let out = "";
-                let resolved = false;
-                child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
-                child.on("close", (code) => {
-                  if (!resolved) { resolved = true; resolve(out.trim()); }
-                  if (code !== 0) ui.warn(`[review] LLM exited with code ${code}`);
-                });
-                child.on("error", (err) => {
-                  if (!resolved) { resolved = true; resolve(""); }
-                  ui.warn(`[review] LLM spawn error: ${err.message}`);
-                });
-                setTimeout(() => {
-                  if (!resolved) { resolved = true; resolve(""); }
-                  try { child.kill(); } catch {}
-                  ui.warn("[review] LLM review timed out (120s)");
-                }, LLM_TIMEOUT);
-              });
-            } catch (llmErr) {
-              logError(CLI_ERR.REVIEW_LLM_FAILED, `LLM review failed`, { taskId: ctx.task.id }, llmErr);
-              ui.warn(`[review] LLM review failed: ${llmErr instanceof Error ? llmErr.message : llmErr}`);
-            }
-
-            // Get commit hash for the merge
-            const commitHash = revExec("git rev-parse HEAD", { cwd: revRepoDir, stdio: "pipe" }).toString().trim();
-
-            // If LLM timed out or failed, generate a stat-based review
-            if (!llmReview) {
-              llmReview = JSON.stringify({
-                requirement_match: "LLM review timed out — manual review recommended",
-                files_changed: filesChanged.map((f) => f).join(", ") || "See diff stat",
-                code_quality: "Unable to assess (LLM timeout)",
-                test_coverage: "Unable to assess (LLM timeout)",
-                risks: "Manual review required — automated review was not completed",
-                verdict: "NEEDS_CHANGES",
-              });
-              ctx.reviewVerdict = "NEEDS_CHANGES";
-              ui.info("[review] Generated fallback review (LLM timeout)");
-            }
-
-            // Try structured review-report API first
-            let reviewSaved = false;
-            if (llmReview) {
-              try {
-                // Parse LLM output as JSON (strip markdown code blocks if present)
-                const cleanJson = llmReview.replace(/^```(?:json)?\n?/m, "").replace(/\n?```$/m, "").trim();
-                const report = JSON.parse(cleanJson);
-                report.commits = commitHash;
-                // Append diff stat to files_changed for context
-                if (diffStat) {
-                  report.files_changed = (report.files_changed || "") + "\n\n" + diffStat;
-                }
-                // Normalize verdict to match API enum
-                if (report.verdict) {
-                  const v = String(report.verdict).toUpperCase().trim();
-                  if (v.includes("NEEDS") || v.includes("CHANGE") || v.includes("REJECT")) {
-                    report.verdict = "NEEDS_CHANGES";
-                  } else {
-                    report.verdict = "APPROVE";
-                  }
-                }
-                const res = await fetchRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/review-report`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctx.config.apiKey}` },
-                  body: JSON.stringify(report),
-                });
-                if (res.ok) {
-                  reviewSaved = true;
-                  ctx.reviewVerdict = report.verdict as "APPROVE" | "NEEDS_CHANGES";
-                  const reviewJson = JSON.stringify(report);
-                  ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewJson, commits: commitHash });
-                  ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewJson);
-                } else {
-                  const errBody = await res.text().catch(() => "");
-                  ui.warn(`[review] review-report API ${res.status}: ${errBody.slice(0, 200)}`);
-                }
-              } catch (parseErr) {
-                ui.warn(`[review] Structured review failed: ${parseErr instanceof Error ? parseErr.message : parseErr}`);
-              }
-            }
-
-            // Fallback: save as plain text review
-            if (!reviewSaved) {
-              const review = [
-                `Agent: ${ctx.agentName}`,
-                `Commit: ${lastCommit}`,
-                commitBody ? `\n${commitBody}` : "",
-                `\nFiles changed: ${filesChanged.length}`,
-                diffStat,
-                lines > 200 ? `(${lines} lines of diff)` : "",
-                llmReview ? `\n--- Code Review ---\n${llmReview}` : "",
-              ].filter(Boolean).join("\n").slice(0, 4000);
-              await ctx.api.updateTask(ctx.task.id, { review_comment: review, commits: commitHash } as Partial<Task>);
-              ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: review, commits: commitHash });
-              ctx.onReviewUpdate?.(ctx.task.id, "completed", review);
-            }
-            ui.info( `[${phase}] ${label}: ${filesChanged.length} files${llmReview ? " + LLM review" : ""}`);
-          } catch (revErr) {
-            const msg = revErr instanceof Error ? revErr.message : String(revErr);
-            logError(CLI_ERR.ACTION_FAILED, `review_changes failed at ${revRepoDir}: ${msg}`, { taskId: ctx.task.id, repoDir: revRepoDir }, revErr);
-            ui.warn(`[review] review_changes failed at ${revRepoDir}: ${msg}`);
-            ctx.onReviewUpdate?.(ctx.task.id, "failed");
-            // Still set a basic comment
-            try {
-              await ctx.api.updateTask(ctx.task.id, { review_comment: "Auto-review failed. Please review manually." } as Partial<Task>);
-            } catch { /* non-fatal */ }
-          }
+          await handleReviewChanges(action, ctx, phase);
           break;
         }
         case "notify_user": {
@@ -1054,148 +509,11 @@ ${outputFormat}`;
           break;
         }
         case "inject_memory": {
-          // Claude-specific: write agent memories + directory hints into CLAUDE.md
-          if (ctx.config.engine !== "claude") {
-            ui.debug("template", `inject_memory skipped (engine: ${ctx.config.engine})`);
-            break;
-          }
-
-          const claudeMdPath = path.join(ctx.config.workingDir, "CLAUDE.md");
-          const hasClaudeMd = fs.existsSync(claudeMdPath);
-          let injected = 0;
-
-          // If no CLAUDE.md exists, generate directory structure hint
-          if (!hasClaudeMd) {
-            try {
-              const { execSync: lsExec } = await import("node:child_process");
-              const tree = lsExec("find . -maxdepth 2 -type d -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.next/*' -not -path '*/.wrangler/*' | head -40", {
-                cwd: ctx.config.workingDir, stdio: "pipe", timeout: 5000,
-              }).toString().trim();
-              const hint = `# Repository Structure (auto-generated)\n\n\`\`\`\n${tree}\n\`\`\`\n\nNote: This file was auto-generated because no CLAUDE.md was found.\n`;
-              fs.writeFileSync(claudeMdPath, hint);
-              ui.info(`[${phase}] Generated CLAUDE.md with directory structure`);
-            } catch { /* non-fatal */ }
-          }
-
-          // Inject agent memories + shared memories
-          const memories = await ctx.api.fetchAgentMemories(ctx.agentName);
-          // Fetch shared memories matching task labels
-          const taskLabels: string[] = (() => {
-            const raw = (ctx.task as Record<string, unknown>).labels;
-            if (Array.isArray(raw)) return raw;
-            if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return []; } }
-            return [];
-          })();
-          let sharedMemories: AgentMemory[] = [];
-          try {
-            const res = await fetch(`${ctx.config.apiUrl}/api/v1/agents/memories/shared${taskLabels.length ? `?tags=${taskLabels.join(",")}` : ""}`, {
-              headers: { Authorization: `Bearer ${ctx.config.apiKey}`, "Content-Type": "application/json" },
-            });
-            if (res.ok) {
-              const data = (await res.json()) as { memories: AgentMemory[] };
-              // Exclude own memories (already in `memories`)
-              const ownKeys = new Set(memories.map((m) => m.key));
-              sharedMemories = data.memories.filter((m) => !ownKeys.has(m.key));
-            }
-          } catch { /* non-fatal */ }
-
-          const allMemories = [...memories, ...sharedMemories];
-          if (allMemories.length > 0) {
-            const ownBlock = memories.length > 0
-              ? memories.map((m) => `## ${m.type}: ${m.key}\n${m.content}`).join("\n\n")
-              : "";
-            const sharedBlock = sharedMemories.length > 0
-              ? `\n# Shared Team Knowledge\n\n${sharedMemories.map((m) => `## ${m.type}: ${m.key} (from @${m.agent_name})\n${m.content}`).join("\n\n")}`
-              : "";
-            const memoryBlock = [
-              "<!-- TOBAN_MEMORY_START -->",
-              "# Agent Memory (auto-injected by Toban)",
-              "",
-              ownBlock,
-              sharedBlock,
-              "<!-- TOBAN_MEMORY_END -->",
-            ].filter(Boolean).join("\n");
-
-            let existing = fs.existsSync(claudeMdPath)
-              ? fs.readFileSync(claudeMdPath, "utf-8")
-              : "";
-            // Remove existing memory block to prevent duplicates
-            existing = existing.replace(/<!-- TOBAN_MEMORY_START -->[\s\S]*?<!-- TOBAN_MEMORY_END -->\n?/g, "").trimEnd();
-            fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
-            injected = allMemories.length;
-          }
-
-          // Mark CLAUDE.md as assume-unchanged so inject_memory additions don't get committed
-          // Agent can still read the file, but git won't track the memory block changes
-          if (injected > 0 && hasClaudeMd) {
-            try {
-              const { execSync: gitExec2 } = await import("node:child_process");
-              gitExec2("git update-index --assume-unchanged CLAUDE.md", { cwd: ctx.config.workingDir, stdio: "pipe" });
-            } catch { /* non-fatal — worktree may not support this */ }
-          }
-
-          if (injected > 0 || !hasClaudeMd) {
-            ui.info(`[${phase}] ${label}: ${injected} memories${!hasClaudeMd ? " + dir structure" : ""}`);
-          }
+          await handleInjectMemory(action, ctx, phase);
           break;
         }
         case "collect_memory": {
-          // Claude-specific: read .claude/projects/*/memory/*.md and save to API
-          if (ctx.config.engine !== "claude") {
-            ui.debug("template", `collect_memory skipped (engine: ${ctx.config.engine})`);
-            break;
-          }
-          const claudeDir = path.join(ctx.config.workingDir, ".claude");
-          if (!fs.existsSync(claudeDir)) break;
-
-          // Find memory files under .claude/projects/*/memory/
-          const memFiles: string[] = [];
-          const projectsDir = path.join(claudeDir, "projects");
-          if (fs.existsSync(projectsDir)) {
-            for (const proj of fs.readdirSync(projectsDir)) {
-              const memDir = path.join(projectsDir, proj, "memory");
-              if (fs.existsSync(memDir) && fs.statSync(memDir).isDirectory()) {
-                for (const f of fs.readdirSync(memDir)) {
-                  if (f.endsWith(".md") && f !== "MEMORY.md") {
-                    memFiles.push(path.join("projects", proj, "memory", f));
-                  }
-                }
-              }
-            }
-          }
-          if (memFiles.length === 0) break;
-
-          let saved = 0;
-          for (const relFile of memFiles) {
-            try {
-              const content = fs.readFileSync(path.join(claudeDir, relFile), "utf-8");
-              // Parse frontmatter: ---\nname: ...\ntype: ...\n---\nbody
-              const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-              if (!fmMatch) continue;
-
-              const frontmatter = fmMatch[1];
-              const body = fmMatch[2].trim();
-              const getName = frontmatter.match(/^name:\s*(.+)$/m);
-              const getType = frontmatter.match(/^type:\s*(.+)$/m);
-              if (!getName || !getType || !body) continue;
-
-              const key = getName[1].trim();
-              const memType = getType[1].trim();
-              if (!["identity", "feedback", "project", "reference"].includes(memType)) continue;
-
-              // Parse optional shared and tags from frontmatter
-              const getShared = frontmatter.match(/^shared:\s*(true|false)$/m);
-              const getTags = frontmatter.match(/^tags:\s*(.+)$/m);
-              const shared = getShared?.[1] === "true";
-              const tags = getTags?.[1]?.trim() || undefined;
-
-              await ctx.api.putAgentMemory(ctx.agentName, key, { type: memType, content: body, shared, tags });
-              saved++;
-            } catch {
-              // Skip unparseable files
-            }
-          }
-          if (saved > 0) ui.info(`[${phase}] ${label}: ${saved} memory entries saved`);
+          await handleCollectMemory(action, ctx, phase);
           break;
         }
         default:
@@ -1208,6 +526,13 @@ ${outputFormat}`;
       ctx.taskLog?.event("action_error", { action: action.type, label, error: err instanceof Error ? err.message : String(err) });
     }
   }
+}
+
+/**
+ * Get the list of default templates (internal, used by handlers).
+ */
+export function getDefaultTemplates(): AgentTemplate[] {
+  return DEFAULT_TEMPLATES;
 }
 
 /**
