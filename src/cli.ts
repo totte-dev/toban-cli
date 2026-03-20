@@ -156,6 +156,35 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       } catch { /* non-fatal */ }
     }
 
+    // Auto-run Strategist proposals when sprint enters retrospective
+    if (sprint?.status === "retrospective") {
+      try {
+        const headers = { Authorization: `Bearer ${cliArgs.apiKey}`, "Content-Type": "application/json" };
+        const plansRes = await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}/plan`, { headers });
+        if (plansRes.ok) {
+          const plan = (await plansRes.json()) as { status: string; id: string };
+          if (plan.status === "generating") {
+            ui.info("[strategist] Sprint entered retrospective — generating improvement proposals...");
+            try {
+              await handlePropose(cliArgs.apiUrl, cliArgs.apiKey);
+              // Overwrite the generating plan with a completed one
+              await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}/plan`, {
+                method: "POST", headers,
+                body: JSON.stringify({ summary: "Proposals generated — review in Backlog > Proposals", tasks: [], total_sp: 0 }),
+              });
+            } catch (err) {
+              ui.warn(`[strategist] Proposal generation failed: ${err}`);
+              // Mark as failed so Complete isn't blocked forever
+              await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}/plan`, {
+                method: "POST", headers,
+                body: JSON.stringify({ summary: "Proposal generation failed", tasks: [], total_sp: 0 }),
+              });
+            }
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+
     // Timebox: auto-transition to review if deadline has passed
     if (sprint?.status === "active" && sprint?.deadline) {
       const deadline = new Date(sprint.deadline as string).getTime();
@@ -719,13 +748,7 @@ async function handleSprintComplete(apiUrl: string, apiKey: string, push: boolea
       process.exit(1);
     }
   }
-  // Auto-run Strategist proposals after sprint completion
-  ui.info("[strategist] Running post-sprint analysis...");
-  try {
-    await handlePropose(apiUrl, apiKey);
-  } catch (err) {
-    ui.warn(`[strategist] Proposal generation failed (non-fatal): ${err}`);
-  }
+  // Proposals are now triggered at retrospective phase, not on complete
 
   ui.outro(`Sprint #${sprint.number} complete`);
 }
