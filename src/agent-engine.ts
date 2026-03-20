@@ -57,6 +57,49 @@ export interface AgentEngineProvider {
 }
 
 // ---------------------------------------------------------------------------
+// Engine → Model mapping
+// ---------------------------------------------------------------------------
+
+/** Map DB engine short names to Claude model IDs */
+const ENGINE_MODEL_MAP: Record<string, string> = {
+  "claude-opus": "claude-opus-4-6",
+  "claude-sonnet": "claude-sonnet-4-6",
+  "claude-haiku": "claude-haiku-4-5-20251001",
+  // Legacy names
+  "claude-opus-4-20250514": "claude-opus-4-6",
+  "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+};
+
+const DEFAULT_MODEL = "claude-sonnet-4-6";
+
+/** Default model per agent role (can be overridden by DB engine setting) */
+const ROLE_DEFAULT_MODEL: Record<string, string> = {
+  builder: "claude-opus-4-6",
+  reviewer: "claude-sonnet-4-6",
+  strategist: "claude-sonnet-4-6",
+  manager: "claude-sonnet-4-6",
+  "cloud-engineer": "claude-opus-4-6",
+};
+
+/**
+ * Resolve engine short name to full model ID.
+ * Returns the model ID that can be passed to `claude --model`.
+ */
+export function resolveModel(engine?: string | null): string {
+  if (!engine) return DEFAULT_MODEL;
+  return ENGINE_MODEL_MAP[engine] ?? engine;
+}
+
+/**
+ * Resolve model for a specific agent role.
+ * Priority: DB engine setting > role default > global default.
+ */
+export function resolveModelForRole(role: string, engine?: string | null): string {
+  if (engine) return resolveModel(engine);
+  return ROLE_DEFAULT_MODEL[role] ?? DEFAULT_MODEL;
+}
+
+// ---------------------------------------------------------------------------
 // Claude Engine
 // ---------------------------------------------------------------------------
 
@@ -68,12 +111,14 @@ const claudeEngine: AgentEngineProvider = {
   promptHint: "CLAUDE.md is auto-loaded by the CLI. Focus on task-relevant files only.",
 
   buildCommand(config) {
+    const model = config.model ? resolveModel(config.model) : DEFAULT_MODEL;
     return {
       cmd: "claude",
       args: [
         "--dangerously-skip-permissions",
         "--print",
         "--verbose",
+        "--model", model,
         "--output-format", "stream-json",
         ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
         ...(config.prompt ? [config.prompt] : []),
@@ -82,6 +127,7 @@ const claudeEngine: AgentEngineProvider = {
   },
 
   buildFromTemplate(templateArgs, config) {
+    const model = config.model ? resolveModel(config.model) : DEFAULT_MODEL;
     return {
       cmd: templateArgs[0] ?? "claude",
       args: [
@@ -89,6 +135,7 @@ const claudeEngine: AgentEngineProvider = {
         "--dangerously-skip-permissions",
         "--print",
         "--verbose",
+        "--model", model,
         "--output-format", "stream-json",
         ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
         ...(config.prompt ? [config.prompt] : []),

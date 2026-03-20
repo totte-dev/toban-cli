@@ -14,6 +14,7 @@ const retryTracker = new Map<string, number>();
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
+import { resolveModelForRole } from "./agent-engine.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -712,7 +713,7 @@ export async function executeActions(
             const env = { ...process.env };
             delete env.CLAUDECODE;
             const child = reviewSpawn2("claude", [
-              "--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "5", fullPrompt,
+              "--print", "--model", resolveModelForRole("reviewer"), "--max-turns", "5", fullPrompt,
             ], {
               env, cwd: reviewRepoDir, stdio: ["ignore", "pipe", "pipe"], timeout: REVIEWER_TIMEOUT,
             });
@@ -878,7 +879,7 @@ ${outputFormat}`;
               delete env.CLAUDECODE;
               const LLM_TIMEOUT = 120_000; // 2 minutes
               llmReview = await new Promise<string>((resolve) => {
-                const child = reviewSpawn("claude", ["--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "1", reviewPrompt], {
+                const child = reviewSpawn("claude", ["--print", "--model", resolveModelForRole("reviewer"), "--max-turns", "1", reviewPrompt], {
                   env, stdio: ["ignore", "pipe", "pipe"], timeout: LLM_TIMEOUT,
                 });
                 let out = "";

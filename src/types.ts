@@ -33,6 +33,8 @@ export interface AgentConfig {
   managerPort?: number;
   /** Read-only mode: restrict to read tools only (for research/investigation tasks) */
   readOnly?: boolean;
+  /** Model ID override (e.g. "claude-opus-4-6", "claude-sonnet-4-6") */
+  model?: string;
 }
 
 export type AgentStatus = "spawning" | "running" | "completed" | "failed" | "stopped";

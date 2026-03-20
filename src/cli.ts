@@ -12,7 +12,7 @@ import { AgentRunner } from "./runner.js";
 import type { AgentType } from "./types.js";
 import { createApiClient, type Task } from "./api-client.js";
 import { buildAgentPrompt } from "./prompt.js";
-import { getEngine } from "./agent-engine.js";
+import { getEngine, resolveModel, resolveModelForRole } from "./agent-engine.js";
 import { matchTemplate, executeActions, type ActionContext } from "./agent-templates.js";
 import { ChatPoller } from "./chat-poller.js";
 import { MessagePoller } from "./message-poller.js";
@@ -47,7 +47,7 @@ Options:
   --working-dir <dir>   Repository root (default: cwd)
   --agent-name <name>   Agent name for status reporting (default: hostname)
   --branch <branch>     Base branch (default: main)
-  --model <model>       AI model for manager chat (default: claude-sonnet-4-20250514)
+  --model <model>       AI model for manager chat (default: claude-sonnet-4-6)
   --llm-base-url <url>  OpenAI-compatible API base URL (or LLM_BASE_URL env)
   --llm-api-key <key>   LLM provider API key (or LLM_API_KEY env)
   --engine <type>       Agent engine: claude (default: claude)
@@ -91,7 +91,7 @@ function parseArgs(argv: string[]): CliArgs {
     explicitWorkingDir: !!explicitWorkingDir,
     agentName: getFlag("--agent-name") ?? "manager",
     baseBranch: getFlag("--branch") ?? "main",
-    model: getFlag("--model") ?? "claude-sonnet-4-20250514",
+    model: getFlag("--model") ?? resolveModelForRole("manager"),
     llmBaseUrl: getFlag("--llm-base-url") ?? process.env.LLM_BASE_URL,
     llmApiKey: getFlag("--llm-api-key") ?? process.env.LLM_API_KEY,
     noDocker: !args.includes("--docker"),
@@ -363,12 +363,16 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         // Ensure git user is set before worktree creation
         if (ctx.gitUserInfo) ensureGitUser(taskWorkingDir, ctx.gitUserInfo.name, ctx.gitUserInfo.email);
 
-        // Use parent agent name directly (no child IDs) — prevents DB/UI bloat
+        // Resolve model from agent's DB engine setting or role default
+        const agentInfo = sprintData.agents.find((a) => a.name === agentName);
+        const agentModel = resolveModelForRole(agentName, agentInfo?.engine);
+
         const agentConfig = {
           name: agentName,
           type: cliArgs.engine, taskId: task.id, workingDir: taskWorkingDir,
           branch: cliArgs.baseBranch, apiKey: cliArgs.apiKey, apiUrl: cliArgs.apiUrl,
           prompt, parentAgent: cliArgs.agentName, sprintNumber: sprintData.sprint.number,
+          model: agentModel,
           ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
           ...(ctx.wsPort ? { managerPort: ctx.wsPort } : {}),
           ...(isReadOnly ? { readOnly: true } : {}),
@@ -616,7 +620,7 @@ Output ONLY a JSON array, no markdown:
 [{"title":"...","description":"specific files and acceptance criteria","owner":"builder","type":"feature","priority":"p2","story_points":2}]`;
 
   return new Promise((resolve) => {
-    const child = spawn("claude", ["--print", "--model", "claude-haiku-4-5-20251001", "--max-turns", "1", prompt], {
+    const child = spawn("claude", ["--print", "--model", resolveModel("claude-haiku"), "--max-turns", "1", prompt], {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 30_000,
     });
@@ -780,7 +784,7 @@ Output ONLY valid JSON (no markdown):
     const { execSync } = await import("node:child_process");
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
     const result = execSync(
-      `claude --print --model claude-sonnet-4-20250514 -p ${JSON.stringify(fullPrompt)}`,
+      `claude --print --model ${resolveModelForRole("strategist")} -p ${JSON.stringify(fullPrompt)}`,
       { stdio: "pipe", timeout: 180_000, maxBuffer: 10 * 1024 * 1024 }
     ).toString().trim();
 
@@ -852,7 +856,7 @@ Output ONLY valid JSON (no markdown):
 
     const { execSync } = await import("node:child_process");
     const result = execSync(
-      `claude --print --model claude-sonnet-4-20250514 -p ${JSON.stringify(prompt)}`,
+      `claude --print --model ${resolveModelForRole("strategist")} -p ${JSON.stringify(prompt)}`,
       { stdio: "pipe", timeout: 180_000, maxBuffer: 10 * 1024 * 1024 }
     ).toString().trim();
 
@@ -952,7 +956,7 @@ async function handleReview(apiUrl: string, apiKey: string, taskId?: string, ski
   const result = await new Promise<string>((resolve) => {
     const env = { ...process.env };
     delete env.CLAUDECODE;
-    const child = spawn("claude", ["--print", "--model", "claude-sonnet-4-20250514", "--max-turns", "5", prompt], {
+    const child = spawn("claude", ["--print", "--model", resolveModelForRole("reviewer"), "--max-turns", "5", prompt], {
       env, cwd, stdio: ["ignore", "pipe", "pipe"], timeout: 300_000,
     });
     let out = "";
