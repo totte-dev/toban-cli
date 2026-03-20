@@ -75,11 +75,15 @@ interface ManagerContext {
     created_at: string;
   }>;
   playbook_rules: string;
+  analytics?: {
+    velocity: Array<{ sprint: number; points: number }>;
+    quality: Array<{ sprint: number; avg_score: number }>;
+  };
 }
 
 /** Parsed action from LLM response */
 interface ManagerAction {
-  type: "spawn_agent" | "update_task" | "create_task" | "transition_sprint" | "send_message" | "propose_tasks";
+  type: "spawn_agent" | "update_task" | "create_task" | "transition_sprint" | "send_message" | "propose_tasks" | "plan_sprint";
   params: Record<string, unknown>;
 }
 
@@ -553,7 +557,19 @@ export class Manager {
     const playbook = ctx.playbook_rules ? `\n## Playbook Rules\n${ctx.playbook_rules}` : "";
     const adr = ctx.adr_summary ? `\n## Architecture Decision Records\n${ctx.adr_summary}\nYou MUST follow all ACCEPTED ADRs when making decisions.` : "";
 
-    return `${system}\n${this.codebaseSummary}\n${actions}\n${rules}${playbook}${adr}`;
+    let analyticsBlock = "";
+    if (ctx.analytics) {
+      const velLines = ctx.analytics.velocity.map((v) => `  Sprint #${v.sprint}: ${v.points}SP`).join("\n");
+      const qualLines = ctx.analytics.quality.map((q) => `  Sprint #${q.sprint}: ${q.avg_score}/100`).join("\n");
+      analyticsBlock = `\n## Sprint Analytics (recent trends)
+### Velocity (completed SP per sprint)
+${velLines || "  (no data)"}
+### Quality Score (avg review score)
+${qualLines || "  (no data)"}
+Use these trends to inform sprint planning — if velocity is declining, reduce scope. If quality is dropping, prioritize test/review improvements.\n`;
+    }
+
+    return `${system}\n${this.codebaseSummary}\n${actions}\n${rules}${playbook}${adr}${analyticsBlock}`;
   }
 
   // ── Conversation history ─────────────────────────────────
@@ -774,6 +790,27 @@ export class Manager {
           case "propose_tasks": {
             // propose_tasks params is an array directly (not wrapped in object)
             // Already handled via proposals return from parseResponse
+            break;
+          }
+          case "plan_sprint": {
+            // Move backlog tasks to current sprint
+            const taskIds = (action.params as Record<string, unknown>).task_ids as string[] | undefined;
+            if (!taskIds?.length || !ctx?.sprint) {
+              ui.warn("[manager] plan_sprint: missing task_ids or no active sprint");
+              break;
+            }
+            let moved = 0;
+            for (const shortId of taskIds) {
+              const fullId = this.resolveTaskId(shortId, ctx);
+              try {
+                await this.api?.updateTask(fullId, { sprint: ctx.sprint.number } as Partial<Task>);
+                moved++;
+                this.onDataUpdate?.("task", fullId, { sprint: ctx.sprint.number });
+              } catch (err) {
+                ui.warn(`[manager] plan_sprint: failed to move ${shortId}: ${err}`);
+              }
+            }
+            if (moved > 0) ui.info(`[manager] Moved ${moved} tasks from backlog to Sprint #${ctx.sprint.number}`);
             break;
           }
           default:

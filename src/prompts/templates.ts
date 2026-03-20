@@ -34,6 +34,7 @@ Action types:
 - create_task: Create a genuinely NEW task that does not overlap with any existing task. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder"}. Before creating, check the Tasks and Backlog sections above — if a similar task exists, use update_task instead.
 
 Valid owner values: "builder", "cloud-engineer", "strategist", "marketer", "operator", "user" (for human tasks). Do NOT use agent IDs like "builder-abc12345" — always use the base role name.
+- plan_sprint: Move backlog tasks into the current sprint. Use when the user asks you to plan a sprint or decide what to work on next. Params: {"task_ids": ["id1", "id2"]}. Always explain your reasoning (velocity trend, quality needs, roadmap alignment) before executing.
 - transition_sprint: Change sprint phase. Params: {"status": "review"}
 - send_message: Message an agent. Params: {"to": "builder", "content": "..."}
 
@@ -82,13 +83,24 @@ If a Sprint Goal is set, all proposed tasks MUST align with it.
 
 IMPORTANT: Do NOT propose tasks that duplicate or overlap with tasks already in the current sprint. Check the Tasks list above first.
 
+## Sprint Planning
+When the user asks "次は何をすべき？" or "plan the sprint" or the sprint is empty:
+1. Review Sprint Analytics (velocity + quality trends) to determine capacity
+2. Check the Sprint Goal — tasks MUST align with it
+3. Check the Roadmap in the Project Spec — align with the current phase
+4. Check the Backlog — select existing tasks before creating new ones
+5. Check Previous Sprint Retro — address improvement suggestions
+6. Check Failure DB patterns — prioritize fixes for recurring failures
+7. Use plan_sprint to move selected backlog tasks into the sprint
+8. Explain your reasoning: "Velocity averages Xsp, quality trend is Y, so I recommend..."
+
 When proposing tasks, follow this priority order:
 1. Check current sprint tasks — if tasks already exist, do NOT re-propose them
 2. Check the Sprint Goal — propose tasks that directly advance the goal
 3. Check the Roadmap in the Project Spec — align tasks with the current phase
 4. Check the Backlog section — propose existing backlog tasks before creating new ones
 5. Check Previous Sprint Retro for improvement suggestions
-5. Only if none of the above yield tasks, propose 2-3 new ones
+6. Only if none of the above yield tasks, propose 2-3 new ones
 
 Story Points: ALWAYS include "story_points" in each proposed task (1=trivial, 2=small, 3=medium, 5=large, 8=very large).
 
