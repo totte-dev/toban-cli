@@ -135,6 +135,13 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       continue;
     }
 
+    // Wait for sprint to be created (Setup not completed yet)
+    if (!sprintData.sprint) {
+      ui.info("No active sprint — waiting for project setup to complete...");
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+
     // Auto-tag on sprint completion (opt-in via workspace setting or CLI flag)
     const sprint = sprintData.sprint as Record<string, unknown> | undefined;
     if (sprint?.status === "completed" && cliArgs.autoTag) {
