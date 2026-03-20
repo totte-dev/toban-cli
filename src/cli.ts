@@ -265,6 +265,8 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
       const agentName = task.owner ?? "builder";
       const apiDocs = await api.fetchApiDocs(agentName);
       const taskType = (task as Record<string, unknown>).type as string | undefined;
+      const rawLabels = (task as Record<string, unknown>).labels;
+      const taskLabels: string[] = Array.isArray(rawLabels) ? rawLabels : typeof rawLabels === "string" ? (() => { try { return JSON.parse(rawLabels); } catch { return []; } })() : [];
       const agentTemplate = matchTemplate(taskType, agentName);
       const isReadOnly = agentTemplate.tools !== "all";
       ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
@@ -344,7 +346,7 @@ async function runLoop(cliArgs: CliArgs, runner: AgentRunner): Promise<void> {
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
         taskType, apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey,
         language: ctx.language,
-        playbookRules: (await ctx.api.fetchPlaybookPrompt(agentName)) || ctx.playbookRules,
+        playbookRules: (await ctx.api.fetchPlaybookPrompt(agentName, taskLabels)) || ctx.playbookRules,
         targetRepo: task.target_repo ?? undefined,
         apiDocs: apiDocs || undefined, engineHint: getEngine(cliArgs.engine).promptHint,
         pastFailures: pastFailures.length > 0 ? pastFailures : undefined,
@@ -753,15 +755,17 @@ async function handleReview(apiUrl: string, apiKey: string, taskId?: string, ski
   const taskType = (task as Record<string, unknown>).type as string || "implementation";
   const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 
+  // Fetch playbook rules including skill rules matching task labels or --skill args
+  const reviewTags = skills || (() => {
+    const raw = (task as Record<string, unknown>).labels;
+    if (Array.isArray(raw)) return raw as string[];
+    if (typeof raw === "string") { try { return JSON.parse(raw) as string[]; } catch { return []; } }
+    return [];
+  })();
   let customRules = "";
-  try { customRules = await api.fetchPlaybookPrompt("reviewer") || ""; } catch { /* non-fatal */ }
-
-  // Inject skills knowledge
-  const activeSkills = skills || (task as Record<string, unknown>).skills as string[] | null || [];
-  if (activeSkills.length > 0) {
-    const { getSkillKnowledge } = await import("./prompts/skills/index.js");
-    customRules += "\n\n" + getSkillKnowledge(activeSkills);
-    ui.info(`[review] Skills injected: ${activeSkills.join(", ")}`);
+  try { customRules = await api.fetchPlaybookPrompt("reviewer", reviewTags) || ""; } catch { /* non-fatal */ }
+  if (reviewTags.length > 0) {
+    ui.info(`[review] Tags for skill matching: ${reviewTags.join(", ")}`);
   }
 
   const reviewSystem = interpolate(PROMPT_TEMPLATES["reviewer-system"] || "", {

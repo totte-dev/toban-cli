@@ -94,7 +94,7 @@ export interface ApiClient {
   }): Promise<void>;
   submitRetroComment(sprintNumber: number, data: RetroCommentInput): Promise<void>;
   reportProgress(data: ProgressReport): Promise<void>;
-  fetchPlaybookPrompt(agentName?: string): Promise<string>;
+  fetchPlaybookPrompt(agentName?: string, taskTags?: string[]): Promise<string>;
   fetchMessages(channel: string): Promise<Message[]>;
   sendMessage(from: string, to: string, content: string): Promise<void>;
   fetchMySecrets(): Promise<Record<string, string>>;
@@ -265,9 +265,12 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       }
     },
 
-    async fetchPlaybookPrompt(agentName?: string): Promise<string> {
+    async fetchPlaybookPrompt(agentName?: string, taskTags?: string[]): Promise<string> {
       try {
-        const qs = agentName ? `?agent=${encodeURIComponent(agentName)}` : "";
+        const params = new URLSearchParams();
+        if (agentName) params.set("agent", agentName);
+        if (taskTags?.length) params.set("tags", taskTags.join(","));
+        const qs = params.toString() ? `?${params.toString()}` : "";
         const res = await fetch(`${apiUrl}/api/v1/playbook/prompt${qs}`, { headers });
         if (!res.ok) return "";
         const data = (await res.json()) as { prompt: string };
