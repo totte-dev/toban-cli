@@ -12,6 +12,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fireRuleEvaluate } from "./rule-evaluate.js";
 import { getExecError } from "./utils/exec-error.js";
+import { evaluateRuleMatches, type RuleMatch } from "./rule-evaluator.js";
 
 /** QA scan configuration parsed from ops task description JSON */
 export interface QaScanConfig {
@@ -135,13 +136,17 @@ export class OpsRunner {
       );
     } catch { /* non-fatal */ }
 
-    // Check for qa_scan type
+    // Check for JSON-configured task types
     const desc = (task.description || "").trim();
     if (desc.startsWith("{")) {
       try {
-        const config = JSON.parse(desc) as QaScanConfig;
+        const config = JSON.parse(desc) as { type?: string };
         if (config.type === "qa_scan") {
-          await this.runQaScan(task, config);
+          await this.runQaScan(task, config as QaScanConfig);
+          return;
+        }
+        if (config.type === "rule_evaluate") {
+          await this.runRuleEvaluate(task);
           return;
         }
       } catch { /* not JSON, fall through to normal execution */ }
@@ -187,12 +192,12 @@ export class OpsRunner {
   runTask(task: OpsTask): { passed: boolean; summary: string; details: string } {
     const desc = (task.description || "").trim();
 
-    // QA scan is handled by executeTask directly (async) — should not reach here
+    // Async task types are handled by executeTask directly — should not reach here
     if (desc.startsWith("{")) {
       try {
-        const config = JSON.parse(desc) as QaScanConfig;
-        if (config.type === "qa_scan") {
-          return { passed: false, summary: "qa_scan must run via executeTask", details: "runTask does not support async qa_scan" };
+        const config = JSON.parse(desc) as { type?: string };
+        if (config.type === "qa_scan" || config.type === "rule_evaluate") {
+          return { passed: false, summary: `${config.type} must run via executeTask`, details: "runTask does not support async task types" };
         }
       } catch { /* not JSON, fall through */ }
     }
@@ -339,6 +344,93 @@ export class OpsRunner {
       ui.info(`[qa] Scan complete: ${summary}`);
     } catch (err) {
       ui.warn(`[qa] Failed to report scan result: ${err}`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rule Evaluate (LLM-based re-evaluation of keyword matches)
+  // ---------------------------------------------------------------------------
+
+  /** Re-evaluate keyword matches using Claude CLI for precision improvement. */
+  async runRuleEvaluate(task: OpsTask): Promise<void> {
+    ui.info("[rule-eval] Fetching unreviewed matches...");
+
+    // 1. Fetch unreviewed matches from API
+    let matches: RuleMatch[] = [];
+    try {
+      const res = await fetchWithRetry(
+        `${this.apiUrl}/api/v1/rule-evaluations/match-log?feedback=null&limit=20`,
+        { headers: this.headers },
+      );
+      if (res.ok) {
+        const data = await res.json() as { matches?: RuleMatch[] } | RuleMatch[];
+        matches = Array.isArray(data) ? data : (data.matches ?? []);
+      }
+    } catch (err) {
+      ui.warn(`[rule-eval] Failed to fetch matches: ${err}`);
+    }
+
+    if (matches.length === 0) {
+      ui.info("[rule-eval] No unreviewed matches");
+      await this.reportResult(task.id, true, "No unreviewed matches", "");
+      return;
+    }
+
+    ui.info(`[rule-eval] Evaluating ${matches.length} match(es)...`);
+
+    // 2. Evaluate matches via Claude CLI
+    let results;
+    try {
+      results = await evaluateRuleMatches(matches, 20);
+    } catch (err) {
+      ui.warn(`[rule-eval] Evaluation failed: ${err}`);
+      await this.reportResult(task.id, false, "Evaluation failed", String(err));
+      return;
+    }
+
+    // 3. Send feedback for each evaluation
+    let confirmed = 0;
+    let rejected = 0;
+    for (const result of results) {
+      const action = result.relevant ? "confirm" : "reject";
+      try {
+        await fetchWithRetry(
+          `${this.apiUrl}/api/v1/rule-evaluations/${result.ruleId}/feedback`,
+          {
+            method: "POST",
+            headers: this.headers,
+            body: JSON.stringify({
+              record_id: result.matchId,
+              action,
+              comment: `LLM evaluation (${result.confidence.toFixed(1)}): ${result.reasoning}`,
+            }),
+          },
+        );
+        if (result.relevant) confirmed++;
+        else rejected++;
+      } catch (err) {
+        ui.warn(`[rule-eval] Failed to send feedback for ${result.matchId}: ${err}`);
+      }
+    }
+
+    const summary = `Evaluated ${results.length}: ${confirmed} confirmed, ${rejected} rejected`;
+    await this.reportResult(task.id, true, summary, JSON.stringify({ results, timestamp: new Date().toISOString() }));
+    ui.info(`[rule-eval] ${summary}`);
+  }
+
+  /** Report ops task result to API. */
+  private async reportResult(taskId: string, passed: boolean, summary: string, details: string): Promise<void> {
+    try {
+      await fetchWithRetry(
+        `${this.apiUrl}/api/v1/ops-tasks/${taskId}/result`,
+        {
+          method: "POST",
+          headers: this.headers,
+          body: JSON.stringify({ passed, summary, details }),
+        },
+      );
+    } catch (err) {
+      ui.warn(`[ops] Failed to report result for ${taskId.slice(0, 8)}: ${err}`);
     }
   }
 
