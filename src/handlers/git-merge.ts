@@ -16,6 +16,7 @@ import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
 import { resolveRepoRoot } from "../git-ops.js";
+import { trackRetry } from "../utils/retry-tracker.js";
 
 /** Module-level mutex to serialize concurrent merge operations */
 const mergeLock = new Mutex();
@@ -67,8 +68,9 @@ export function rebaseOntoBase(
 }
 
 /**
- * Escalate a merge conflict: update task to blocked, record conflict details,
- * and notify connected clients via WebSocket.
+ * Handle a merge conflict: retry by resetting to todo (up to 2 times),
+ * then escalate to blocked with notification.
+ * Records conflict to Failure DB and broadcasts via WebSocket.
  */
 export async function escalateConflict(
   ctx: ActionContext,
@@ -80,26 +82,51 @@ export async function escalateConflict(
     : "(unknown files)";
   const comment = `Merge conflict on ${worktreeBranch}: ${fileList}`;
 
-  ui.warn(`[git_merge] Conflict detected — ${comment}`);
+  // Track retries — allow 2 auto-retries before blocking
+  const { retryCount } = trackRetry(`conflict:${ctx.task.id}`);
+  const maxConflictRetries = 2;
 
-  // Update task status to blocked with conflict info
-  try {
-    await ctx.api.updateTask(ctx.task.id, {
-      status: "blocked",
-      review_comment: comment,
-    } as unknown as Parameters<typeof ctx.api.updateTask>[1]);
-  } catch {
-    // Non-fatal — log but continue
-    ui.warn("[git_merge] Failed to update task status to blocked");
+  if (retryCount <= maxConflictRetries) {
+    // Auto-retry: reset to todo so the task runs again from latest main
+    ui.warn(`[git_merge] Conflict detected (attempt ${retryCount}/${maxConflictRetries}) — resetting to todo for retry`);
+    try {
+      await ctx.api.updateTask(ctx.task.id, {
+        status: "todo",
+        review_comment: `${comment} — auto-retry ${retryCount}/${maxConflictRetries}`,
+      } as unknown as Parameters<typeof ctx.api.updateTask>[1]);
+    } catch {
+      ui.warn("[git_merge] Failed to reset task to todo");
+    }
+    ctx.onDataUpdate?.("task", ctx.task.id, { status: "todo", review_comment: comment });
+    // Set exitCode to prevent post-actions from running (skip push, reviewer, etc.)
+    ctx.exitCode = 1;
+  } else {
+    // Max retries exceeded — escalate to blocked
+    ui.error(`[git_merge] Conflict detected (${retryCount} attempts) — escalating to blocked`);
+    try {
+      await ctx.api.updateTask(ctx.task.id, {
+        status: "blocked",
+        review_comment: `${comment} — blocked after ${retryCount} conflict retries`,
+      } as unknown as Parameters<typeof ctx.api.updateTask>[1]);
+    } catch {
+      ui.warn("[git_merge] Failed to update task status to blocked");
+    }
+    ctx.onDataUpdate?.("task", ctx.task.id, { status: "blocked", review_comment: comment });
+
+    // Notify user
+    try {
+      await ctx.api.sendMessage("manager", "user", `Merge conflict on task "${ctx.task.title}" after ${retryCount} retries. Manual resolution required.\nFiles: ${fileList}`);
+    } catch { /* non-fatal */ }
   }
 
-  // Broadcast via WS so dashboard shows the conflict immediately
-  if (ctx.onDataUpdate) {
-    ctx.onDataUpdate("task", ctx.task.id, {
-      status: "blocked",
-      review_comment: comment,
-    });
-  }
+  // Record to Failure DB
+  ctx.api.recordFailure({
+    task_id: ctx.task.id,
+    failure_type: "merge_conflict",
+    summary: comment,
+    agent_name: ctx.agentName,
+    sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+  }).catch(() => { /* best-effort */ });
 }
 
 /**

@@ -71,13 +71,17 @@ describe("escalateConflict", () => {
   let ctx: ActionContext;
   let mockUpdateTask: ReturnType<typeof vi.fn>;
   let mockOnDataUpdate: ReturnType<typeof vi.fn>;
+  let mockSendMessage: ReturnType<typeof vi.fn>;
+  let mockRecordFailure: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     mockUpdateTask = vi.fn().mockResolvedValue(undefined);
     mockOnDataUpdate = vi.fn();
+    mockSendMessage = vi.fn().mockResolvedValue(undefined);
+    mockRecordFailure = vi.fn().mockResolvedValue(undefined);
     ctx = {
-      api: { updateTask: mockUpdateTask } as never,
-      task: { id: "task-123", title: "Test task", description: "desc", status: "in_progress", priority: "p2" },
+      api: { updateTask: mockUpdateTask, sendMessage: mockSendMessage, recordFailure: mockRecordFailure } as never,
+      task: { id: "task-conflict-1", title: "Test task", description: "desc", status: "in_progress", priority: "p2" },
       agentName: "builder",
       config: {
         apiUrl: "http://localhost:8787",
@@ -89,47 +93,66 @@ describe("escalateConflict", () => {
     };
   });
 
-  it("updates task to blocked with conflict file list", async () => {
+  it("first conflict: resets task to todo for auto-retry", async () => {
     await escalateConflict(ctx, ["src/a.ts", "src/b.ts"], "agent/builder-abc");
 
-    expect(mockUpdateTask).toHaveBeenCalledWith("task-123", {
-      status: "blocked",
-      review_comment: "Merge conflict on agent/builder-abc: src/a.ts, src/b.ts",
-    });
+    expect(mockUpdateTask).toHaveBeenCalledWith("task-conflict-1", expect.objectContaining({
+      status: "todo",
+    }));
+    expect(ctx.exitCode).toBe(1);
+    expect(mockRecordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      failure_type: "merge_conflict",
+    }));
   });
 
-  it("broadcasts data update via WS", async () => {
+  it("broadcasts todo status via WS on retry", async () => {
     await escalateConflict(ctx, ["src/a.ts"], "agent/builder-abc");
 
-    expect(mockOnDataUpdate).toHaveBeenCalledWith("task", "task-123", {
-      status: "blocked",
-      review_comment: "Merge conflict on agent/builder-abc: src/a.ts",
-    });
+    expect(mockOnDataUpdate).toHaveBeenCalledWith("task", "task-conflict-1", expect.objectContaining({
+      status: "todo",
+    }));
   });
 
-  it("handles unknown files when conflict list is empty", async () => {
-    await escalateConflict(ctx, [], "agent/builder-abc");
+  it("escalates to blocked after max retries", async () => {
+    // Use a unique task ID for this test to get clean retry count
+    ctx.task.id = "task-conflict-max";
 
-    expect(mockUpdateTask).toHaveBeenCalledWith("task-123", {
-      status: "blocked",
-      review_comment: "Merge conflict on agent/builder-abc: (unknown files)",
-    });
+    // Call 3 times to exceed the 2-retry limit
+    await escalateConflict(ctx, ["file.ts"], "agent/builder-abc");
+    await escalateConflict(ctx, ["file.ts"], "agent/builder-abc");
+    await escalateConflict(ctx, ["file.ts"], "agent/builder-abc");
+
+    // 3rd call should escalate to blocked
+    const lastCall = mockUpdateTask.mock.calls[mockUpdateTask.mock.calls.length - 1];
+    expect(lastCall[1].status).toBe("blocked");
+    // Should notify user
+    expect(mockSendMessage).toHaveBeenCalled();
+  });
+
+  it("records failure to Failure DB", async () => {
+    ctx.task.id = "task-conflict-db";
+    await escalateConflict(ctx, ["file.ts"], "agent/builder-abc");
+
+    expect(mockRecordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: "task-conflict-db",
+      failure_type: "merge_conflict",
+      summary: expect.stringContaining("file.ts"),
+    }));
   });
 
   it("does not throw when API update fails", async () => {
+    ctx.task.id = "task-conflict-fail";
     mockUpdateTask.mockRejectedValue(new Error("network error"));
 
-    // Should not throw
     await escalateConflict(ctx, ["file.ts"], "agent/builder-abc");
 
-    // WS broadcast should still happen
     expect(mockOnDataUpdate).toHaveBeenCalled();
   });
 
   it("works without onDataUpdate callback", async () => {
+    ctx.task.id = "task-conflict-no-ws";
     ctx.onDataUpdate = undefined;
 
-    // Should not throw
     await escalateConflict(ctx, ["file.ts"], "agent/builder-abc");
 
     expect(mockUpdateTask).toHaveBeenCalled();
