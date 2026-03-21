@@ -11,6 +11,7 @@
 import * as p from "@clack/prompts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { execSync } from "node:child_process";
 import { createApiClient, type WorkspaceInfo } from "../api-client.js";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,68 @@ async function validateApiKey(apiUrl: string, apiKey: string): Promise<Workspace
   }
 }
 
+/** Open a URL in the default browser. */
+function openBrowser(url: string): void {
+  try {
+    const platform = process.platform;
+    if (platform === "darwin") {
+      execSync(`open ${JSON.stringify(url)}`, { stdio: "ignore" });
+    } else if (platform === "win32") {
+      execSync(`start "" ${JSON.stringify(url)}`, { stdio: "ignore" });
+    } else {
+      execSync(`xdg-open ${JSON.stringify(url)}`, { stdio: "ignore" });
+    }
+  } catch {
+    // Best effort — user can manually open the URL
+  }
+}
+
+interface CliAuthStartResponse {
+  cli_code: string;
+  poll_token: string;
+  auth_url: string;
+}
+
+interface CliAuthPollResponse {
+  status: "pending" | "completed" | "expired";
+  api_key?: string;
+  workspace_id?: string;
+  workspace_name?: string;
+}
+
+/** Start a CLI auth session on the API. */
+async function startCliAuth(apiUrl: string): Promise<CliAuthStartResponse | null> {
+  try {
+    const res = await fetch(`${apiUrl}/api/auth/cli/start`, { method: "POST" });
+    if (!res.ok) return null;
+    return (await res.json()) as CliAuthStartResponse;
+  } catch {
+    return null;
+  }
+}
+
+/** Poll for CLI auth completion. */
+async function pollCliAuth(apiUrl: string, pollToken: string): Promise<CliAuthPollResponse> {
+  const res = await fetch(`${apiUrl}/api/auth/cli/poll?poll_token=${encodeURIComponent(pollToken)}`);
+  if (!res.ok) throw new Error("Poll request failed");
+  return (await res.json()) as CliAuthPollResponse;
+}
+
+/** Wait for auth completion by polling every 2s, up to timeoutMs. */
+async function waitForCliAuth(
+  apiUrl: string,
+  pollToken: string,
+  timeoutMs: number,
+): Promise<CliAuthPollResponse> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await pollCliAuth(apiUrl, pollToken);
+    if (result.status !== "pending") return result;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  return { status: "expired" };
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -93,16 +156,71 @@ export async function handleInit(): Promise<void> {
   });
   if (isCancel(apiUrl)) { p.outro("Cancelled."); return; }
 
-  // 2. API Key
-  const apiKey = await p.text({
-    message: "API key",
-    placeholder: "tb_xxx",
-    validate: (v) => {
-      if (!v) return "API key is required";
-      if (!v.startsWith("tb_")) return "API key must start with tb_";
-    },
+  // 2. Authentication — browser login or manual API key
+  const authMethod = await p.select({
+    message: "How would you like to authenticate?",
+    options: [
+      { value: "browser", label: "Login with GitHub (opens browser)" },
+      { value: "manual", label: "Paste API key manually" },
+    ],
   });
-  if (isCancel(apiKey)) { p.outro("Cancelled."); return; }
+  if (isCancel(authMethod)) { p.outro("Cancelled."); return; }
+
+  let apiKey: string;
+  let workspaceId: string | undefined;
+  let workspaceName: string | undefined;
+
+  if (authMethod === "browser") {
+    // Browser-based auth flow
+    const spin = p.spinner();
+    spin.start("Connecting to API...");
+
+    const authSession = await startCliAuth(apiUrl);
+    if (!authSession) {
+      spin.stop("Connection failed");
+      p.log.error("Could not connect to the API. Check your API URL.");
+      p.outro("Setup failed.");
+      process.exit(1);
+    }
+    spin.stop("Connected");
+
+    p.note(
+      [
+        `URL:  ${authSession.auth_url}`,
+        `Code: ${authSession.cli_code}`,
+      ].join("\n"),
+      "Open in browser to authenticate"
+    );
+
+    openBrowser(authSession.auth_url);
+
+    spin.start("Waiting for authentication (timeout: 5 min)...");
+    const result = await waitForCliAuth(apiUrl, authSession.poll_token, 5 * 60 * 1000);
+
+    if (result.status === "completed" && result.api_key) {
+      spin.stop("Authenticated");
+      apiKey = result.api_key;
+      workspaceId = result.workspace_id;
+      workspaceName = result.workspace_name;
+    } else {
+      spin.stop("Authentication timed out or was rejected");
+      p.log.error("Browser authentication did not complete in time.");
+      p.outro("Setup failed.");
+      process.exit(1);
+    }
+  } else {
+    // Manual API key
+    const manualKey = await p.text({
+      message: "API key",
+      placeholder: "tb_xxx",
+      validate: (v) => {
+        if (!v) return "API key is required";
+        if (!v.startsWith("tb_")) return "API key must start with tb_";
+      },
+    });
+    if (isCancel(manualKey)) { p.outro("Cancelled."); return; }
+    apiKey = manualKey;
+  }
 
   // 3. Validate key
   const spin = p.spinner();
