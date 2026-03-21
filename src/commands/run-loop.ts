@@ -55,11 +55,18 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   ]);
 
   // Fetch plan limits and reconfigure scheduler
+  let workspaceBuildCommand: string | null = null;
+  let workspaceTestCommand: string | null = null;
   try {
     const limits = await api.fetchPlanLimits();
     scheduler.reconfigure("builder", limits.max_builders);
     scheduler.reconfigure("cloud-engineer", limits.max_cloud_engineers);
+    workspaceBuildCommand = limits.build_command;
+    workspaceTestCommand = limits.test_command;
     ui.info(`[plan] Builder concurrency: ${limits.max_builders}, Cloud-engineer: ${limits.max_cloud_engineers}`);
+    if (workspaceBuildCommand || workspaceTestCommand) {
+      ui.info(`[plan] Build: ${workspaceBuildCommand || "(auto)"}, Test: ${workspaceTestCommand || "(auto)"}`);
+    }
   } catch { /* non-fatal — use defaults */ }
 
   // Start stall detection for agent processes
@@ -280,7 +287,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       const actionCtx: ActionContext = {
         api, task, agentName, template: agentTemplate, taskLog,
-        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine, agentEngine: agentInfo?.engine },
+        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine, agentEngine: agentInfo?.engine, buildCommand: workspaceBuildCommand, testCommand: workspaceTestCommand },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({
             type: WS_MSG.DATA_UPDATE,

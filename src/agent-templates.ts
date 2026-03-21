@@ -242,7 +242,7 @@ COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>
 
 ## Step 1 (Turn 1): Run these two commands immediately
 - git diff {{diffRef}} --stat
-- npm test 2>&1 | tail -20
+- {{testCommand}} 2>&1 | tail -20
 
 ## Step 2 (Turn 2-3): Quick analysis
 - If tests failed → verdict is NEEDS_CHANGES, skip to Step 3
@@ -341,6 +341,10 @@ export interface ActionContext {
     engine?: string;
     /** Agent's DB engine setting (e.g. "claude-opus") for model resolution */
     agentEngine?: string;
+    /** Workspace build command (null = auto-detect, fallback to npm run build) */
+    buildCommand?: string | null;
+    /** Workspace test command (null = auto-detect, fallback to npm test) */
+    testCommand?: string | null;
   };
   /** Agent exit code (only available in post_actions) */
   exitCode?: number | null;

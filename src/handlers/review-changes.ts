@@ -59,7 +59,8 @@ export async function handleReviewChanges(
     let testResult = "";
     try {
       ctx.onReviewUpdate?.(ctx.task.id, "testing");
-      const testOutput = revExec("npm test 2>&1 || true", {
+      const testCmd = ctx.config.testCommand || "npm test";
+      const testOutput = revExec(`${testCmd} 2>&1 || true`, {
         cwd: revRepoDir, stdio: "pipe", timeout: 60_000,
       }).toString().trim();
       const lastLines = testOutput.split("\n").slice(-10).join("\n");

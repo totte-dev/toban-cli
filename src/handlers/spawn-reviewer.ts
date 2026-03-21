@@ -121,7 +121,7 @@ The Builder agent reported NO CODE CHANGES were needed:
 
 Verify this claim:
 1. Check if the task requirements are actually already met in the codebase
-2. Run tests if applicable (npm test)
+2. Run tests if applicable (${ctx.config.testCommand || "npm test"})
 3. If the agent's claim is correct and the task is truly complete, verdict = APPROVE
 4. If the task is NOT actually complete, verdict = NEEDS_CHANGES with explanation
 
@@ -148,6 +148,7 @@ Output format: ${outputFormat}`;
       taskType,
       reviewCriteria,
       customReviewRules: customRules ? `\n${customRules}` : "",
+      testCommand: ctx.config.testCommand || "npm test",
     });
 
     fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\nFiles changed: ${filesChanged.join(", ") || "unknown"}\n${builderIntent}\n${reviewPrompt}`;

@@ -122,6 +122,8 @@ export interface ApiClient {
 export interface PlanLimits {
   max_builders: number;
   max_cloud_engineers: number;
+  build_command: string | null;
+  test_command: string | null;
 }
 
 /** Create standard auth headers for API requests. */
@@ -384,7 +386,7 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         }
       } catch { /* non-fatal */ }
       // Default: free tier limits
-      return { max_builders: 1, max_cloud_engineers: 1 };
+      return { max_builders: 1, max_cloud_engineers: 1, build_command: null, test_command: null };
     },
   };
 }
