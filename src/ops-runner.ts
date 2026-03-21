@@ -10,6 +10,7 @@ import type { Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { fireRuleEvaluate } from "./rule-evaluate.js";
 
 /** QA scan configuration parsed from ops task description JSON */
 export interface QaScanConfig {
@@ -49,6 +50,7 @@ export interface OpsRunnerConfig {
 
 export class OpsRunner {
   private apiUrl: string;
+  private apiKey: string;
   private headers: Record<string, string>;
   private pollIntervalMs: number;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -58,6 +60,7 @@ export class OpsRunner {
 
   constructor(config: OpsRunnerConfig) {
     this.apiUrl = config.apiUrl;
+    this.apiKey = config.apiKey;
     this.headers = createAuthHeaders(config.apiKey);
     this.pollIntervalMs = config.pollIntervalMs ?? 60_000;
   }
@@ -305,6 +308,16 @@ export class OpsRunner {
     // Create bug tasks for issues (with dedup)
     if (issues.length > 0) {
       await this.createBugTasks(issues);
+
+      // Send to Defense Report for rule evaluation
+      const evalText = issues.map((i) => `[${i.check}] ${i.detail}`).join("\n\n");
+      fireRuleEvaluate({
+        apiUrl: this.apiUrl,
+        apiKey: this.apiKey,
+        recordId: task.id,
+        recordType: "qa_scan",
+        text: evalText.slice(0, 5000),
+      });
     }
 
     // Report result

@@ -10,7 +10,7 @@ interface EvaluateInput {
   apiUrl: string;
   apiKey: string;
   recordId: string;
-  recordType: "retro" | "task_review" | "failure";
+  recordType: "retro" | "task_review" | "failure" | "qa_scan";
   text: string;
   improvementNotes?: string;
 }
