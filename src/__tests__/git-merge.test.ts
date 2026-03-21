@@ -106,9 +106,10 @@ describe("escalateConflict", () => {
   });
 
   it("broadcasts todo status via WS on retry", async () => {
+    ctx.task.id = "task-conflict-ws";
     await escalateConflict(ctx, ["src/a.ts"], "agent/builder-abc");
 
-    expect(mockOnDataUpdate).toHaveBeenCalledWith("task", "task-conflict-1", expect.objectContaining({
+    expect(mockOnDataUpdate).toHaveBeenCalledWith("task", "task-conflict-ws", expect.objectContaining({
       status: "todo",
     }));
   });

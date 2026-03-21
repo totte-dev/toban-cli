@@ -17,6 +17,7 @@ import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
 import { resolveRepoRoot } from "../git-ops.js";
 import { trackRetry } from "../utils/retry-tracker.js";
+import type { Task } from "../api-client.js";
 
 /** Module-level mutex to serialize concurrent merge operations */
 const mergeLock = new Mutex();
@@ -83,17 +84,21 @@ export async function escalateConflict(
   const comment = `Merge conflict on ${worktreeBranch}: ${fileList}`;
 
   // Track retries — allow 2 auto-retries before blocking
-  const { retryCount } = trackRetry(`conflict:${ctx.task.id}`);
-  const maxConflictRetries = 2;
+  const MAX_CONFLICT_RETRIES = 2;
+  const { retryCount, maxed } = trackRetry(`conflict:${ctx.task.id}`, MAX_CONFLICT_RETRIES);
 
-  if (retryCount <= maxConflictRetries) {
+  if (!maxed) {
     // Auto-retry: reset to todo so the task runs again from latest main
-    ui.warn(`[git_merge] Conflict detected (attempt ${retryCount}/${maxConflictRetries}) — resetting to todo for retry`);
+    ui.warn(`[git_merge] Conflict detected (attempt ${retryCount}/${MAX_CONFLICT_RETRIES}) — resetting to todo for retry`);
     try {
+      // Persist retry count in context_notes so it survives CLI restarts
+      const existingNotes = (ctx.task.context_notes as string) || "";
+      const updatedNotes = existingNotes.replace(/\[conflict_retries:\d+\]/, "").trim() + ` [conflict_retries:${retryCount}]`;
       await ctx.api.updateTask(ctx.task.id, {
         status: "todo",
-        review_comment: `${comment} — auto-retry ${retryCount}/${maxConflictRetries}`,
-      } as unknown as Parameters<typeof ctx.api.updateTask>[1]);
+        review_comment: `${comment} — auto-retry ${retryCount}/${MAX_CONFLICT_RETRIES}`,
+        context_notes: updatedNotes.trim(),
+      } as Partial<Task>);
     } catch {
       ui.warn("[git_merge] Failed to reset task to todo");
     }

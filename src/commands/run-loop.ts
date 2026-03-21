@@ -24,6 +24,7 @@ import { extractCompletionJson } from "../utils/completion-parser.js";
 import { TIMEOUTS, INTERVALS } from "../constants.js";
 import { shouldSplit, autoSplitTasks } from "../task-splitter.js";
 import { detectDependencies, sortByDependency } from "../task-dependency.js";
+import { trackRetry } from "../utils/retry-tracker.js";
 import { OpsRunner } from "../ops-runner.js";
 import { extractJsonObject } from "../utils/extract-json.js";
 
@@ -291,6 +292,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const agentTemplate = matchTemplate(taskType, agentRole);
       const isReadOnly = agentTemplate.tools !== "all";
       ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
+
+      // Restore persisted conflict retry count from context_notes (survives CLI restart)
+      const conflictRetryMatch = ((task.context_notes as string) || "").match(/\[conflict_retries:(\d+)\]/);
+      if (conflictRetryMatch) {
+        const persisted = parseInt(conflictRetryMatch[1], 10);
+        for (let i = 0; i < persisted; i++) trackRetry(`conflict:${task.id}`, 2);
+      }
 
       const taskLog = createTaskLogger(task.id);
       taskLog.event("pickup", { agent: agentName, template: agentTemplate.id, title: task.title, taskType, hasReviewComment: !!task.review_comment });
