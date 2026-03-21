@@ -1,5 +1,50 @@
 import { describe, it, expect, vi } from "vitest";
 import { Mutex } from "async-mutex";
+import { SlotScheduler } from "../slot-scheduler.js";
+import {
+  detectDependencies,
+  sortByDependency,
+} from "../task-dependency.js";
+import type { Task } from "../api-client.js";
+
+function makeTask(overrides: Partial<Task> & { id: string; title: string }): Task {
+  return {
+    description: "",
+    status: "in_progress",
+    priority: "p2",
+    owner: "builder",
+    ...overrides,
+  } as Task;
+}
+
+/**
+ * Simulate a single poll cycle: detect dependencies, sort tasks,
+ * and assign ready tasks to available slots.
+ * Returns the IDs of tasks that would be dispatched in parallel.
+ */
+function simulateDispatch(
+  tasks: Task[],
+  maxBuilders: number,
+  completedIds: Set<string> = new Set(),
+): string[] {
+  const deps = detectDependencies(tasks);
+  const ordered = sortByDependency(tasks, deps, completedIds);
+  const readyTasks = ordered.filter((t) => t.parallelReady);
+
+  const scheduler = new SlotScheduler([
+    { role: "builder", maxConcurrency: maxBuilders },
+  ]);
+
+  const dispatched: string[] = [];
+  for (const task of readyTasks) {
+    const slot = scheduler.acquireSlot("builder");
+    if (!slot) break;
+    scheduler.assignTask(slot, task.id);
+    dispatched.push(task.id);
+  }
+
+  return dispatched;
+}
 
 describe("parallel dispatch", () => {
   describe("runner onExit callback", () => {
@@ -70,6 +115,130 @@ describe("parallel dispatch", () => {
       const release2 = await mutex.acquire();
       expect(release2).toBeDefined();
       release2();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Dispatch simulation: dependency detection + slot scheduling
+  // -------------------------------------------------------------------------
+
+  describe("independent tasks dispatch in parallel", () => {
+    it("dispatches all independent tasks up to slot limit", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Add README", description: "Create README.md with project overview" }),
+        makeTask({ id: "b", title: "Add license", description: "Create LICENSE file with MIT license" }),
+        makeTask({ id: "c", title: "Add gitignore", description: "Create .gitignore for Node.js" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 3);
+      expect(dispatched).toHaveLength(3);
+      expect(dispatched).toEqual(expect.arrayContaining(["a", "b", "c"]));
+    });
+
+    it("caps dispatched tasks at slot limit", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Task A", description: "Independent work A" }),
+        makeTask({ id: "b", title: "Task B", description: "Independent work B" }),
+        makeTask({ id: "c", title: "Task C", description: "Independent work C" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 2);
+      expect(dispatched).toHaveLength(2);
+    });
+
+    it("tasks in different directories run in parallel", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Update API routes", description: "Modify src/routes/tasks.ts" }),
+        makeTask({ id: "b", title: "Update CLI commands", description: "Modify src/commands/run-loop.ts" }),
+        makeTask({ id: "c", title: "Update UI components", description: "Modify app/sprint/page.tsx" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 3);
+      expect(dispatched).toHaveLength(3);
+    });
+  });
+
+  describe("file conflicts serialize tasks", () => {
+    it("serializes tasks referencing the same file", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Add retry", description: "Modify src/api-client.ts to add retry" }),
+        makeTask({ id: "b", title: "Add timeout", description: "Modify src/api-client.ts to add timeout" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 2);
+      expect(dispatched).toHaveLength(1);
+    });
+
+    it("mixes parallel and serial correctly", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Refactor API client", description: "Modify src/api-client.ts", priority: "p1" }),
+        makeTask({ id: "b", title: "Add timeout", description: "Modify src/api-client.ts", priority: "p2" }),
+        makeTask({ id: "c", title: "Add README", description: "Create README.md with project overview" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 3);
+      expect(dispatched).toHaveLength(2);
+      expect(dispatched).toContain("a");
+      expect(dispatched).toContain("c");
+    });
+
+    it("unblocks dependent task after predecessor completes", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Refactor API client", description: "Modify src/api-client.ts", priority: "p1" }),
+        makeTask({ id: "b", title: "Add timeout", description: "Modify src/api-client.ts", priority: "p2" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 2, new Set(["a"]));
+      expect(dispatched).toContain("b");
+    });
+  });
+
+  describe("explicit dependencies", () => {
+    it("serializes tasks with dependency keywords", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Setup database schema", description: "Create tables for the application" }),
+        makeTask({ id: "b", title: "Build API endpoints", description: "depends on Setup database schema being complete" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 2);
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]).toBe("a");
+    });
+
+    it("runs independent tasks alongside a dependency chain", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Setup database schema", description: "Create tables" }),
+        makeTask({ id: "b", title: "Build API endpoints", description: "depends on Setup database schema" }),
+        makeTask({ id: "c", title: "Write documentation", description: "Add user guide to docs" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 3);
+      expect(dispatched).toHaveLength(2);
+      expect(dispatched).toContain("a");
+      expect(dispatched).toContain("c");
+    });
+  });
+
+  describe("no directory-level false deps (regression)", () => {
+    it("tasks in same directory but different files run in parallel", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Add CLI init", description: "Create src/commands/init.ts" }),
+        makeTask({ id: "b", title: "Add CLI review", description: "Create src/commands/review.ts" }),
+        makeTask({ id: "c", title: "Add CLI status", description: "Create src/commands/status.ts" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 3);
+      expect(dispatched).toHaveLength(3);
+    });
+
+    it("tasks mentioning same component area but different files run in parallel", () => {
+      const tasks = [
+        makeTask({ id: "a", title: "Add task board", description: "Create components/sprint/task-board.tsx" }),
+        makeTask({ id: "b", title: "Add phase stepper", description: "Create components/sprint/phase-stepper.tsx" }),
+      ];
+
+      const dispatched = simulateDispatch(tasks, 2);
+      expect(dispatched).toHaveLength(2);
     });
   });
 
