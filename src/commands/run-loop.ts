@@ -17,6 +17,7 @@ import { setup, type CliArgs } from "../setup.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
 import { handlePropose } from "./propose.js";
+import { fireRuleEvaluate } from "../rule-evaluate.js";
 import type { ShutdownState } from "./shutdown.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { extractCompletionJson } from "../utils/completion-parser.js";
@@ -467,6 +468,27 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           }
         }
 
+        // Extract RETRO_JSON for Builder intent injection into Reviewer prompt
+        for (const line of runningAgent.stdout) {
+          let raw: string | null = null;
+          if (line.startsWith("RETRO_JSON:")) {
+            raw = line.slice("RETRO_JSON:".length);
+          } else {
+            try {
+              const event = JSON.parse(line);
+              const text = typeof event === "object" && event?.type === "assistant" ? (event.message?.content?.[0]?.text ?? "") : "";
+              const m = text.match?.(/RETRO_JSON:(\{[\s\S]*\})/);
+              if (m) raw = m[1];
+            } catch { /* not JSON */ }
+          }
+          if (raw) {
+            try {
+              actionCtx.retroJson = JSON.parse(raw);
+            } catch { /* parse error */ }
+            break;
+          }
+        }
+
         actionCtx.onRetro = async () => {
           // Extract RETRO_JSON from agent stdout, validate, and submit
           for (const line of runningAgent.stdout) {
@@ -524,6 +546,15 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
                 }),
               });
               ui.info(`[retro] Submitted: went_well=${!!safeWentWell}, to_improve=${!!safeToImprove}, tasks=${validTasks.length}`);
+              // Fire-and-forget: evaluate retro against playbook rules
+              fireRuleEvaluate({
+                apiUrl: cliArgs.apiUrl,
+                apiKey: cliArgs.apiKey,
+                recordId: task.id,
+                recordType: "retro",
+                text: [safeWentWell || "", safeToImprove || ""].join(" "),
+                improvementNotes: safeToImprove,
+              });
               return;
             } catch (err) {
               ui.warn(`[retro] Failed to parse RETRO_JSON: ${err}`);

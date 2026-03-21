@@ -349,6 +349,8 @@ export interface ActionContext {
   mergeSkipped?: boolean;
   /** Parsed COMPLETION_JSON from agent output (set by cli.ts after agent finishes) */
   completionJson?: { review_comment?: string; commits?: string };
+  /** Parsed RETRO_JSON from agent output (Builder's self-assessment: what went well, what to improve) */
+  retroJson?: { went_well?: string; to_improve?: string; suggested_tasks?: Array<{ title: string }> };
   /** The matched template for this task */
   template?: AgentTemplate;
   /** Per-task logger for debugging */

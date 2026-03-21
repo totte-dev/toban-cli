@@ -83,6 +83,18 @@ export async function handleSpawnReviewer(
     return;
   }
 
+  // Extract Builder's intent from RETRO_JSON (if available in ctx)
+  let builderIntent = "";
+  if (ctx.retroJson) {
+    const parts: string[] = [];
+    if (ctx.retroJson.went_well) parts.push(`What went well: ${ctx.retroJson.went_well}`);
+    if (ctx.retroJson.to_improve) parts.push(`What to improve: ${ctx.retroJson.to_improve}`);
+    if (parts.length > 0) {
+      builderIntent = `\n## Builder's Self-Assessment\n${parts.join("\n")}\n`;
+      ui.info(`[${phase}] ${label}: injecting Builder intent (${parts.length} items)`);
+    }
+  }
+
   // Build reviewer prompt
   const taskType = ctx.task.type as string || "implementation";
   const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
@@ -137,7 +149,7 @@ Output format: ${outputFormat}`;
       customReviewRules: customRules ? `\n${customRules}` : "",
     });
 
-    fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\nFiles changed: ${filesChanged.join(", ") || "unknown"}\n\n${reviewPrompt}`;
+    fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\nFiles changed: ${filesChanged.join(", ") || "unknown"}\n${builderIntent}\n${reviewPrompt}`;
   }
 
   // Spawn reviewer as agent process
@@ -182,6 +194,47 @@ Output format: ${outputFormat}`;
   // Save review comment if not saved via review-report
   if (!completionMatch) {
     await ctx.api.updateTask(ctx.task.id, { review_comment: reviewComment } as Partial<Task>);
+  }
+
+  // Second opinion gate: Manager re-evaluates NEEDS_CHANGES verdicts
+  if (verdict === "NEEDS_CHANGES" && reviewComment) {
+    ui.info(`[${phase}] ${label}: NEEDS_CHANGES — requesting Manager second opinion...`);
+    try {
+      const secondOpinionPrompt = `A Reviewer agent judged this task as NEEDS_CHANGES. Review the assessment and decide if the rejection is justified.
+
+Task: ${ctx.task.title}
+Type: ${taskType}
+Description: ${ctx.task.description || "(none)"}
+
+Reviewer's assessment:
+${reviewComment}
+
+If the rejection is clearly correct (real bugs, test failures, missing requirements), respond: CONFIRM_REJECT
+If the rejection seems overly strict, cosmetic, or based on style preferences rather than correctness, respond: OVERRIDE_APPROVE
+
+Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
+
+      const managerResult = await spawnClaudeOnce(secondOpinionPrompt, {
+        role: "manager", maxTurns: 1, timeout: 60_000, cwd: resolveRepoRoot(ctx.config.workingDir),
+      });
+
+      if (managerResult.includes("OVERRIDE_APPROVE")) {
+        ui.info(`[${phase}] ${label}: Manager overrides → APPROVE (Reviewer was too strict)`);
+        verdict = "APPROVE";
+        // Update the saved review with override note
+        const overrideComment = JSON.stringify({
+          ...(completionMatch ? JSON.parse(completionMatch[1]) : {}),
+          verdict: "APPROVE",
+          manager_override: "Reviewer rejection overridden — deemed overly strict",
+        });
+        reviewComment = overrideComment;
+        await ctx.api.updateTask(ctx.task.id, { review_comment: overrideComment } as Partial<Task>);
+      } else {
+        ui.info(`[${phase}] ${label}: Manager confirms NEEDS_CHANGES`);
+      }
+    } catch (err) {
+      ui.warn(`[${phase}] ${label}: Second opinion failed (${err}), keeping NEEDS_CHANGES`);
+    }
   }
 
   ctx.reviewVerdict = verdict;
