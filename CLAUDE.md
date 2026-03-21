@@ -80,6 +80,34 @@ toban sprint complete [--push]
 - Edit prompts/templates.ts for Manager behavior changes
 - Edit agent-templates.ts for worker agent behavior changes
 
+## Ops Tasks Setup
+
+The OpsRunner executes background tasks on a schedule. To seed ops tasks via API:
+
+```bash
+# QA Scan (build/test/error log check every 4 hours)
+curl -s -X POST -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  "$BASE_URL/api/v1/ops-tasks" -d '{
+    "title": "QA Scan",
+    "description": "{\"type\":\"qa_scan\",\"commands\":{\"build\":\"npm run build\",\"test\":\"npm test\"}}",
+    "category": "auto_check",
+    "schedule": "interval",
+    "interval_hours": 4
+  }'
+
+# Rule Evaluation (LLM re-evaluation of keyword matches every 6 hours)
+curl -s -X POST -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  "$BASE_URL/api/v1/ops-tasks" -d '{
+    "title": "Rule Evaluation",
+    "description": "{\"type\":\"rule_evaluate\"}",
+    "category": "auto_check",
+    "schedule": "interval",
+    "interval_hours": 6
+  }'
+```
+
+QA scan config options: `repo_dir`, `commands.build`, `commands.test`, `health_urls[]`, `error_log`.
+
 
 <!-- TOBAN_MEMORY_START -->
 # Agent Memory (auto-injected by Toban)
