@@ -118,7 +118,7 @@ export function spawnAgent(
 ): { process: ChildProcess; agent: RunningAgent } {
   const branchName = buildBranchName(config.name, config.taskId);
   const engine = getEngine(config.type);
-  const { cmd, args } = buildCommand(config);
+  const { cmd, args, stdin: stdinData } = buildCommand(config);
 
   // Run engine-specific pre-spawn setup
   engine.ensureConfig?.();
@@ -129,7 +129,7 @@ export function spawnAgent(
 
   const child = spawn(cmd, args, {
     cwd: worktreePath,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [stdinData ? "pipe" : "ignore", "pipe", "pipe"],
     env: {
       ...agentEnv,
       TOBAN_API_KEY: config.apiKey,
@@ -142,6 +142,12 @@ export function spawnAgent(
     },
     detached: true,
   });
+
+  // Write prompt to stdin if needed (for --allowedTools + -p - pattern)
+  if (stdinData && child.stdin) {
+    child.stdin.write(stdinData);
+    child.stdin.end();
+  }
 
   const agent: RunningAgent = {
     config,

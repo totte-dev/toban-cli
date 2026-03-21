@@ -25,6 +25,8 @@ import type { AgentActivity } from "./types.js";
 export interface CommandSpec {
   cmd: string;
   args: string[];
+  /** If set, pipe this string to stdin (for --allowedTools + prompt via -p -) */
+  stdin?: string;
 }
 
 export interface AgentEngineProvider {
@@ -120,6 +122,8 @@ const claudeEngine: AgentEngineProvider = {
 
   buildCommand(config) {
     const model = config.model ? resolveModel(config.model) : DEFAULT_MODEL;
+    // When using --allowedTools (variadic), prompt must go via -p to avoid being consumed as a tool name
+    const useStdin = config.readOnly && config.prompt;
     return {
       cmd: "claude",
       args: [
@@ -129,8 +133,9 @@ const claudeEngine: AgentEngineProvider = {
         "--model", model,
         "--output-format", "stream-json",
         ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
-        ...(config.prompt ? [config.prompt] : []),
+        ...(useStdin ? ["-p", "-"] : (config.prompt ? [config.prompt] : [])),
       ],
+      ...(useStdin ? { stdin: config.prompt } : {}),
     };
   },
 
