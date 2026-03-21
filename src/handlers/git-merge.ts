@@ -1,6 +1,11 @@
 /**
  * Handler for the git_merge template action.
  * Merges the agent's worktree branch into the base branch.
+ *
+ * Before merging, attempts a rebase onto the base branch to incorporate
+ * any commits merged by other agents while this agent was working.
+ * If the rebase encounters conflicts, the merge is aborted and the
+ * task is escalated to "blocked" status with conflict details.
  */
 
 import { execSync } from "node:child_process";
@@ -15,6 +20,104 @@ import { resolveRepoRoot } from "../git-ops.js";
 /** Module-level mutex to serialize concurrent merge operations */
 const mergeLock = new Mutex();
 
+/** Result of attempting to rebase a branch onto the base */
+export interface RebaseResult {
+  success: boolean;
+  /** Files that had conflicts (only populated on failure) */
+  conflictedFiles: string[];
+}
+
+/**
+ * Attempt to rebase the worktree branch onto the base branch.
+ * If conflicts are detected, aborts the rebase and returns the conflicted file list.
+ */
+export function rebaseOntoBase(
+  repoDir: string,
+  worktreeBranch: string,
+  baseBranch: string,
+  exec: typeof execSync = execSync
+): RebaseResult {
+  try {
+    // Switch to the worktree branch for rebasing
+    exec(`git checkout "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
+    exec(`git rebase "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
+    return { success: true, conflictedFiles: [] };
+  } catch (err) {
+    // Rebase failed — extract conflicted files before aborting
+    let conflictedFiles: string[] = [];
+    try {
+      const diffOutput = exec(
+        "git diff --name-only --diff-filter=U",
+        { cwd: repoDir, stdio: "pipe" }
+      ).toString().trim();
+      conflictedFiles = diffOutput.split("\n").filter(Boolean);
+    } catch {
+      // Could not list conflicts — still need to abort
+    }
+
+    // Abort the rebase to leave the repo in a clean state
+    try {
+      exec("git rebase --abort", { cwd: repoDir, stdio: "pipe" });
+    } catch {
+      // Already clean or no rebase in progress
+    }
+
+    return { success: false, conflictedFiles };
+  }
+}
+
+/**
+ * Escalate a merge conflict: update task to blocked, record conflict details,
+ * and notify connected clients via WebSocket.
+ */
+export async function escalateConflict(
+  ctx: ActionContext,
+  conflictedFiles: string[],
+  worktreeBranch: string
+): Promise<void> {
+  const fileList = conflictedFiles.length > 0
+    ? conflictedFiles.join(", ")
+    : "(unknown files)";
+  const comment = `Merge conflict on ${worktreeBranch}: ${fileList}`;
+
+  ui.warn(`[git_merge] Conflict detected — ${comment}`);
+
+  // Update task status to blocked with conflict info
+  try {
+    await ctx.api.updateTask(ctx.task.id, {
+      status: "blocked",
+      review_comment: comment,
+    } as unknown as Parameters<typeof ctx.api.updateTask>[1]);
+  } catch {
+    // Non-fatal — log but continue
+    ui.warn("[git_merge] Failed to update task status to blocked");
+  }
+
+  // Broadcast via WS so dashboard shows the conflict immediately
+  if (ctx.onDataUpdate) {
+    ctx.onDataUpdate("task", ctx.task.id, {
+      status: "blocked",
+      review_comment: comment,
+    });
+  }
+}
+
+/**
+ * Clean up worktree directory, prune stale worktree refs, and delete the branch.
+ */
+function cleanupBranch(
+  repoDir: string,
+  worktreeDir: string,
+  worktreeBranch: string,
+  exec: typeof execSync = execSync
+): void {
+  if (existsSync(worktreeDir)) {
+    try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+  }
+  try { exec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+  try { exec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+}
+
 export async function handleGitMerge(
   action: TemplateAction,
   ctx: ActionContext,
@@ -22,7 +125,6 @@ export async function handleGitMerge(
 ): Promise<void> {
   const label = action.label ?? "git_merge";
   const gitExec = execSync;
-  const gitExists = existsSync;
   const gitJoin = join;
   // workingDir is the worktree path — we need the main repo root
   const worktreePath = ctx.config.workingDir;
@@ -55,12 +157,7 @@ export async function handleGitMerge(
       if (!agentCommits) {
         ui.warn(`[${phase}] ${label}: no agent commits on ${worktreeBranch} — skipping merge`);
         ctx.mergeSkipped = true;
-        // Clean up the empty branch
-        if (gitExists(worktreeDir)) {
-          try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
-        }
-        try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-        try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+        cleanupBranch(repoDir, worktreeDir, worktreeBranch);
         return;
       }
 
@@ -78,15 +175,28 @@ export async function handleGitMerge(
       if (meaningfulFiles.length === 0) {
         ui.warn(`[${phase}] ${label}: only metadata files changed (${diffFiles.join(", ")}) — skipping merge`);
         ctx.mergeSkipped = true;
-        if (gitExists(worktreeDir)) {
-          try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
-        }
-        try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-        try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+        cleanupBranch(repoDir, worktreeDir, worktreeBranch);
         return;
       }
 
       ui.info(`[${phase}] ${label}: ${agentCommits.split("\n").length} commit(s), ${meaningfulFiles.length} file(s)`);
+
+      // ── Rebase onto base branch before merging ──
+      // This incorporates any commits merged by other agents while this one was working.
+      // If rebase encounters conflicts, we abort and escalate.
+      const rebaseResult = rebaseOntoBase(repoDir, worktreeBranch, baseBranch);
+      if (!rebaseResult.success) {
+        await escalateConflict(ctx, rebaseResult.conflictedFiles, worktreeBranch);
+        logError(
+          CLI_ERR.GIT_MERGE_FAILED,
+          `Rebase conflict on ${worktreeBranch}: ${rebaseResult.conflictedFiles.join(", ")}`,
+          { taskId: ctx.task.id }
+        );
+        // Clean up — the branch is back to pre-rebase state (rebase --abort was called)
+        cleanupBranch(repoDir, worktreeDir, worktreeBranch);
+        return;
+      }
+
       // Record pre-merge hash for accurate diff in reviewer
       try { ctx.preMergeHash = gitExec("git rev-parse HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(); } catch { /* non-fatal */ }
       gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
@@ -94,11 +204,7 @@ export async function handleGitMerge(
       ui.info( `[${phase}] ${label}: merged ${worktreeBranch}`);
 
       // Clean up worktree
-      if (gitExists(worktreeDir)) {
-        try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
-      }
-      try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
-      try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+      cleanupBranch(repoDir, worktreeDir, worktreeBranch);
     } else {
       ui.info( `[${phase}] ${label}: no agent branch found, skipping`);
     }
@@ -107,6 +213,9 @@ export async function handleGitMerge(
     logError(CLI_ERR.GIT_MERGE_FAILED, `git_merge failed: ${msg}`, { taskId: ctx.task.id }, mergeErr);
     ui.warn(`[template] git_merge failed: ${msg}`);
     try { gitExec("git merge --abort", { cwd: repoDir, stdio: "pipe" }); } catch { /* already clean */ }
+
+    // Escalate merge failure to blocked status
+    await escalateConflict(ctx, [], ctx.agentBranch ?? "unknown");
   } finally {
     release();
   }
