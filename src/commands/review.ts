@@ -26,6 +26,7 @@ export async function handleReview(
   skills?: string[],
   diffRange?: string,
   engine: AgentType = "claude",
+  usePr = false,
 ): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
   const { execSync: revExec } = await import("node:child_process");
@@ -90,6 +91,51 @@ export async function handleReview(
     } catch { /* default */ }
   }
   ui.info(`[review] Diff range: ${diffRef}`);
+
+  // PR mode: create a branch + PR before reviewing
+  let prNumber: number | null = null;
+  let prBranch: string | null = null;
+  if (usePr) {
+    s.start("Creating review PR...");
+    try {
+      const currentBranch = revExec("git branch --show-current", { cwd, stdio: "pipe" }).toString().trim();
+      const baseBranch = revExec("git rev-parse --abbrev-ref HEAD@{upstream} 2>/dev/null || echo main", { cwd, stdio: "pipe" }).toString().trim().replace(/^origin\//, "") || "main";
+
+      if (currentBranch === "main" || currentBranch === baseBranch) {
+        // On main — create a review branch from the diff range, move commits there
+        const diffBase = diffRef.split("..")[0] || "HEAD~1";
+        prBranch = `review/${Date.now().toString(36)}`;
+        // Create branch at HEAD, then reset main to the base
+        revExec(`git branch ${prBranch}`, { cwd, stdio: "pipe" });
+        revExec(`git reset --hard ${diffBase}`, { cwd, stdio: "pipe" });
+        revExec(`git push origin ${prBranch}`, { cwd, stdio: "pipe", timeout: 30_000 });
+        revExec(`git push origin ${currentBranch} --force-with-lease`, { cwd, stdio: "pipe", timeout: 30_000 });
+        // Update diffRef to PR branch vs main
+        diffRef = `${currentBranch}..${prBranch}`;
+      } else {
+        // Already on a feature branch — just push and create PR
+        prBranch = currentBranch;
+        revExec(`git push -u origin ${prBranch}`, { cwd, stdio: "pipe", timeout: 30_000 });
+      }
+
+      // Create PR via gh CLI
+      const prTitle = task ? `Review: ${task.title}` : `Review: ${prBranch}`;
+      const prBody = task ? `Automated review for task ${task.id.slice(0, 8)}: ${task.title}` : "Automated review PR";
+      const prOutput = revExec(
+        `gh pr create --base ${baseBranch} --head ${prBranch} --title "${prTitle.replace(/"/g, '\\"')}" --body "${prBody.replace(/"/g, '\\"')}"`,
+        { cwd, stdio: "pipe", timeout: 30_000 },
+      ).toString().trim();
+
+      // Extract PR number from URL
+      const prMatch = prOutput.match(/\/pull\/(\d+)/);
+      prNumber = prMatch ? parseInt(prMatch[1], 10) : null;
+      s.stop(`PR created: ${prOutput}`);
+    } catch (prErr) {
+      s.stop("PR creation failed");
+      ui.error(`[review] Failed to create PR: ${prErr instanceof Error ? prErr.message : prErr}`);
+      ui.info("[review] Falling back to local review");
+    }
+  }
 
   // Build reviewer prompt
   const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
@@ -261,6 +307,31 @@ export async function handleReview(
           }),
         });
       } catch { /* non-fatal */ }
+
+      // PR mode: post review as PR comment and handle merge
+      if (prNumber && prBranch) {
+        try {
+          const commentBody = [
+            `## Review: ${report.verdict}`,
+            "",
+            `**Requirement:** ${report.requirement_match || "N/A"}`,
+            `**Quality:** ${report.code_quality || "N/A"}`,
+            `**Tests:** ${report.test_coverage || "N/A"}`,
+            `**Risks:** ${report.risks || "N/A"}`,
+          ].join("\n");
+
+          revExec(`gh pr comment ${prNumber} --body "${commentBody.replace(/"/g, '\\"')}"`, { cwd, stdio: "pipe", timeout: 15_000 });
+
+          if (report.verdict === "APPROVE") {
+            revExec(`gh pr merge ${prNumber} --squash --delete-branch`, { cwd, stdio: "pipe", timeout: 30_000 });
+            console.log(`\nPR #${prNumber} merged and branch deleted.`);
+          } else {
+            console.log(`\nPR #${prNumber} left open — verdict: NEEDS_CHANGES`);
+          }
+        } catch (ghErr) {
+          ui.warn(`[review] PR comment/merge failed: ${ghErr instanceof Error ? ghErr.message : ghErr}`);
+        }
+      }
     } catch {
       console.log("\n--- Raw Review Output ---");
       console.log(result.slice(-2000));
