@@ -140,7 +140,16 @@ export class OpsRunner {
     const desc = (task.description || "").trim();
     if (desc.startsWith("{")) {
       try {
-        const config = JSON.parse(desc) as { type?: string };
+        const config = JSON.parse(desc) as { type?: string; require_agent?: string };
+        const requiredAgent = config.require_agent || (config.type === "qa_scan" ? "qa" : null);
+
+        // Skip if required agent is not active in the workspace
+        if (requiredAgent && !(await this.isAgentActive(requiredAgent))) {
+          ui.info(`[ops] Skipping ${task.title}: ${requiredAgent} agent not active`);
+          await this.reportResult(task.id, true, `Skipped: ${requiredAgent} agent not active`, "");
+          return;
+        }
+
         if (config.type === "qa_scan") {
           await this.runQaScan(task, config as QaScanConfig);
           return;
@@ -416,6 +425,21 @@ export class OpsRunner {
     const summary = `Evaluated ${results.length}: ${confirmed} confirmed, ${rejected} rejected`;
     await this.reportResult(task.id, true, summary, JSON.stringify({ results, timestamp: new Date().toISOString() }));
     ui.info(`[rule-eval] ${summary}`);
+  }
+
+  /** Check if an agent exists and is active in the workspace. */
+  private async isAgentActive(agentName: string): Promise<boolean> {
+    try {
+      const res = await fetchWithRetry(
+        `${this.apiUrl}/api/v1/agents`,
+        { headers: this.headers },
+      );
+      if (!res.ok) return false;
+      const agents = (await res.json()) as Array<{ name: string; status: string }>;
+      return agents.some((a) => a.name === agentName);
+    } catch {
+      return false;
+    }
   }
 
   /** Report ops task result to API. */
