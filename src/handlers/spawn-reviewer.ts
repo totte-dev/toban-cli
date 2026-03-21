@@ -12,6 +12,7 @@ import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";
 import { resolveRepoRoot } from "../git-ops.js";
+import { resolveModelForRole } from "../agent-engine.js";
 import { TIMEOUTS, LIMITS } from "../constants.js";
 
 export async function handleSpawnReviewer(
@@ -156,8 +157,10 @@ Output format: ${outputFormat}`;
   ctx.onReviewUpdate?.(ctx.task.id, "analyzing");
   ui.info(`[${phase}] ${label}: spawning Reviewer agent (${filesChanged.length} files)`);
 
+  // Use agent's DB engine setting for model resolution (respects dashboard config)
+  const reviewerModel = resolveModelForRole("reviewer", ctx.config.agentEngine);
   const reviewResult = await spawnClaudeOnce(fullPrompt, {
-    role: "reviewer", maxTurns: 5, timeout: TIMEOUTS.REVIEWER, cwd: reviewRepoDir,
+    model: reviewerModel, role: "reviewer", maxTurns: 5, timeout: TIMEOUTS.REVIEWER, cwd: reviewRepoDir,
   });
 
   // Parse COMPLETION_JSON from reviewer output (supports COMPLETION_JSON: prefix and ```json blocks)

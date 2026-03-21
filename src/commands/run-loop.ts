@@ -24,6 +24,8 @@ import { extractCompletionJson } from "../utils/completion-parser.js";
 import { TIMEOUTS, INTERVALS } from "../constants.js";
 import { shouldSplit, autoSplitTasks } from "../task-splitter.js";
 import { detectDependencies, sortByDependency } from "../task-dependency.js";
+import { OpsRunner } from "../ops-runner.js";
+import { extractJsonObject } from "../utils/extract-json.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,6 +64,14 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
   // Start stall detection for agent processes
   runner.startStallDetection();
+
+  // Start ops task runner (background, parallel to main loop)
+  const opsRunner = new OpsRunner({
+    apiUrl: cliArgs.apiUrl,
+    apiKey: cliArgs.apiKey,
+    pollIntervalMs: 60_000,
+  });
+  opsRunner.start();
 
   while (!shutdownState.shuttingDown) {
     try {
@@ -257,6 +267,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       // Use slot name as agent name to avoid collisions in parallel dispatch
       const agentName = slotName;
       const agentRole = task.owner ?? "builder";
+      const agentInfo = sprintData.agents.find((a) => a.name === agentRole);
       const apiDocs = await api.fetchApiDocs(agentRole);
       const taskType = task.type as string | undefined;
       const taskLabels = parseTaskLabels(task);
@@ -269,7 +280,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       const actionCtx: ActionContext = {
         api, task, agentName, template: agentTemplate, taskLog,
-        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine },
+        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine, agentEngine: agentInfo?.engine },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({
             type: WS_MSG.DATA_UPDATE,
@@ -358,7 +369,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         if (ctx.gitUserInfo) ensureGitUser(taskWorkingDir, ctx.gitUserInfo.name, ctx.gitUserInfo.email);
 
         // Resolve model from agent's DB engine setting or role default
-        const agentInfo = sprintData.agents.find((a) => a.name === agentRole);
         const agentModel = resolveModelForRole(agentRole, agentInfo?.engine);
 
         const agentConfig = {
@@ -380,7 +390,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           continue;
         }
 
-        ui.agentSpawned({ agentName: agentConfig.name, taskId: task.id, taskTitle: task.title, docker: !cliArgs.noDocker });
+        ui.agentSpawned({ agentName: agentConfig.name, taskId: task.id, taskTitle: task.title, docker: !cliArgs.noDocker, model: agentModel });
 
         const messagePoller = new MessagePoller({ api, channel: agentRole, workingDir: taskWorkingDir });
         messagePoller.start();
@@ -437,13 +447,15 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           for (const line of runningAgent.stdout) {
             let raw: string | null = null;
             if (line.startsWith("RETRO_JSON:")) {
-              raw = line.slice("RETRO_JSON:".length);
+              raw = extractJsonObject(line.slice("RETRO_JSON:".length));
             } else {
               try {
                 const event = JSON.parse(line);
                 const text = typeof event === "object" && event?.type === "assistant" ? (event.message?.content?.[0]?.text ?? "") : "";
-                const m = text.match?.(/RETRO_JSON:(\{[\s\S]*\})/);
-                if (m) raw = m[1];
+                const retroIdx = text.indexOf?.("RETRO_JSON:");
+                if (retroIdx !== undefined && retroIdx !== -1) {
+                  raw = extractJsonObject(text.slice(retroIdx + "RETRO_JSON:".length));
+                }
               } catch { /* not JSON */ }
             }
             if (raw) {
@@ -459,13 +471,15 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
             for (const line of runningAgent.stdout) {
               let raw: string | null = null;
               if (line.startsWith("RETRO_JSON:")) {
-                raw = line.slice("RETRO_JSON:".length);
+                raw = extractJsonObject(line.slice("RETRO_JSON:".length));
               } else {
                 try {
                   const event = JSON.parse(line);
                   if (event.type === "result" && typeof event.result === "string") {
-                    const match = event.result.match(/RETRO_JSON:(\{[\s\S]*\})/);
-                    if (match) raw = match[1];
+                    const retroIdx = event.result.indexOf("RETRO_JSON:");
+                    if (retroIdx !== -1) {
+                      raw = extractJsonObject(event.result.slice(retroIdx + "RETRO_JSON:".length));
+                    }
                   }
                 } catch { /* not JSON */ }
               }
@@ -568,6 +582,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     }
   }
 
+  opsRunner.stop();
   await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "Shut down" });
   ui.outro("Shutting down — goodbye");
 }

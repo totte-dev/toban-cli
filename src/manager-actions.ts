@@ -161,10 +161,13 @@ export function parseResponse(response: string): { reply: string; actions: Manag
   const tail = remaining.slice(lastEnd).trim();
   if (tail) replyLines.push(tail);
 
-  // Sanitize owner fields in proposals
+  // Sanitize owner fields in proposals — ensure every proposal has a valid owner
   if (proposals) {
     for (const p of proposals) {
-      if (p.owner && !VALID_OWNERS.includes(p.owner)) {
+      if (!p.owner) {
+        // Default to "builder" so CLI auto-starts the task
+        p.owner = "builder";
+      } else if (!VALID_OWNERS.includes(p.owner)) {
         const base = p.owner.split("-")[0];
         p.owner = VALID_OWNERS.includes(base) ? base : "builder";
       }

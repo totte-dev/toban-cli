@@ -158,12 +158,16 @@ export function agentSpawned(opts: {
   repo?: string;
   container?: string;
   docker: boolean;
+  model?: string;
 }): void {
   const mode = opts.docker ? color.dim("(container)") : color.dim("(host)");
   const lines = [
     `${color.cyan("●")} ${color.bold(opts.agentName)} ${mode}`,
     `  task: ${opts.taskTitle}`,
   ];
+  if (opts.model) {
+    lines.push(`  model: ${opts.model}`);
+  }
   if (opts.repo) {
     lines.push(`  repo: ${opts.repo}`);
   }

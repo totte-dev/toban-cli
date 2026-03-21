@@ -9,6 +9,7 @@ import {
   tryMerge,
 } from "./spawner.js";
 import { getEngine, extractTextFromStreamJson } from "./agent-engine.js";
+import { extractJsonObject } from "./utils/extract-json.js";
 import {
   isDockerAvailable,
   isImageAvailable,
@@ -363,7 +364,8 @@ export class AgentRunner {
       // Direct match (non-stream-json or already extracted text)
       if (line.startsWith("RETRO_JSON:")) {
         try {
-          const json = JSON.parse(line.slice("RETRO_JSON:".length));
+          const jsonStr = extractJsonObject(line.slice("RETRO_JSON:".length)) ?? line.slice("RETRO_JSON:".length);
+          const json = JSON.parse(jsonStr);
           return {
             agent_name: config.name,
             went_well: json.went_well || undefined,
@@ -380,15 +382,18 @@ export class AgentRunner {
         const event = JSON.parse(line);
         const text = extractTextFromStreamJson(event);
         if (text) {
-          const retroMatch = text.match(/RETRO_JSON:(\{[\s\S]*\})/);
-          if (retroMatch) {
-            const json = JSON.parse(retroMatch[1]);
-            return {
-              agent_name: config.name,
-              went_well: json.went_well || undefined,
-              to_improve: json.to_improve || undefined,
-              suggested_tasks: json.suggested_tasks || undefined,
-            };
+          const retroIdx = text.indexOf("RETRO_JSON:");
+          if (retroIdx !== -1) {
+            const jsonStr = extractJsonObject(text.slice(retroIdx + "RETRO_JSON:".length));
+            if (jsonStr) {
+              const json = JSON.parse(jsonStr);
+              return {
+                agent_name: config.name,
+                went_well: json.went_well || undefined,
+                to_improve: json.to_improve || undefined,
+                suggested_tasks: json.suggested_tasks || undefined,
+              };
+            }
           }
         }
       } catch {

@@ -339,6 +339,8 @@ export interface ActionContext {
     sprintNumber?: number;
     language?: string;
     engine?: string;
+    /** Agent's DB engine setting (e.g. "claude-opus") for model resolution */
+    agentEngine?: string;
   };
   /** Agent exit code (only available in post_actions) */
   exitCode?: number | null;
