@@ -539,38 +539,49 @@ export async function executeActions(
         }
         case "verify_build": {
           const repoDir = resolveRepoRoot(ctx.config.workingDir);
-          const buildCmd = ctx.config.buildCommand || "npm run build";
-          const testCmd = ctx.config.testCommand || "npm test";
-          const timeout = 180_000; // 3 minutes per command
-          ui.info(`[${phase}] ${label}: running build (${buildCmd})...`);
+          const vbBuildCmd = ctx.config.buildCommand || "npm run build";
+          const vbTestCmd = ctx.config.testCommand || "npm test";
+          const vbTimeout = 180_000; // 3 minutes per command
+
+          // Helper to extract useful error output from execSync failures
+          const getExecError = (err: unknown): string => {
+            const e = err as { stderr?: Buffer; stdout?: Buffer; message?: string };
+            const stderr = e.stderr?.toString().trim();
+            const stdout = e.stdout?.toString().trim();
+            return stderr || stdout || e.message || String(err);
+          };
+
+          ui.info(`[${phase}] ${label}: running build (${vbBuildCmd})...`);
           try {
-            execSync(buildCmd, { cwd: repoDir, stdio: "pipe", timeout });
+            execSync(vbBuildCmd, { cwd: repoDir, stdio: "pipe", timeout: vbTimeout });
             ui.info(`[${phase}] ${label}: build passed`);
           } catch (buildErr) {
-            const msg = buildErr instanceof Error ? buildErr.message : String(buildErr);
-            ui.error(`[${phase}] ${label}: BUILD FAILED — ${msg.slice(0, 300)}`);
+            const detail = getExecError(buildErr);
+            ui.error(`[${phase}] ${label}: BUILD FAILED — ${detail.slice(0, 300)}`);
             ctx.exitCode = 1;
+            ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Build failed: ${detail.slice(0, 200)}` });
             ctx.api.recordFailure({
               task_id: ctx.task.id,
               failure_type: "verify_build",
-              summary: `Build failed: ${buildCmd}\n${msg.slice(0, 500)}`,
+              summary: `Build failed: ${vbBuildCmd}\n${detail.slice(0, 500)}`,
               agent_name: ctx.agentName,
               sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
             }).catch(() => { /* best-effort */ });
             break;
           }
-          ui.info(`[${phase}] ${label}: running tests (${testCmd})...`);
+          ui.info(`[${phase}] ${label}: running tests (${vbTestCmd})...`);
           try {
-            execSync(testCmd, { cwd: repoDir, stdio: "pipe", timeout });
+            execSync(vbTestCmd, { cwd: repoDir, stdio: "pipe", timeout: vbTimeout });
             ui.info(`[${phase}] ${label}: tests passed`);
           } catch (testErr) {
-            const msg = testErr instanceof Error ? testErr.message : String(testErr);
-            ui.error(`[${phase}] ${label}: TESTS FAILED — ${msg.slice(0, 300)}`);
+            const detail = getExecError(testErr);
+            ui.error(`[${phase}] ${label}: TESTS FAILED — ${detail.slice(0, 300)}`);
             ctx.exitCode = 1;
+            ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Tests failed: ${detail.slice(0, 200)}` });
             ctx.api.recordFailure({
               task_id: ctx.task.id,
               failure_type: "verify_build",
-              summary: `Tests failed: ${testCmd}\n${msg.slice(0, 500)}`,
+              summary: `Tests failed: ${vbTestCmd}\n${detail.slice(0, 500)}`,
               agent_name: ctx.agentName,
               sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
             }).catch(() => { /* best-effort */ });
@@ -582,7 +593,10 @@ export async function executeActions(
         default:
           ui.warn(`[template] Unknown action type: ${action.type}`);
       }
-      ctx.taskLog?.event("action_ok", { action: action.type, label });
+      // Don't log action_ok if the action set exitCode (e.g. verify_build failure)
+      if (ctx.exitCode === 0 || ctx.exitCode === undefined) {
+        ctx.taskLog?.event("action_ok", { action: action.type, label });
+      }
     } catch (err) {
       logError(CLI_ERR.ACTION_FAILED, `${phase} action "${label}" failed`, { taskId: ctx.task.id, action: action.type, phase }, err);
       ui.warn(`[template] ${phase} action "${label}" failed: ${err}`);
