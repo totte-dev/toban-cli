@@ -151,9 +151,12 @@ export async function handleReview(
     child.on("close", () => {
       clearTimeout(timeout);
       // For structured output engines, extract text content
-      const text = agentEngine.supportsStructuredOutput
-        ? extractTextFromStreamJson(output)
-        : output;
+      let text = output;
+      if (agentEngine.supportsStructuredOutput) {
+        try {
+          text = extractTextFromStreamJson(output) || output;
+        } catch { /* fallback to raw output */ }
+      }
       resolve(text);
     });
     child.on("error", () => {
@@ -165,9 +168,11 @@ export async function handleReview(
   s.stop("Review complete");
 
   // Parse COMPLETION_JSON
-  const match = result.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m)
-    || result.match(/```json\s*(\{[\s\S]*?"verdict"[\s\S]*?\})\s*```/m)
-    || result.match(/(\{[\s\S]*?"verdict"\s*:\s*"(?:APPROVE|NEEDS_CHANGES)"[\s\S]*?\})\s*$/m);
+  const match = result
+    ? (result.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m)
+      || result.match(/```json\s*(\{[\s\S]*?"verdict"[\s\S]*?\})\s*```/m)
+      || result.match(/(\{[\s\S]*?"verdict"\s*:\s*"(?:APPROVE|NEEDS_CHANGES)"[\s\S]*?\})\s*$/m))
+    : null;
 
   if (match) {
     try {
