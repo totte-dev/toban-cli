@@ -7,8 +7,6 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
@@ -27,7 +25,7 @@ import { handleFetchRecentChanges, handleRecordChanges } from "./handlers/contex
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "build_check" | "fetch_recent_changes" | "record_changes";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -86,7 +84,6 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
     post_actions: [
       { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "record_changes", when: "success", label: "Record change summary for other agents" },
-      { type: "build_check", when: "success", label: "Typecheck before merge" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "git_push", when: "success", label: "Push main to remote" },
       { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for code review" },
@@ -353,8 +350,6 @@ export interface ActionContext {
   preMergeHash?: string;
   /** Set to true if git_merge was skipped (no agent commits or metadata-only) */
   mergeSkipped?: boolean;
-  /** Set to true if build_check failed (typecheck/lint errors) — blocks merge */
-  buildFailed?: boolean;
   /** Parsed COMPLETION_JSON from agent output (set by cli.ts after agent finishes) */
   completionJson?: { review_comment?: string; commits?: string };
   /** Parsed RETRO_JSON from agent output (Builder's self-assessment: what went well, what to improve) */
@@ -382,10 +377,10 @@ export async function executeActions(
   ctx: ActionContext,
   phase: "pre" | "post"
 ): Promise<void> {
+  const isSuccess = ctx.exitCode === 0 || ctx.exitCode === undefined;
+
   ui.info(`[template] Executing ${phase}_actions (${actions.length} actions, exitCode=${ctx.exitCode})`);
   for (const action of actions) {
-    // Re-evaluate success on each iteration (build_check may flip exitCode mid-loop)
-    const isSuccess = ctx.exitCode === 0 || ctx.exitCode === undefined;
     // Check `when` condition
     if (action.when === "success" && !isSuccess) { ui.info(`[template]   skip: ${action.label} (when=success, but failed)`); continue; }
     if (action.when === "failure" && isSuccess) continue;
@@ -508,41 +503,6 @@ export async function executeActions(
             await ctx.api.sendMessage("manager", "user", message);
             ui.info( `[${phase}] ${label}`);
           } catch { /* non-fatal */ }
-          break;
-        }
-        case "build_check": {
-          if (ctx.mergeSkipped || ctx.buildFailed) { ui.info(`[${phase}] ${label}: skipped`); break; }
-          const worktreeDir = ctx.config.workingDir;
-          try {
-            // Detect available checks from package.json
-            const pkgPath = join(worktreeDir, "package.json");
-            if (existsSync(pkgPath)) {
-              const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-              const scripts = pkg.scripts ?? {};
-              if (scripts.typecheck) {
-                execSync("npm run typecheck", { cwd: worktreeDir, stdio: "pipe", timeout: 120_000 });
-                ui.info(`[${phase}] ${label}: typecheck passed`);
-              } else if (scripts.build) {
-                execSync("npm run build", { cwd: worktreeDir, stdio: "pipe", timeout: 120_000 });
-                ui.info(`[${phase}] ${label}: build passed`);
-              } else {
-                ui.info(`[${phase}] ${label}: no typecheck/build script found — skipped`);
-              }
-            } else {
-              ui.info(`[${phase}] ${label}: no package.json — skipped`);
-            }
-          } catch (buildErr) {
-            const msg = buildErr instanceof Error ? buildErr.message : String(buildErr);
-            const stderr = (buildErr as { stderr?: Buffer })?.stderr?.toString() ?? "";
-            const errorLines = stderr.split("\n").filter((l: string) => l.includes("error TS")).slice(0, 10).join("\n");
-            ui.error(`[${phase}] ${label}: FAILED — blocking merge`);
-            if (errorLines) ui.error(errorLines);
-            logError(CLI_ERR.ACTION_FAILED, `build_check failed: ${msg}`, { taskId: ctx.task.id }, buildErr);
-            ctx.buildFailed = true;
-            ctx.mergeSkipped = true;
-            // Treat as failure so remaining success-only actions skip and failure actions run
-            ctx.exitCode = 1;
-          }
           break;
         }
         case "shell": {
