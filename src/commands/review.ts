@@ -29,6 +29,7 @@ export async function handleReview(
 ): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
   const { execSync: revExec } = await import("node:child_process");
+  const cwd = process.cwd();
 
   ui.intro();
   const s = ui.createSpinner();
@@ -42,6 +43,31 @@ export async function handleReview(
     if (!found) { s.stop("Not found"); ui.error(`Task ${taskId} not found`); process.exit(1); }
     task = found;
     s.stop(`Reviewing: ${task.title}`);
+  } else if (diffRange) {
+    // When --diff is provided without --task, try to match task from commit messages
+    s.start("Matching task from commit messages...");
+    try {
+      const commitLog = revExec(`git log --format=%s ${diffRange}`, { cwd, stdio: "pipe" }).toString().trim();
+      const tasks = await api.fetchTasks();
+      // Look for task ID patterns in commit messages (8-char hex prefix or full UUID)
+      const idPattern = /\b([0-9a-f]{8})(?:-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\b/gi;
+      const matches = commitLog.match(idPattern) || [];
+      for (const candidate of matches) {
+        const prefix = candidate.slice(0, 8).toLowerCase();
+        const found = tasks.find((t: Task) => t.id.toLowerCase().startsWith(prefix));
+        if (found) {
+          task = found;
+          break;
+        }
+      }
+      if (task) {
+        s.stop(`Matched task from commits: ${task.title}`);
+      } else {
+        s.stop("No task matched — will do pure code quality review");
+      }
+    } catch {
+      s.stop("Could not parse commits — will do pure code quality review");
+    }
   } else {
     s.start("Finding latest review task...");
     const tasks = await api.fetchTasks();
@@ -55,7 +81,6 @@ export async function handleReview(
   }
 
   // Determine diff range
-  const cwd = process.cwd();
   let diffRef = diffRange || "HEAD~1..HEAD";
   if (!diffRange) {
     try {
@@ -80,15 +105,37 @@ export async function handleReview(
     ui.info(`[review] Tags for skill matching: ${reviewTags.join(", ")}`);
   }
 
-  const reviewSystem = interpolate(PROMPT_TEMPLATES["reviewer-system"] || "", {
-    projectName: cwd.split("/").pop() || "unknown",
-    language: "English",
-    taskTitle: task?.title || "Manual review request",
-    taskType,
-    taskDescription: task?.description || "(manual review — no task description)",
-    taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
-    customReviewRules: customRules ? `\n${customRules}` : "",
-  });
+  let reviewSystem: string;
+  if (task) {
+    // Task matched — use the full reviewer-system template with task context
+    reviewSystem = interpolate(PROMPT_TEMPLATES["reviewer-system"] || "", {
+      projectName: cwd.split("/").pop() || "unknown",
+      language: "English",
+      taskTitle: task.title,
+      taskType,
+      taskDescription: task.description || "(no description)",
+      taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
+      customReviewRules: customRules ? `\n${customRules}` : "",
+    });
+  } else {
+    // No task matched — pure code quality review (no requirement matching)
+    reviewSystem = [
+      `You are a strict code reviewer for project "${cwd.split("/").pop() || "unknown"}".`,
+      `Reply in English. Output JSON only, no markdown.`,
+      ``,
+      `## Review Mode: Pure Code Quality (no task context)`,
+      `No specific task was matched to this diff. Do NOT judge requirement fulfillment.`,
+      `Instead, focus exclusively on:`,
+      `1. CODE QUALITY: Readability, naming, structure, error handling`,
+      `2. SECURITY: Injection risks, credential leaks, unsafe operations`,
+      `3. CORRECTNESS: Logic errors, edge cases, null/undefined handling`,
+      `4. TEST COVERAGE: Are changes tested? Do existing tests still pass?`,
+      `5. STYLE: Consistency with surrounding code, no dead code or debug leftovers`,
+      ``,
+      `For requirement_match in your output, write "N/A — no task context, pure code quality review".`,
+      customRules ? `\n${customRules}` : "",
+    ].join("\n");
+  }
   const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
 
   const prompt = [
