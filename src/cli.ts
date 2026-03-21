@@ -118,7 +118,7 @@ if (cliArgs.command === "plan") {
   const skills = skillIdx !== -1 && rawArgs[skillIdx + 1] ? rawArgs[skillIdx + 1].split(",") : undefined;
   const diffIdx = rawArgs.indexOf("--diff");
   const diffRange = diffIdx !== -1 && rawArgs[diffIdx + 1] ? rawArgs[diffIdx + 1] : undefined;
-  handleReview(cliArgs.apiUrl, cliArgs.apiKey, taskId, skills, diffRange).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  handleReview(cliArgs.apiUrl, cliArgs.apiKey, taskId, skills, diffRange, cliArgs.engine).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
 } else if (cliArgs.command === "sprint") {
   const rawArgs = process.argv.slice(2);
   if (rawArgs[1] === "complete") {

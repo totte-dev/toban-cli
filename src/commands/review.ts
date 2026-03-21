@@ -1,14 +1,32 @@
 /**
- * Review command
+ * Review command — spawn an interactive Reviewer agent.
+ *
+ * Usage:
+ *   toban review                          # review latest done/review task
+ *   toban review --task <id>              # review a specific task
+ *   toban review --diff <range>           # custom diff range (e.g. HEAD~5..HEAD)
+ *   toban review --skill react,security   # match playbook rules by skill tags
+ *
+ * Engine-agnostic: uses AgentConfig.readOnly to restrict tools per engine.
  */
 
 import { createApiClient, createAuthHeaders, type Task } from "../api-client.js";
+import { spawnAgent } from "../spawner.js";
+import { getEngine, extractTextFromStreamJson } from "../agent-engine.js";
+import { resolveModelForRole } from "../agent-engine.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
-import { spawnClaudeOnce } from "../utils/spawn-claude.js";
 import { TIMEOUTS } from "../constants.js";
+import type { AgentType } from "../types.js";
 
-export async function handleReview(apiUrl: string, apiKey: string, taskId?: string, skills?: string[], diffRange?: string): Promise<void> {
+export async function handleReview(
+  apiUrl: string,
+  apiKey: string,
+  taskId?: string,
+  skills?: string[],
+  diffRange?: string,
+  engine: AgentType = "claude",
+): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
   const { execSync: revExec } = await import("node:child_process");
 
@@ -36,7 +54,7 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
     }
   }
 
-  // Get diff
+  // Determine diff range
   const cwd = process.cwd();
   let diffRef = diffRange || "HEAD~1..HEAD";
   if (!diffRange) {
@@ -54,7 +72,7 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
   const taskType = (task?.type as string) || "implementation";
   const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 
-  // Fetch playbook rules including skill rules matching task labels or --skill args
+  // Fetch playbook rules
   const reviewTags = skills || (task ? parseTaskLabels(task) : []);
   let customRules = "";
   try { customRules = await api.fetchPlaybookPrompt("reviewer", reviewTags) || ""; } catch { /* non-fatal */ }
@@ -73,18 +91,84 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
   });
   const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
 
-  const prompt = `${reviewSystem}\n\nRun: git diff ${diffRef}\nRun: npm test 2>&1 | tail -20\n\nThen output verdict.\n\n${outputFormat}`;
+  const prompt = [
+    reviewSystem,
+    "",
+    `## Your task`,
+    `Review the code changes in diff range: ${diffRef}`,
+    `Run: git diff ${diffRef} --stat`,
+    `Then read the changed files and run tests.`,
+    `When done, output your verdict.`,
+    "",
+    outputFormat,
+  ].join("\n");
 
-  s.start("Running Reviewer agent...");
-  const result = await spawnClaudeOnce(prompt, {
-    role: "reviewer", maxTurns: 5, timeout: TIMEOUTS.REVIEWER, cwd,
+  // Spawn Reviewer via AgentConfig (engine-agnostic, readOnly enforced)
+  s.start("Spawning Reviewer agent...");
+  const reviewTaskId = task?.id || crypto.randomUUID();
+  const model = resolveModelForRole("reviewer");
+
+  const { process: child, agent } = spawnAgent({
+    name: "reviewer",
+    type: engine,
+    taskId: reviewTaskId,
+    workingDir: cwd,
+    apiKey,
+    apiUrl,
+    prompt,
+    readOnly: true,
+    model,
+  }, cwd); // cwd directly — no worktree needed
+
+  // Collect output with timeout
+  let output = "";
+  const agentEngine = getEngine(engine);
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString();
+    output += text;
+    // Parse structured output for progress display
+    if (agentEngine.supportsStructuredOutput && agentEngine.parseOutputLine) {
+      for (const line of text.split("\n").filter(Boolean)) {
+        const activities = agentEngine.parseOutputLine(line);
+        for (const a of activities) {
+          if (a.kind === "tool" && a.tool) {
+            ui.info(`  [reviewer] ${a.tool}: ${a.summary?.slice(0, 80) || ""}`);
+          }
+        }
+      }
+    }
   });
+  child.stderr?.on("data", () => {}); // consume
+
+  // Wait for completion or timeout
+  const result = await new Promise<string>((resolve) => {
+    const timeout = setTimeout(() => {
+      try { child.kill(); } catch {}
+      resolve(output || "Error: Review timed out");
+    }, TIMEOUTS.REVIEWER);
+
+    child.on("close", () => {
+      clearTimeout(timeout);
+      // For structured output engines, extract text content
+      const text = agentEngine.supportsStructuredOutput
+        ? extractTextFromStreamJson(output)
+        : output;
+      resolve(text);
+    });
+    child.on("error", () => {
+      clearTimeout(timeout);
+      resolve(output || "Error: Failed to spawn reviewer");
+    });
+  });
+
   s.stop("Review complete");
 
-  // Parse and display
+  // Parse COMPLETION_JSON
   const match = result.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m)
     || result.match(/```json\s*(\{[\s\S]*?"verdict"[\s\S]*?\})\s*```/m)
     || result.match(/(\{[\s\S]*?"verdict"\s*:\s*"(?:APPROVE|NEEDS_CHANGES)"[\s\S]*?\})\s*$/m);
+
   if (match) {
     try {
       const report = JSON.parse(match[1]);
@@ -120,10 +204,10 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
       } catch { /* non-fatal */ }
     } catch {
       console.log("\n--- Raw Review Output ---");
-      console.log(result.slice(-1000));
+      console.log(result.slice(-2000));
     }
   } else {
-    console.log("\n--- Raw Output (no structured review) ---");
-    console.log(result.slice(-1000));
+    console.log("\n--- Raw Output (no structured review found) ---");
+    console.log(result.slice(-2000));
   }
 }
