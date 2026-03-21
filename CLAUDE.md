@@ -80,6 +80,32 @@ toban sprint complete [--push]
 - Edit prompts/templates.ts for Manager behavior changes
 - Edit agent-templates.ts for worker agent behavior changes
 
+## Reuse Checklist: Adding New Agents / Task Types
+
+Before creating new code for a new agent role or task type, check these existing systems:
+
+### New Agent Role
+1. **agent-roles.ts** (API): Add to `AGENT_ROLES` + `ROLES` with capabilities, allowedTaskTypes, forbiddenKeywords
+2. **run-loop.ts** (CLI): Add to `agentRoles` array for auto-assignment
+3. **agent-templates.ts** (CLI): Check if existing template matches (implementation/research/content/strategy/reviewer) or create new one
+4. **prompts/templates.ts** (CLI): Reuse Manager prompt patterns — spawn_agent, send_message
+5. **agent-engine.ts** (CLI): Reuse existing engine (claude/codex/gemini), no new code needed
+6. **spawnClaudeOnce** (CLI): For single-shot LLM calls, reuse `utils/spawn-claude.ts`
+7. **COMPLETION_JSON**: All agent output must use `COMPLETION_JSON:{...}` pattern (parsed by `utils/completion-parser.ts`)
+
+### New Ops Task Type
+1. **ops-runner.ts**: Add `config.type === "new_type"` branch in `executeTask()`
+2. **Existing patterns**: healthcheck (URL), shell command, qa_scan (build/test/log), rule_evaluate (LLM)
+3. **Results**: Use `this.reportResult()` for structured result reporting
+4. **Bug creation**: Reuse `this.createBugTasks()` for auto-filing issues
+5. **Rule evaluation**: Use `fireRuleEvaluate()` to feed results into Defense Report
+
+### New Action Type
+1. **agent-templates.ts**: Add to `TemplateAction.type` union + `executeActions` switch
+2. **Existing handlers**: Check `handlers/` directory — git-merge, git-push, spawn-reviewer, review-changes, memory, context-sharing
+3. **Error handling**: Use `getExecError()` from `utils/exec-error.ts` for execSync errors
+4. **Structured output**: Use `COMPLETION_JSON` pattern with `utils/completion-parser.ts`
+
 ## Ops Tasks Setup
 
 The OpsRunner executes background tasks on a schedule. To seed ops tasks via API:
