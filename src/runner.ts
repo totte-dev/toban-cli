@@ -52,6 +52,8 @@ export interface AgentRunnerOptions {
   onStdout?: StdoutCallback;
   /** Callback for structured tool_use activity events */
   onActivity?: ActivityCallback;
+  /** Stall kill timeout in ms (overrides TIMEOUTS.AGENT_STALL_KILL) */
+  stallTimeoutMs?: number;
 }
 
 export class AgentRunner {
@@ -62,12 +64,19 @@ export class AgentRunner {
   private onStdout?: StdoutCallback;
   private onActivity?: ActivityCallback;
   private stallCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private stallKillMs: number;
 
   constructor(options?: AgentRunnerOptions) {
     this.useDocker = options?.useDocker ?? true; // default: try Docker
     this.dockerfilePath = options?.dockerfilePath;
     this.onStdout = options?.onStdout;
     this.onActivity = options?.onActivity;
+    this.stallKillMs = options?.stallTimeoutMs ?? TIMEOUTS.AGENT_STALL_KILL;
+  }
+
+  /** Reconfigure the stall kill timeout (ms). */
+  setStallTimeout(ms: number): void {
+    this.stallKillMs = ms;
   }
 
   /**
@@ -100,7 +109,7 @@ export class AgentRunner {
 
       const idleDuration = now - managed.lastActivityAt;
 
-      if (idleDuration >= TIMEOUTS.AGENT_STALL_KILL) {
+      if (idleDuration >= this.stallKillMs) {
         ui.warn(`[stall] Agent "${name}" has no output for ${Math.round(idleDuration / 1000)}s — killing`);
         managed.agent.status = "failed";
         managed.agent.stoppedAt = new Date();

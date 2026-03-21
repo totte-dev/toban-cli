@@ -63,6 +63,11 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     scheduler.reconfigure("cloud-engineer", limits.max_cloud_engineers);
     workspaceBuildCommand = limits.build_command;
     workspaceTestCommand = limits.test_command;
+    // Configure stall timeout from workspace settings
+    if (limits.stall_timeout_minutes) {
+      runner.setStallTimeout(limits.stall_timeout_minutes * 60_000);
+      ui.info(`[plan] Stall timeout: ${limits.stall_timeout_minutes}min`);
+    }
     ui.info(`[plan] Builder concurrency: ${limits.max_builders}, Cloud-engineer: ${limits.max_cloud_engineers}`);
     if (workspaceBuildCommand || workspaceTestCommand) {
       ui.info(`[plan] Build: ${workspaceBuildCommand || "(auto)"}, Test: ${workspaceTestCommand || "(auto)"}`);
@@ -413,7 +418,19 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
           const exitCode = runningAgent.exitCode;
           const succeeded = runningAgent.status === "completed";
+          const wasStalled = runningAgent.status === "failed" && runningAgent.stderr.some((l) => l.includes("stall detected"));
           try { ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`); } catch { /* non-fatal */ }
+
+          // Record stall kills to Failure DB for visibility
+          if (wasStalled) {
+            api.recordFailure({
+              task_id: task.id,
+              failure_type: "stall",
+              summary: `Agent stalled: no output for ${TIMEOUTS.AGENT_STALL_KILL / 1000}s — killed`,
+              agent_name: agentName,
+              sprint: typeof task.sprint === "number" ? task.sprint : undefined,
+            }).catch(() => { /* best-effort */ });
+          }
 
           // All post-completion logic (merge, push, retro, notify, status) is in template
           actionCtx.exitCode = exitCode;
