@@ -72,26 +72,15 @@ export function extractPaths(text: string): string[] {
 }
 
 /**
- * Get the directory component of a path for conflict detection.
- * "src/commands/run-loop.ts" -> "src/commands"
- */
-function dirOf(path: string): string {
-  const idx = path.lastIndexOf("/");
-  return idx >= 0 ? path.slice(0, idx) : "";
-}
-
-/**
- * Check if two sets of paths overlap (same file or same directory).
+ * Check if two sets of paths overlap (exact same file only).
+ * Directory-level overlap is intentionally not checked — it is too coarse
+ * and creates false dependencies that kill parallelism.
  */
 export function pathsOverlap(pathsA: string[], pathsB: string[]): string | null {
   for (const a of pathsA) {
     for (const b of pathsB) {
-      // Exact same file
+      // Exact same file only — directory overlap is too coarse and kills parallelism
       if (a === b) return `same file: ${a}`;
-      // Same directory (only if both have directory components)
-      const dirA = dirOf(a);
-      const dirB = dirOf(b);
-      if (dirA && dirB && dirA === dirB) return `same directory: ${dirA}`;
     }
   }
   return null;

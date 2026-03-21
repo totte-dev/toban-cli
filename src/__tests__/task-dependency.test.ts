@@ -63,9 +63,9 @@ describe("pathsOverlap", () => {
     expect(result).toContain("same file");
   });
 
-  it("detects same directory overlap", () => {
+  it("does not treat same directory as overlap (only exact file match)", () => {
     const result = pathsOverlap(["src/commands/run-loop.ts"], ["src/commands/setup.ts"]);
-    expect(result).toContain("same directory");
+    expect(result).toBeNull();
   });
 
   it("returns null for no overlap", () => {
