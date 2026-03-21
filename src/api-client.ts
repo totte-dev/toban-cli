@@ -115,6 +115,13 @@ export interface ApiClient {
   putAgentMemory(agentName: string, key: string, data: { type: string; content: string; shared?: boolean; tags?: string }): Promise<void>;
   fetchRelevantFailures(): Promise<Array<{ summary: string; failure_type: string; agent_name: string | null; created_at: string }>>;
   recordFailure(data: { task_id: string; failure_type: string; summary: string; agent_name?: string; sprint?: number; review_comment?: string; files_involved?: string }): Promise<void>;
+  /** Fetch plan limits (max concurrent builders, etc.) */
+  fetchPlanLimits(): Promise<PlanLimits>;
+}
+
+export interface PlanLimits {
+  max_builders: number;
+  max_cloud_engineers: number;
 }
 
 /** Create standard auth headers for API requests. */
@@ -367,6 +374,17 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
           body: JSON.stringify(data),
         });
       } catch { /* best-effort */ }
+    },
+
+    async fetchPlanLimits(): Promise<PlanLimits> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/workspace/plan-limits`, { headers });
+        if (res.ok) {
+          return (await res.json()) as PlanLimits;
+        }
+      } catch { /* non-fatal */ }
+      // Default: free tier limits
+      return { max_builders: 1, max_cloud_engineers: 1 };
     },
   };
 }

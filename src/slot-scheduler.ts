@@ -88,4 +88,47 @@ export class SlotScheduler {
   getSlot(name: string): Slot | undefined {
     return this.slots.get(name);
   }
+
+  /** Get max concurrency for a role. */
+  getMaxConcurrency(role: string): number {
+    return this.configs.get(role) ?? 0;
+  }
+
+  /**
+   * Reconfigure concurrency for a role. Adds or removes idle slots as needed.
+   * Running slots are never removed — excess slots are removed only when idle.
+   */
+  reconfigure(role: string, maxConcurrency: number): void {
+    const currentMax = this.configs.get(role) ?? 0;
+    if (currentMax === maxConcurrency) return;
+    this.configs.set(role, maxConcurrency);
+
+    if (maxConcurrency > currentMax) {
+      // Add new slots
+      for (let i = currentMax + 1; i <= maxConcurrency; i++) {
+        const name = maxConcurrency === 1 && currentMax === 0 ? role : `${role}-${i}`;
+        // Rename single slot to role-1 if adding a second
+        if (i === 2 && this.slots.has(role)) {
+          const existing = this.slots.get(role)!;
+          this.slots.delete(role);
+          existing.name = `${role}-1`;
+          this.slots.set(`${role}-1`, existing);
+        }
+        this.slots.set(name, { name, role, taskId: null, status: "idle" });
+      }
+    } else {
+      // Remove excess idle slots (from highest index down)
+      const roleSlots = Array.from(this.slots.values())
+        .filter((s) => s.role === role)
+        .sort((a, b) => b.name.localeCompare(a.name));
+      let toRemove = roleSlots.length - maxConcurrency;
+      for (const slot of roleSlots) {
+        if (toRemove <= 0) break;
+        if (slot.status === "idle") {
+          this.slots.delete(slot.name);
+          toRemove--;
+        }
+      }
+    }
+  }
 }

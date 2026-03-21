@@ -8,6 +8,10 @@ export const TIMEOUTS = {
   CLAUDE_CLI: 180_000,    // 3 min
   GIT_OPERATION: 30_000,  // 30 sec
   SPLIT_TASK: 30_000,     // 30 sec
+  /** Warn if agent produces no stdout for this long */
+  AGENT_STALL_WARN: 180_000,  // 3 min
+  /** Kill agent if no stdout for this long */
+  AGENT_STALL_KILL: 300_000,  // 5 min
 } as const;
 
 export const INTERVALS = {

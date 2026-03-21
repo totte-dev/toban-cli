@@ -27,6 +27,7 @@ export function setupShutdownHandlers(runner: AgentRunner, state: ShutdownState)
     ui.warn("Shutting down...");
     state.activeWsServer?.stop().catch(() => {});
     state.activeManager?.stop();
+    runner.stopStallDetection();
     for (const agent of runner.status()) { ui.info(`Stopping agent: ${agent.name}`); runner.stop(agent.name); }
     setTimeout(() => { ui.shutdown(); process.exit(0); }, 3000);
   };

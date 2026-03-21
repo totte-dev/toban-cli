@@ -95,12 +95,23 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
   const POLL_INTERVAL_MS = INTERVALS.POLL;
 
-  // Parallel agent slots
+  // Parallel agent slots — start with defaults, then reconfigure from plan limits
   const { SlotScheduler } = await import("../slot-scheduler.js");
   const scheduler = new SlotScheduler([
     { role: "builder", maxConcurrency: 2 },
     { role: "cloud-engineer", maxConcurrency: 1 },
   ]);
+
+  // Fetch plan limits and reconfigure scheduler
+  try {
+    const limits = await api.fetchPlanLimits();
+    scheduler.reconfigure("builder", limits.max_builders);
+    scheduler.reconfigure("cloud-engineer", limits.max_cloud_engineers);
+    ui.info(`[plan] Builder concurrency: ${limits.max_builders}, Cloud-engineer: ${limits.max_cloud_engineers}`);
+  } catch { /* non-fatal — use defaults */ }
+
+  // Start stall detection for agent processes
+  runner.startStallDetection();
 
   while (!shutdownState.shuttingDown) {
     try {

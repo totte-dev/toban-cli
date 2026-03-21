@@ -2,10 +2,33 @@
  * Sprint complete command
  */
 
-import { createApiClient } from "../api-client.js";
+import { createApiClient, createAuthHeaders } from "../api-client.js";
 import { logError, CLI_ERR } from "../error-logger.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
+
+interface WorktreeEntry {
+  path: string;
+  branch: string | null;
+}
+
+/**
+ * Parse `git worktree list --porcelain` output into structured entries.
+ */
+export function parseWorktreeList(output: string): WorktreeEntry[] {
+  const entries: WorktreeEntry[] = [];
+  let current: Partial<WorktreeEntry> = {};
+  for (const line of output.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (current.path) entries.push({ path: current.path, branch: current.branch ?? null });
+      current = { path: line.slice("worktree ".length) };
+    } else if (line.startsWith("branch ")) {
+      current.branch = line.slice("branch ".length);
+    }
+  }
+  if (current.path) entries.push({ path: current.path, branch: current.branch ?? null });
+  return entries;
+}
 
 export async function handleSprintComplete(apiUrl: string, apiKey: string, push: boolean): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
@@ -47,7 +70,47 @@ export async function handleSprintComplete(apiUrl: string, apiKey: string, push:
       process.exit(1);
     }
   }
-  // Proposals are now triggered at retrospective phase, not on complete
+  // Clean up orphaned worktrees
+  try {
+    const worktreeOutput = execSync("git worktree list --porcelain", { stdio: "pipe" }).toString();
+    const worktrees = parseWorktreeList(worktreeOutput);
+    let cleaned = 0;
+    for (const wt of worktrees) {
+      if (wt.branch?.startsWith("refs/heads/agent/")) {
+        try {
+          execSync(`git worktree remove "${wt.path}" --force`, { stdio: "pipe" });
+          cleaned++;
+        } catch { /* non-fatal — worktree may be in use */ }
+        try {
+          const branchName = wt.branch.replace("refs/heads/", "");
+          execSync(`git branch -D "${branchName}"`, { stdio: "pipe" });
+        } catch { /* non-fatal */ }
+      }
+    }
+    execSync("git worktree prune", { stdio: "pipe" });
+    if (cleaned > 0) ui.step(`Cleaned up ${cleaned} orphaned worktree(s)`);
+  } catch (err) {
+    ui.warn(`Failed to clean up worktrees: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // Rule scoring: apply decay and report stale/remove rules
+  try {
+    const decayRes = await fetch(`${apiUrl}/api/v1/rule-evaluations/decay`, {
+      method: "POST",
+      headers: createAuthHeaders(apiKey),
+      body: JSON.stringify({ sprint_number: sprint.number }),
+    });
+    if (decayRes.ok) {
+      const decay = await decayRes.json() as { rules_decayed: number; decayed: Array<{ rule_id: string; score: number; status: string }> };
+      if (decay.rules_decayed > 0) {
+        ui.info(`[rule-eval] Decayed ${decay.rules_decayed} rule(s)`);
+        const stale = decay.decayed.filter((r) => r.status === "stale");
+        const remove = decay.decayed.filter((r) => r.status === "remove");
+        if (stale.length > 0) ui.warn(`[rule-eval] ${stale.length} rule(s) stale — consider reviewing`);
+        if (remove.length > 0) ui.warn(`[rule-eval] ${remove.length} rule(s) below threshold — candidates for removal`);
+      }
+    }
+  } catch { /* non-fatal */ }
 
   ui.outro(`Sprint #${sprint.number} complete`);
 }

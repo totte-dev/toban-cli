@@ -18,6 +18,7 @@ import {
 } from "./docker.js";
 import type { RetroCommentInput } from "./api-client.js";
 import * as ui from "./ui.js";
+import { TIMEOUTS } from "./constants.js";
 
 export type { AgentConfig, AgentStatusReport, RunningAgent } from "./types.js";
 
@@ -25,6 +26,10 @@ interface ManagedAgent {
   agent: RunningAgent;
   process: ChildProcess;
   docker?: boolean;
+  /** Timestamp of last stdout activity (ms since epoch) */
+  lastActivityAt: number;
+  /** Whether a stall warning has already been emitted */
+  stallWarned: boolean;
 }
 
 /** Callback for agent stdout/stderr streaming */
@@ -55,12 +60,60 @@ export class AgentRunner {
   private dockerChecked = false;
   private onStdout?: StdoutCallback;
   private onActivity?: ActivityCallback;
+  private stallCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(options?: AgentRunnerOptions) {
     this.useDocker = options?.useDocker ?? true; // default: try Docker
     this.dockerfilePath = options?.dockerfilePath;
     this.onStdout = options?.onStdout;
     this.onActivity = options?.onActivity;
+  }
+
+  /**
+   * Start the periodic stall check timer.
+   * Checks every 30s for agents with no stdout activity.
+   */
+  startStallDetection(): void {
+    if (this.stallCheckInterval) return;
+    this.stallCheckInterval = setInterval(() => this.checkStalls(), 30_000);
+  }
+
+  /**
+   * Stop the stall detection timer.
+   */
+  stopStallDetection(): void {
+    if (this.stallCheckInterval) {
+      clearInterval(this.stallCheckInterval);
+      this.stallCheckInterval = null;
+    }
+  }
+
+  /**
+   * Check all running agents for stall conditions.
+   * Warn at AGENT_STALL_WARN, kill at AGENT_STALL_KILL.
+   */
+  private checkStalls(): void {
+    const now = Date.now();
+    for (const [name, managed] of this.agents) {
+      if (managed.agent.status !== "running") continue;
+
+      const idleDuration = now - managed.lastActivityAt;
+
+      if (idleDuration >= TIMEOUTS.AGENT_STALL_KILL) {
+        ui.warn(`[stall] Agent "${name}" has no output for ${Math.round(idleDuration / 1000)}s — killing`);
+        managed.agent.status = "failed";
+        managed.agent.stoppedAt = new Date();
+        managed.agent.stderr.push("Killed: agent stall detected (no stdout output)");
+        if (managed.process.pid) {
+          try { process.kill(-managed.process.pid, "SIGTERM"); } catch { managed.process.kill("SIGTERM"); }
+        } else {
+          managed.process.kill("SIGTERM");
+        }
+      } else if (idleDuration >= TIMEOUTS.AGENT_STALL_WARN && !managed.stallWarned) {
+        ui.warn(`[stall] Agent "${name}" has no output for ${Math.round(idleDuration / 1000)}s — may be stuck`);
+        managed.stallWarned = true;
+      }
+    }
   }
 
   /**
@@ -134,7 +187,7 @@ export class AgentRunner {
       ? spawnAgentInDocker(config, worktreePath)
       : spawnAgent(config, worktreePath);
 
-    const managed: ManagedAgent = { agent, process: child, docker: useDocker };
+    const managed: ManagedAgent = { agent, process: child, docker: useDocker, lastActivityAt: Date.now(), stallWarned: false };
     this.agents.set(config.name, managed);
 
     // Stream stdout/stderr to WebSocket clients
@@ -148,6 +201,9 @@ export class AgentRunner {
       let stdoutBuffer = "";
 
       child.stdout?.on("data", (data: Buffer) => {
+        // Update stall detection timestamp on any stdout activity
+        managed.lastActivityAt = Date.now();
+        managed.stallWarned = false;
         if (engine.supportsStructuredOutput && engine.parseOutputLine && activityCb) {
           // Structured output: parse JSONL lines into activity events
           stdoutBuffer += data.toString();
@@ -170,6 +226,12 @@ export class AgentRunner {
       child.stderr?.on("data", (data: Buffer) => {
         const lines = data.toString().split("\n").filter(Boolean);
         if (lines.length > 0 && stdoutCb) stdoutCb(agentName, lines, "stderr");
+      });
+    } else {
+      // No stdout/activity callbacks, but still track activity for stall detection
+      child.stdout?.on("data", () => {
+        managed.lastActivityAt = Date.now();
+        managed.stallWarned = false;
       });
     }
 
