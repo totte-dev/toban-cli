@@ -17,6 +17,7 @@ import { handleSpawnReviewer } from "./handlers/spawn-reviewer.js";
 import { handleReviewChanges } from "./handlers/review-changes.js";
 import { handleInjectMemory, handleCollectMemory } from "./handlers/memory.js";
 import { handleFetchRecentChanges, handleRecordChanges } from "./handlers/context-sharing.js";
+import { resolveRepoRoot } from "./git-ops.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,7 +26,7 @@ import { handleFetchRecentChanges, handleRecordChanges } from "./handlers/contex
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -86,6 +87,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "record_changes", when: "success", label: "Record change summary for other agents" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "git_push", when: "success", label: "Push main to remote" },
+      { type: "verify_build", when: "success", label: "Verify build and tests pass" },
       { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for code review" },
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
@@ -383,10 +385,10 @@ export async function executeActions(
   ctx: ActionContext,
   phase: "pre" | "post"
 ): Promise<void> {
-  const isSuccess = ctx.exitCode === 0 || ctx.exitCode === undefined;
-
   ui.info(`[template] Executing ${phase}_actions (${actions.length} actions, exitCode=${ctx.exitCode})`);
   for (const action of actions) {
+    // Re-evaluate on each iteration (actions like verify_build may change exitCode mid-loop)
+    const isSuccess = ctx.exitCode === 0 || ctx.exitCode === undefined;
     // Check `when` condition
     if (action.when === "success" && !isSuccess) { ui.info(`[template]   skip: ${action.label} (when=success, but failed)`); continue; }
     if (action.when === "failure" && isSuccess) continue;
@@ -533,6 +535,48 @@ export async function executeActions(
         }
         case "record_changes": {
           await handleRecordChanges(action, ctx, phase);
+          break;
+        }
+        case "verify_build": {
+          const repoDir = resolveRepoRoot(ctx.config.workingDir);
+          const buildCmd = ctx.config.buildCommand || "npm run build";
+          const testCmd = ctx.config.testCommand || "npm test";
+          const timeout = 180_000; // 3 minutes per command
+          ui.info(`[${phase}] ${label}: running build (${buildCmd})...`);
+          try {
+            execSync(buildCmd, { cwd: repoDir, stdio: "pipe", timeout });
+            ui.info(`[${phase}] ${label}: build passed`);
+          } catch (buildErr) {
+            const msg = buildErr instanceof Error ? buildErr.message : String(buildErr);
+            ui.error(`[${phase}] ${label}: BUILD FAILED — ${msg.slice(0, 300)}`);
+            ctx.exitCode = 1;
+            ctx.api.recordFailure({
+              task_id: ctx.task.id,
+              failure_type: "verify_build",
+              summary: `Build failed: ${buildCmd}\n${msg.slice(0, 500)}`,
+              agent_name: ctx.agentName,
+              sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+            }).catch(() => { /* best-effort */ });
+            break;
+          }
+          ui.info(`[${phase}] ${label}: running tests (${testCmd})...`);
+          try {
+            execSync(testCmd, { cwd: repoDir, stdio: "pipe", timeout });
+            ui.info(`[${phase}] ${label}: tests passed`);
+          } catch (testErr) {
+            const msg = testErr instanceof Error ? testErr.message : String(testErr);
+            ui.error(`[${phase}] ${label}: TESTS FAILED — ${msg.slice(0, 300)}`);
+            ctx.exitCode = 1;
+            ctx.api.recordFailure({
+              task_id: ctx.task.id,
+              failure_type: "verify_build",
+              summary: `Tests failed: ${testCmd}\n${msg.slice(0, 500)}`,
+              agent_name: ctx.agentName,
+              sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+            }).catch(() => { /* best-effort */ });
+            break;
+          }
+          ui.info(`[${phase}] ${label}: all checks passed`);
           break;
         }
         default:
