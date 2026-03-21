@@ -177,7 +177,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
     // Pick up in_progress tasks + auto-start todo tasks owned by agents
     const allTasks = sprintData.tasks as Task[];
-    const agentRoles = ["builder", "cloud-engineer", "strategist", "marketer", "operator"];
+    const agentRoles = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "qa"];
     const todoForAgents = allTasks.filter((t) => t.status === "todo" && t.owner && agentRoles.includes(t.owner));
 
     // Auto-split large tasks before transitioning to in_progress
