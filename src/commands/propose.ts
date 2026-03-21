@@ -57,20 +57,28 @@ Output ONLY valid JSON (no markdown):
       ui.info(`    ${p.reasoning}`);
     }
 
-    // Save to API
-    try {
-      const saveRes = await fetch(`${apiUrl}/api/v1/proposals/batch`, {
-        method: "POST", headers,
-        body: JSON.stringify(proposalList),
-      });
-      if (saveRes.ok) {
-        const saved = (await saveRes.json()) as { created: number };
-        ui.info(`[strategist] ${saved.created} proposals saved. Approve in dashboard > Backlog > Proposals.`);
-      } else {
-        ui.warn(`[strategist] Failed to save proposals: ${saveRes.status} ${saveRes.statusText}`);
+    // Save to API (with retry — wrangler dev may briefly drop connections)
+    let saved = false;
+    for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+      try {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 2000 * attempt));
+        const saveRes = await fetch(`${apiUrl}/api/v1/proposals/batch`, {
+          method: "POST", headers,
+          body: JSON.stringify(proposalList),
+        });
+        if (saveRes.ok) {
+          const result = (await saveRes.json()) as { created: number };
+          ui.info(`[strategist] ${result.created} proposals saved. Approve in dashboard > Backlog > Proposals.`);
+          saved = true;
+        } else {
+          ui.warn(`[strategist] Failed to save proposals: ${saveRes.status} ${saveRes.statusText}`);
+          saved = true; // Don't retry on 4xx/5xx
+        }
+      } catch (saveErr) {
+        if (attempt === 2) {
+          ui.warn(`[strategist] Failed to save proposals after 3 attempts: ${saveErr}`);
+        }
       }
-    } catch (saveErr) {
-      ui.warn(`[strategist] Failed to save proposals: ${saveErr}`);
     }
 
   } finally {
