@@ -13,6 +13,7 @@ import { createAuthHeaders, fetchWithRetry } from "../api-client.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
+import { fireRuleEvaluate } from "../rule-evaluate.js";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";
 import { resolveRepoRoot } from "../git-ops.js";
 import { TIMEOUTS } from "../constants.js";
@@ -176,6 +177,15 @@ ${outputFormat}`;
           const reviewJson = JSON.stringify(report);
           ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewJson, commits: commitHash });
           ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewJson);
+          // Fire-and-forget: evaluate review against playbook rules
+          fireRuleEvaluate({
+            apiUrl: ctx.config.apiUrl,
+            apiKey: ctx.config.apiKey,
+            recordId: ctx.task.id,
+            recordType: "task_review",
+            text: reviewJson.slice(0, 5000),
+            improvementNotes: report.risks || report.code_quality || undefined,
+          });
         } else {
           const errBody = await res.text().catch(() => "");
           ui.warn(`[review] review-report API ${res.status}: ${errBody.slice(0, 200)}`);
