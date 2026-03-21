@@ -8,47 +8,54 @@ import { parseTaskLabels } from "../utils/parse-labels.js";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";
 import { TIMEOUTS } from "../constants.js";
 
-export async function handleReview(apiUrl: string, apiKey: string, taskId?: string, skills?: string[]): Promise<void> {
+export async function handleReview(apiUrl: string, apiKey: string, taskId?: string, skills?: string[], diffRange?: string): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
   const { execSync: revExec } = await import("node:child_process");
 
   ui.intro();
   const s = ui.createSpinner();
 
-  // Get task to review
-  let task: Task;
+  // Get task to review (optional — can review without a task)
+  let task: Task | null = null;
   if (taskId) {
     s.start(`Fetching task ${taskId}...`);
     const tasks = await api.fetchTasks();
     const found = tasks.find((t: Task) => t.id.startsWith(taskId));
     if (!found) { s.stop("Not found"); ui.error(`Task ${taskId} not found`); process.exit(1); }
     task = found;
+    s.stop(`Reviewing: ${task.title}`);
   } else {
     s.start("Finding latest review task...");
     const tasks = await api.fetchTasks();
-    const reviewTask = tasks.find((t: Task) => t.status === "review");
-    if (!reviewTask) { s.stop("None"); ui.error("No tasks in review status"); process.exit(1); }
-    task = reviewTask;
+    const reviewTask = tasks.find((t: Task) => t.status === "review" || t.status === "done");
+    if (reviewTask) {
+      task = reviewTask;
+      s.stop(`Reviewing: ${task.title}`);
+    } else {
+      s.stop("No task found — reviewing working tree diff");
+    }
   }
-  s.stop(`Reviewing: ${task.title}`);
 
   // Get diff
   const cwd = process.cwd();
-  let diffRef = "HEAD~1..HEAD";
-  try {
-    const parents = revExec("git cat-file -p HEAD", { cwd, stdio: "pipe" }).toString();
-    const parentCount = (parents.match(/^parent /gm) || []).length;
-    if (parentCount === 0) diffRef = "--root HEAD";
-  } catch { /* default */ }
+  let diffRef = diffRange || "HEAD~1..HEAD";
+  if (!diffRange) {
+    try {
+      const parents = revExec("git cat-file -p HEAD", { cwd, stdio: "pipe" }).toString();
+      const parentCount = (parents.match(/^parent /gm) || []).length;
+      if (parentCount === 0) diffRef = "--root HEAD";
+    } catch { /* default */ }
+  }
+  ui.info(`[review] Diff range: ${diffRef}`);
 
   // Build reviewer prompt
   const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
   const { interpolate } = await import("../agent-templates.js");
-  const taskType = task.type as string || "implementation";
+  const taskType = (task?.type as string) || "implementation";
   const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 
   // Fetch playbook rules including skill rules matching task labels or --skill args
-  const reviewTags = skills || parseTaskLabels(task);
+  const reviewTags = skills || (task ? parseTaskLabels(task) : []);
   let customRules = "";
   try { customRules = await api.fetchPlaybookPrompt("reviewer", reviewTags) || ""; } catch { /* non-fatal */ }
   if (reviewTags.length > 0) {
@@ -58,9 +65,9 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
   const reviewSystem = interpolate(PROMPT_TEMPLATES["reviewer-system"] || "", {
     projectName: cwd.split("/").pop() || "unknown",
     language: "English",
-    taskTitle: task.title,
+    taskTitle: task?.title || "Manual review request",
     taskType,
-    taskDescription: task.description || "(no description)",
+    taskDescription: task?.description || "(manual review — no task description)",
     taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
     customReviewRules: customRules ? `\n${customRules}` : "",
   });
@@ -89,13 +96,27 @@ export async function handleReview(apiUrl: string, apiKey: string, taskId?: stri
       console.log(`Risks: ${report.risks}`);
 
       // Save to API
+      if (task) {
+        try {
+          await fetch(`${apiUrl}/api/v1/tasks/${task.id}/review-report`, {
+            method: "POST",
+            headers: createAuthHeaders(apiKey),
+            body: JSON.stringify(report),
+          });
+          console.log(`\nReview saved to task #${task.id.slice(0, 8)}.`);
+        } catch { /* non-fatal */ }
+      }
+
+      // Feed into rule-evaluation pipeline for learning
       try {
-        await fetch(`${apiUrl}/api/v1/tasks/${task.id}/review-report`, {
+        await fetch(`${apiUrl}/api/v1/rule-evaluations/evaluate`, {
           method: "POST",
           headers: createAuthHeaders(apiKey),
-          body: JSON.stringify(report),
+          body: JSON.stringify({
+            text: `${report.verdict}: ${report.code_quality || ""} ${report.risks || ""}`,
+            source: "review",
+          }),
         });
-        console.log("\nReview saved to API.");
       } catch { /* non-fatal */ }
     } catch {
       console.log("\n--- Raw Review Output ---");

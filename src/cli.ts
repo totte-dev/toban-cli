@@ -112,10 +112,13 @@ if (cliArgs.command === "plan") {
   handlePropose(cliArgs.apiUrl, cliArgs.apiKey).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
 } else if (cliArgs.command === "review") {
   const rawArgs = process.argv.slice(2);
-  const taskId = rawArgs[1] && !rawArgs[1].startsWith("--") ? rawArgs[1] : undefined;
+  const taskIdx = rawArgs.indexOf("--task");
+  const taskId = taskIdx !== -1 && rawArgs[taskIdx + 1] ? rawArgs[taskIdx + 1] : (rawArgs[1] && !rawArgs[1].startsWith("--") ? rawArgs[1] : undefined);
   const skillIdx = rawArgs.indexOf("--skill");
   const skills = skillIdx !== -1 && rawArgs[skillIdx + 1] ? rawArgs[skillIdx + 1].split(",") : undefined;
-  handleReview(cliArgs.apiUrl, cliArgs.apiKey, taskId, skills).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  const diffIdx = rawArgs.indexOf("--diff");
+  const diffRange = diffIdx !== -1 && rawArgs[diffIdx + 1] ? rawArgs[diffIdx + 1] : undefined;
+  handleReview(cliArgs.apiUrl, cliArgs.apiKey, taskId, skills, diffRange).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
 } else if (cliArgs.command === "sprint") {
   const rawArgs = process.argv.slice(2);
   if (rawArgs[1] === "complete") {
