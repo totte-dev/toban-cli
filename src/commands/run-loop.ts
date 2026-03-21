@@ -5,7 +5,7 @@
 import type { AgentRunner } from "../runner.js";
 import { createAuthHeaders, type Task } from "../api-client.js";
 import { buildAgentPrompt } from "../prompt.js";
-import { getEngine, resolveModel, resolveModelForRole } from "../agent-engine.js";
+import { getEngine, resolveModelForRole } from "../agent-engine.js";
 import { matchTemplate, executeActions, type ActionContext } from "../agent-templates.js";
 import { MessagePoller } from "../message-poller.js";
 import { WS_MSG } from "../ws-types.js";
@@ -22,64 +22,14 @@ import type { ShutdownState } from "./shutdown.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { extractCompletionJson } from "../utils/completion-parser.js";
 import { TIMEOUTS, INTERVALS } from "../constants.js";
+import { shouldSplit, autoSplitTasks } from "../task-splitter.js";
+import { detectDependencies, sortByDependency } from "../task-dependency.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
-
-
-
-// ---------------------------------------------------------------------------
-// Auto-split large tasks
-// ---------------------------------------------------------------------------
-
-interface SubtaskDef {
-  title: string;
-  description: string;
-  owner: string;
-  type: string;
-  priority: string;
-  story_points: number;
-}
-
-async function splitTaskWithLLM(task: Task, cliArgs: { apiUrl: string; apiKey: string }): Promise<SubtaskDef[]> {
-  const { spawn } = await import("node:child_process");
-  const prompt = `Split this task into 2-4 smaller subtasks (each 1-3 story points, 1-2 files max).
-
-Task: ${task.title}
-Description: ${task.description || "(none)"}
-Owner: ${task.owner || "builder"}
-Type: ${task.type || "feature"}
-
-Output ONLY a JSON array, no markdown:
-[{"title":"...","description":"specific files and acceptance criteria","owner":"builder","type":"feature","priority":"p2","story_points":2}]`;
-
-  return new Promise((resolve) => {
-    const child = spawn("claude", ["--print", "--model", resolveModel("claude-haiku"), "--max-turns", "1", prompt], {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: TIMEOUTS.SPLIT_TASK,
-    });
-    let out = "";
-    child.stdout?.on("data", (chunk: Buffer) => { out += chunk.toString(); });
-    child.on("close", () => {
-      try {
-        // Extract JSON array from output
-        const match = out.match(/\[[\s\S]*\]/);
-        if (match) {
-          const subtasks = JSON.parse(match[0]) as SubtaskDef[];
-          if (Array.isArray(subtasks) && subtasks.length >= 2) {
-            resolve(subtasks);
-            return;
-          }
-        }
-      } catch { /* parse failed */ }
-      resolve([]);
-    });
-    child.on("error", () => resolve([]));
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Main loop
@@ -213,33 +163,24 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     const agentRoles = ["builder", "cloud-engineer", "strategist", "marketer", "operator"];
     const todoForAgents = allTasks.filter((t) => t.status === "todo" && t.owner && agentRoles.includes(t.owner));
 
-    // Auto-transition todo → in_progress for agent-owned tasks
-    // SP >= 5 tasks are auto-split into subtasks first
-    for (const t of todoForAgents) {
-      const sp = t.story_points as number | null;
-      if (sp && sp >= 5) {
-        ui.info(`[auto-split] ${t.id.slice(0, 8)}: SP=${sp} — splitting into subtasks`);
-        try {
-          const subtasks = await splitTaskWithLLM(t, cliArgs);
-          if (subtasks.length > 0) {
-            const sprintNum = (sprintData.sprint as Record<string, unknown>).number as number;
-            for (const sub of subtasks) {
-              await fetch(`${cliArgs.apiUrl}/api/v1/tasks`, {
-                method: "POST",
-                headers: createAuthHeaders(cliArgs.apiKey),
-                body: JSON.stringify({ ...sub, sprint: sprintNum, parent_task: t.id, status: "todo" }),
-              });
-            }
-            await api.updateTask(t.id, { status: "blocked" } as Partial<Task>);
-            ui.info(`[auto-split] Created ${subtasks.length} subtasks, parent blocked`);
-            wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: t.id, changes: { status: "blocked" }, timestamp: new Date().toISOString() });
-            continue;
-          }
-        } catch (err) {
-          ui.warn(`[auto-split] Failed: ${err}`);
-        }
+    // Auto-split large tasks before transitioning to in_progress
+    const tasksToSplit = todoForAgents.filter((t) => shouldSplit(t, 8));
+    if (tasksToSplit.length > 0) {
+      const sprintNum = (sprintData.sprint as Record<string, unknown>).number as number;
+      const splitResults = await autoSplitTasks(tasksToSplit, sprintNum, {
+        minSp: 8,
+        apiUrl: cliArgs.apiUrl,
+        apiKey: cliArgs.apiKey,
+      });
+      const splitIds = new Set(splitResults.filter((r) => !r.skipped).map((r) => r.taskId));
+      for (const id of splitIds) {
+        wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: id, changes: { status: "blocked" }, timestamp: new Date().toISOString() });
       }
+    }
 
+    // Auto-transition todo → in_progress for agent-owned tasks (skip split parents)
+    for (const t of todoForAgents) {
+      if ((t.status as string) === "blocked") continue; // already split
       try {
         await api.updateTask(t.id, { status: "in_progress" } as Partial<Task>);
         t.status = "in_progress" as Task["status"];
@@ -248,13 +189,23 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       } catch { /* non-fatal */ }
     }
 
-    const todoTasks = allTasks
-      .filter((t) => t.status === "in_progress" && t.owner !== "user")
-      .sort((a, b) => {
-        const pa = typeof a.priority === "string" ? parseInt(a.priority.replace("p", ""), 10) : (a.priority ?? 99);
-        const pb = typeof b.priority === "string" ? parseInt(b.priority.replace("p", ""), 10) : (b.priority ?? 99);
-        return (pa as number) - (pb as number);
-      });
+    // Dependency-aware task ordering
+    const inProgressTasks = allTasks
+      .filter((t) => t.status === "in_progress" && t.owner !== "user");
+    const completedTaskIds = new Set(
+      allTasks.filter((t) => t.status === "done" || t.status === "review").map((t) => t.id)
+    );
+    const deps = detectDependencies(inProgressTasks);
+    const orderedTasks = sortByDependency(inProgressTasks, deps, completedTaskIds);
+
+    // Skip tasks whose dependencies are not yet complete
+    const todoTasks = orderedTasks.filter((t) => {
+      if (!t.parallelReady) {
+        ui.info(`[deps] ${t.id.slice(0, 8)}: waiting for ${t.dependsOn.map((d) => d.slice(0, 8)).join(", ")}`);
+        return false;
+      }
+      return true;
+    });
 
     if (todoTasks.length === 0) {
       const phase = sprintData.sprint?.status ?? "unknown";
@@ -292,7 +243,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const desc = task.description || "";
       if (desc.length < 20 && !task.type?.toString().match(/^(chore)$/)) {
         ui.warn(`[task] Skipping "${task.title}" — description too short (${desc.length} chars). Add details to the task.`);
-        try { await api.updateTask(task.id, { status: "blocked" } as Partial<Task>); } catch { /* non-fatal */ }
+        try { await api.updateTask(task.id, { status: "blocked" } as unknown as Partial<Task>); } catch { /* non-fatal */ }
         scheduler.releaseSlot(slotName);
         continue;
       }
