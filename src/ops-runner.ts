@@ -11,6 +11,7 @@ import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fireRuleEvaluate } from "./rule-evaluate.js";
+import { getExecError } from "./utils/exec-error.js";
 
 /** QA scan configuration parsed from ops task description JSON */
 export interface QaScanConfig {
@@ -186,13 +187,12 @@ export class OpsRunner {
   runTask(task: OpsTask): { passed: boolean; summary: string; details: string } {
     const desc = (task.description || "").trim();
 
-    // QA scan (JSON with type field)
+    // QA scan is handled by executeTask directly (async) — should not reach here
     if (desc.startsWith("{")) {
       try {
         const config = JSON.parse(desc) as QaScanConfig;
         if (config.type === "qa_scan") {
-          // qa_scan is async — return placeholder, actual execution in executeTask
-          return { passed: true, summary: "qa_scan delegated", details: "" };
+          return { passed: false, summary: "qa_scan must run via executeTask", details: "runTask does not support async qa_scan" };
         }
       } catch { /* not JSON, fall through */ }
     }
@@ -251,7 +251,7 @@ export class OpsRunner {
       execSync(buildCmd, { cwd: repoDir, stdio: "pipe", timeout });
       ui.info("[qa] Build: PASS");
     } catch (err) {
-      const detail = this.getExecError(err);
+      const detail = getExecError(err);
       issues.push({ check: "build", detail: detail.slice(0, 1000) });
       ui.warn(`[qa] Build: FAIL — ${detail.slice(0, 200)}`);
     }
@@ -262,7 +262,7 @@ export class OpsRunner {
       execSync(testCmd, { cwd: repoDir, stdio: "pipe", timeout });
       ui.info("[qa] Tests: PASS");
     } catch (err) {
-      const detail = this.getExecError(err);
+      const detail = getExecError(err);
       issues.push({ check: "test", detail: detail.slice(0, 1000) });
       ui.warn(`[qa] Tests: FAIL — ${detail.slice(0, 200)}`);
     }
@@ -391,14 +391,6 @@ export class OpsRunner {
         ui.warn(`[qa] Failed to create bug task: ${err}`);
       }
     }
-  }
-
-  /** Extract useful error output from execSync failures. */
-  private getExecError(err: unknown): string {
-    const e = err as { stderr?: Buffer | string; stdout?: Buffer | string; message?: string };
-    const stderr = typeof e.stderr === "string" ? e.stderr : e.stderr?.toString();
-    const stdout = typeof e.stdout === "string" ? e.stdout : e.stdout?.toString();
-    return (stderr?.trim() || stdout?.trim() || e.message || String(err));
   }
 
   /** Run a shell command and capture output. */

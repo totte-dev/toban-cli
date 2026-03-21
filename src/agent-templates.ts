@@ -18,6 +18,7 @@ import { handleReviewChanges } from "./handlers/review-changes.js";
 import { handleInjectMemory, handleCollectMemory } from "./handlers/memory.js";
 import { handleFetchRecentChanges, handleRecordChanges } from "./handlers/context-sharing.js";
 import { resolveRepoRoot } from "./git-ops.js";
+import { getExecError } from "./utils/exec-error.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -542,14 +543,6 @@ export async function executeActions(
           const vbBuildCmd = ctx.config.buildCommand || "npm run build";
           const vbTestCmd = ctx.config.testCommand || "npm test";
           const vbTimeout = 180_000; // 3 minutes per command
-
-          // Helper to extract useful error output from execSync failures
-          const getExecError = (err: unknown): string => {
-            const e = err as { stderr?: Buffer; stdout?: Buffer; message?: string };
-            const stderr = e.stderr?.toString().trim();
-            const stdout = e.stdout?.toString().trim();
-            return stderr || stdout || e.message || String(err);
-          };
 
           ui.info(`[${phase}] ${label}: running build (${vbBuildCmd})...`);
           try {
