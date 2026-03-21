@@ -87,8 +87,8 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "record_changes", when: "success", label: "Record change summary for other agents" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
-      { type: "git_push", when: "success", label: "Push main to remote" },
       { type: "verify_build", when: "success", label: "Verify build and tests pass" },
+      { type: "git_push", when: "success", label: "Push main to remote" },
       { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for code review" },
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
@@ -544,6 +544,16 @@ export async function executeActions(
           const vbTestCmd = ctx.config.testCommand || "npm test";
           const vbTimeout = 180_000; // 3 minutes per command
 
+          // Revert merge on failure (runs before git_push, so no remote damage)
+          const revertMerge = () => {
+            try {
+              execSync("git reset --hard HEAD~1", { cwd: repoDir, stdio: "pipe", timeout: 10_000 });
+              ui.warn(`[${phase}] ${label}: reverted merge on main`);
+            } catch (revertErr) {
+              ui.error(`[${phase}] ${label}: failed to revert merge: ${revertErr}`);
+            }
+          };
+
           ui.info(`[${phase}] ${label}: running build (${vbBuildCmd})...`);
           try {
             execSync(vbBuildCmd, { cwd: repoDir, stdio: "pipe", timeout: vbTimeout });
@@ -552,6 +562,7 @@ export async function executeActions(
             const detail = getExecError(buildErr);
             ui.error(`[${phase}] ${label}: BUILD FAILED — ${detail.slice(0, 300)}`);
             ctx.exitCode = 1;
+            revertMerge();
             ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Build failed: ${detail.slice(0, 200)}` });
             ctx.api.recordFailure({
               task_id: ctx.task.id,
@@ -570,6 +581,7 @@ export async function executeActions(
             const detail = getExecError(testErr);
             ui.error(`[${phase}] ${label}: TESTS FAILED — ${detail.slice(0, 300)}`);
             ctx.exitCode = 1;
+            revertMerge();
             ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Tests failed: ${detail.slice(0, 200)}` });
             ctx.api.recordFailure({
               task_id: ctx.task.id,

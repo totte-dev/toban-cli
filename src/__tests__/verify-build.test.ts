@@ -112,8 +112,9 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(1);
-    // Only build was called, test was skipped
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
+    // Build (1) + git reset to revert merge (2), test was skipped
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
+    expect(execSyncMock.mock.calls[1][0]).toContain("git reset --hard");
     expect(ctx.api.recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         task_id: "task-123",
@@ -138,7 +139,9 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(1);
-    expect(execSyncMock).toHaveBeenCalledTimes(2);
+    // Build (1) + test (2) + git reset to revert merge (3)
+    expect(execSyncMock).toHaveBeenCalledTimes(3);
+    expect(execSyncMock.mock.calls[2][0]).toContain("git reset --hard");
     expect(ctx.api.recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         failure_type: "verify_build",
