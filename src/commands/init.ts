@@ -9,10 +9,65 @@
  */
 
 import * as p from "@clack/prompts";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { createApiClient, type WorkspaceInfo } from "../api-client.js";
+
+// ---------------------------------------------------------------------------
+// Git hook installer
+// ---------------------------------------------------------------------------
+
+function findGitDir(cwd: string): string | null {
+  try {
+    return execSync("git rev-parse --git-dir", { cwd, stdio: "pipe" }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+
+function installPostPushHook(cwd: string, apiUrl: string, apiKey: string): boolean {
+  const gitDir = findGitDir(cwd);
+  if (!gitDir) return false;
+
+  const hooksDir = join(gitDir, "hooks");
+  mkdirSync(hooksDir, { recursive: true });
+
+  // post-push is not a native git hook, so we use post-commit + push detection
+  // Instead, use pre-push which fires before push completes
+  const hookPath = join(hooksDir, "pre-push");
+
+  // Don't overwrite existing hooks
+  if (existsSync(hookPath)) {
+    const existing = readFileSync(hookPath, "utf-8");
+    if (existing.includes("toban review")) return true; // already installed
+    return false; // user has a custom hook
+  }
+
+  const hookScript = `#!/bin/sh
+# Auto-review on push — installed by toban init
+# Runs toban review asynchronously after push completes
+# Only reviews if the push succeeds (pre-push runs before push, so we background it)
+
+# Get the commit range being pushed
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_sha" != "0000000000000000000000000000000000000000" ]; then
+    # Background: wait for push to finish, then review
+    (
+      sleep 2
+      npx toban review --api-url "${apiUrl}" --api-key "${apiKey}" --diff "$remote_sha..$local_sha" 2>/dev/null &
+    ) &
+  fi
+done
+
+exit 0
+`;
+
+  writeFileSync(hookPath, hookScript);
+  chmodSync(hookPath, 0o755);
+  return true;
+}
+
 
 // ---------------------------------------------------------------------------
 // Config types
@@ -270,7 +325,20 @@ export async function handleInit(): Promise<void> {
 
   p.log.success(`Config saved to ${CONFIG_DIR}/${CONFIG_FILE}`);
 
-  // 7. Optionally create first sprint
+  // 7. Install git pre-push hook for auto-review
+  const hookInstalled = installPostPushHook(cwd, apiUrl, apiKey);
+  if (hookInstalled) {
+    p.log.success("Git pre-push hook installed (auto-review on push)");
+  } else {
+    const gitDir = findGitDir(cwd);
+    if (!gitDir) {
+      p.log.warning("Not a git repository — skipping auto-review hook");
+    } else {
+      p.log.warning("Existing pre-push hook found — auto-review not installed");
+    }
+  }
+
+  // 8. Optionally create first sprint
   const createSprint = await p.confirm({
     message: "Create and start the first sprint now?",
     initialValue: false,
