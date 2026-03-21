@@ -150,12 +150,19 @@ export async function handleReview(
 
     child.on("close", () => {
       clearTimeout(timeout);
-      // For structured output engines, extract text content
+      // For structured output engines, extract text from JSON lines
       let text = output;
       if (agentEngine.supportsStructuredOutput) {
-        try {
-          text = extractTextFromStreamJson(output) || output;
-        } catch { /* fallback to raw output */ }
+        const parts: string[] = [];
+        for (const line of output.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            const extracted = extractTextFromStreamJson(event);
+            if (extracted) parts.push(extracted);
+          } catch { /* not JSON, keep raw */ }
+        }
+        text = parts.length > 0 ? parts.join("\n") : output;
       }
       resolve(text);
     });

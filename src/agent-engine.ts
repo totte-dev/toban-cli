@@ -113,7 +113,20 @@ export function resolveModelForRole(role: string, engine?: string | null): strin
 // Claude Engine
 // ---------------------------------------------------------------------------
 
-const READ_ONLY_TOOLS = "Read,Grep,Glob,Bash,Agent";
+// Derived from reviewer template tools — keep in sync via getReadOnlyTools()
+import { getDefaultTemplates } from "./agent-templates.js";
+
+function getReadOnlyTools(): string {
+  const reviewer = getDefaultTemplates().find((t) => t.id === "reviewer");
+  return reviewer?.tools?.join(",") || "Read,Grep,Glob,Bash,Agent";
+}
+
+// Cached at module level after first call
+let _readOnlyTools: string | null = null;
+function readOnlyTools(): string {
+  if (!_readOnlyTools) _readOnlyTools = getReadOnlyTools();
+  return _readOnlyTools;
+}
 
 const claudeEngine: AgentEngineProvider = {
   id: "claude",
@@ -132,7 +145,7 @@ const claudeEngine: AgentEngineProvider = {
         "--verbose",
         "--model", model,
         "--output-format", "stream-json",
-        ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
+        ...(config.readOnly ? ["--allowedTools", readOnlyTools()] : []),
         ...(useStdin ? ["-p", "-"] : (config.prompt ? [config.prompt] : [])),
       ],
       ...(useStdin ? { stdin: config.prompt } : {}),
@@ -150,7 +163,7 @@ const claudeEngine: AgentEngineProvider = {
         "--verbose",
         "--model", model,
         "--output-format", "stream-json",
-        ...(config.readOnly ? ["--allowedTools", READ_ONLY_TOOLS] : []),
+        ...(config.readOnly ? ["--allowedTools", readOnlyTools()] : []),
         ...(config.prompt ? [config.prompt] : []),
       ],
     };
