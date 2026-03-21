@@ -111,8 +111,10 @@ export class AgentRunner {
 
   /**
    * Spawn a new agent process.
+   * @param config Agent configuration
+   * @param onExit Optional callback fired when the agent process exits
    */
-  async spawn(config: AgentConfig): Promise<RunningAgent> {
+  async spawn(config: AgentConfig, onExit?: (agent: RunningAgent) => void): Promise<RunningAgent> {
     if (this.agents.has(config.name)) {
       throw new Error(`Agent "${config.name}" is already running`);
     }
@@ -190,6 +192,11 @@ export class AgentRunner {
       }
 
       this.agents.delete(config.name);
+
+      // Fire completion callback (used by run-loop for async dispatch)
+      if (onExit) {
+        try { onExit(agent); } catch { /* non-fatal */ }
+      }
     });
 
     child.on("error", async (err) => {
@@ -198,6 +205,11 @@ export class AgentRunner {
       agent.stderr.push(err.message);
       await this.reportStatus(config, "failed", err.message);
       this.agents.delete(config.name);
+
+      // Fire completion callback on error too
+      if (onExit) {
+        try { onExit(agent); } catch { /* non-fatal */ }
+      }
     });
 
     return agent;

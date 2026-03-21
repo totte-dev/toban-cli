@@ -282,13 +282,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       scheduler.assignTask(slotName, task.id);
 
       ui.step(`Starting task: ${task.title} [slot: ${slotName}]`);
-      // Note: currently still sequential per slot. Full async dispatch in Phase 2.
 
       // Pre-check: reject tasks with no meaningful description
       const desc = task.description || "";
       if (desc.length < 20 && !task.type?.toString().match(/^(chore)$/)) {
         ui.warn(`[task] Skipping "${task.title}" — description too short (${desc.length} chars). Add details to the task.`);
         try { await api.updateTask(task.id, { status: "blocked" } as Partial<Task>); } catch { /* non-fatal */ }
+        scheduler.releaseSlot(slotName);
         continue;
       }
 
@@ -298,11 +298,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         ctx.mainGithubRepo
       );
 
-      const agentName = task.owner ?? "builder";
-      const apiDocs = await api.fetchApiDocs(agentName);
+      // Use slot name as agent name to avoid collisions in parallel dispatch
+      const agentName = slotName;
+      const agentRole = task.owner ?? "builder";
+      const apiDocs = await api.fetchApiDocs(agentRole);
       const taskType = task.type as string | undefined;
       const taskLabels = parseTaskLabels(task);
-      const agentTemplate = matchTemplate(taskType, agentName);
+      const agentTemplate = matchTemplate(taskType, agentRole);
       const isReadOnly = agentTemplate.tools !== "all";
       ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
 
@@ -339,6 +341,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         logError(CLI_ERR.ACTION_FAILED, `Pre-actions failed: ${err}`, { taskId: task.id, phase: "pre" }, err);
         ui.error(`[task] Pre-actions failed: ${err}`);
         try { await api.updateTask(task.id, { status: "todo" } as Partial<Task>); } catch { /* non-fatal: reset task status */ }
+        scheduler.releaseSlot(slotName);
         continue;
       }
 
@@ -375,13 +378,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       }
 
       const prompt = buildAgentPrompt({
-        role: agentName, projectName: ctx.workspaceName, projectSpec: ctx.workspaceSpec,
+        role: agentRole, projectName: ctx.workspaceName, projectSpec: ctx.workspaceSpec,
         taskId: task.id, taskTitle: task.title,
         taskDescription: fullDescription,
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
         taskType, apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey,
         language: ctx.language,
-        playbookRules: (await ctx.api.fetchPlaybookPrompt(agentName, taskLabels)) || ctx.playbookRules,
+        playbookRules: (await ctx.api.fetchPlaybookPrompt(agentRole, taskLabels)) || ctx.playbookRules,
         targetRepo: task.target_repo ?? undefined,
         apiDocs: apiDocs || undefined, engineHint: getEngine(cliArgs.engine).promptHint,
         pastFailures: pastFailures.length > 0 ? pastFailures : undefined,
@@ -399,8 +402,8 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         if (ctx.gitUserInfo) ensureGitUser(taskWorkingDir, ctx.gitUserInfo.name, ctx.gitUserInfo.email);
 
         // Resolve model from agent's DB engine setting or role default
-        const agentInfo = sprintData.agents.find((a) => a.name === agentName);
-        const agentModel = resolveModelForRole(agentName, agentInfo?.engine);
+        const agentInfo = sprintData.agents.find((a) => a.name === agentRole);
+        const agentModel = resolveModelForRole(agentRole, agentInfo?.engine);
 
         const agentConfig = {
           name: agentName,
@@ -417,80 +420,64 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         const running = runner.status().find((s) => s.name === agentConfig.name);
         if (running) {
           ui.warn(`[task] Agent "${agentConfig.name}" is already running — skipping task ${task.id.slice(0, 8)}`);
+          scheduler.releaseSlot(slotName);
           continue;
         }
 
         ui.agentSpawned({ agentName: agentConfig.name, taskId: task.id, taskTitle: task.title, docker: !cliArgs.noDocker });
 
-        const messagePoller = new MessagePoller({ api, channel: task.owner ?? cliArgs.agentName, workingDir: taskWorkingDir });
+        const messagePoller = new MessagePoller({ api, channel: agentRole, workingDir: taskWorkingDir });
         messagePoller.start();
 
-        const runningAgent = await runner.spawn(agentConfig);
-        await waitForAgent(runner, agentConfig.name);
-        messagePoller.stop();
+        // Async dispatch: spawn agent and register completion handler.
+        // The loop continues to the next task immediately instead of blocking.
+        const capturedSlotName = slotName;
+        const capturedSprintData = sprintData;
 
-        const exitCode = runningAgent.exitCode;
-        const succeeded = runningAgent.status === "completed";
-        ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`);
+        await runner.spawn(agentConfig, (runningAgent) => {
+          // --- Completion handler: runs when agent process exits ---
+          messagePoller.stop();
 
-        // All post-completion logic (merge, push, retro, notify, status) is in template
-        actionCtx.exitCode = exitCode;
-        actionCtx.agentBranch = runningAgent.branch;
-        actionCtx.onDataUpdate = (entity, id, changes) => {
-          ctx.wsServer?.broadcast({
-            type: WS_MSG.DATA_UPDATE,
-            entity,
-            task_id: id,
-            agent_name: entity === "agent" ? id : undefined,
-            changes,
-            timestamp: new Date().toISOString(),
-          });
-        };
-        actionCtx.onReviewUpdate = (taskId, phase, reviewComment) => {
-          ctx.wsServer?.broadcast({
-            type: WS_MSG.REVIEW_UPDATE,
-            task_id: taskId,
-            agent_name: cliArgs.agentName,
-            phase,
-            review_comment: reviewComment,
-            timestamp: new Date().toISOString(),
-          });
-        };
-        // Extract COMPLETION_JSON from agent stdout → enrich post_action update_task
-        if (!actionCtx.completionJson) {
-          const parsed = extractCompletionJson(runningAgent.stdout, agentTemplate.post_actions, {
-            onReviewUpdate: (tid, phase, comment) => actionCtx.onReviewUpdate?.(tid, phase, comment),
-            taskId: task.id,
-            taskLog,
-          });
-          if (parsed) {
-            actionCtx.completionJson = parsed;
+          const exitCode = runningAgent.exitCode;
+          const succeeded = runningAgent.status === "completed";
+          ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`);
+
+          // All post-completion logic (merge, push, retro, notify, status) is in template
+          actionCtx.exitCode = exitCode;
+          actionCtx.agentBranch = runningAgent.branch;
+          actionCtx.onDataUpdate = (entity, id, changes) => {
+            ctx.wsServer?.broadcast({
+              type: WS_MSG.DATA_UPDATE,
+              entity,
+              task_id: id,
+              agent_name: entity === "agent" ? id : undefined,
+              changes,
+              timestamp: new Date().toISOString(),
+            });
+          };
+          actionCtx.onReviewUpdate = (taskId, phase, reviewComment) => {
+            ctx.wsServer?.broadcast({
+              type: WS_MSG.REVIEW_UPDATE,
+              task_id: taskId,
+              agent_name: cliArgs.agentName,
+              phase,
+              review_comment: reviewComment,
+              timestamp: new Date().toISOString(),
+            });
+          };
+          // Extract COMPLETION_JSON from agent stdout
+          if (!actionCtx.completionJson) {
+            const parsed = extractCompletionJson(runningAgent.stdout, agentTemplate.post_actions, {
+              onReviewUpdate: (tid, phase, comment) => actionCtx.onReviewUpdate?.(tid, phase, comment),
+              taskId: task.id,
+              taskLog,
+            });
+            if (parsed) {
+              actionCtx.completionJson = parsed;
+            }
           }
-        }
 
-        // Extract RETRO_JSON for Builder intent injection into Reviewer prompt
-        for (const line of runningAgent.stdout) {
-          let raw: string | null = null;
-          if (line.startsWith("RETRO_JSON:")) {
-            raw = line.slice("RETRO_JSON:".length);
-          } else {
-            try {
-              const event = JSON.parse(line);
-              const text = typeof event === "object" && event?.type === "assistant" ? (event.message?.content?.[0]?.text ?? "") : "";
-              const m = text.match?.(/RETRO_JSON:(\{[\s\S]*\})/);
-              if (m) raw = m[1];
-            } catch { /* not JSON */ }
-          }
-          if (raw) {
-            try {
-              actionCtx.retroJson = JSON.parse(raw);
-            } catch { /* parse error */ }
-            break;
-          }
-        }
-
-        actionCtx.onRetro = async () => {
-          // Extract RETRO_JSON from agent stdout, validate, and submit
+          // Extract RETRO_JSON for Builder intent injection into Reviewer prompt
           for (const line of runningAgent.stdout) {
             let raw: string | null = null;
             if (line.startsWith("RETRO_JSON:")) {
@@ -498,83 +485,123 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
             } else {
               try {
                 const event = JSON.parse(line);
-                if (event.type === "result" && typeof event.result === "string") {
-                  const match = event.result.match(/RETRO_JSON:(\{[\s\S]*\})/);
-                  if (match) raw = match[1];
-                }
+                const text = typeof event === "object" && event?.type === "assistant" ? (event.message?.content?.[0]?.text ?? "") : "";
+                const m = text.match?.(/RETRO_JSON:(\{[\s\S]*\})/);
+                if (m) raw = m[1];
               } catch { /* not JSON */ }
             }
-            if (!raw) continue;
-
-            try {
-              const json = JSON.parse(raw);
-
-              // Validate: at least one meaningful field required
-              const wentWell = typeof json.went_well === "string" ? json.went_well.trim() : "";
-              const toImprove = typeof json.to_improve === "string" ? json.to_improve.trim() : "";
-              const suggestedTasks = Array.isArray(json.suggested_tasks) ? json.suggested_tasks : [];
-
-              if (!wentWell && !toImprove && suggestedTasks.length === 0) {
-                ui.warn("[retro] RETRO_JSON has no meaningful content — skipped");
-                return;
-              }
-
-              // Reject generic/template responses
-              const genericPatterns = [/^completed?\s*successfully/i, /^nothing/i, /^no\s*issue/i, /^n\/a$/i, /^none$/i];
-              if (wentWell && genericPatterns.some((p) => p.test(wentWell))) {
-                ui.warn(`[retro] went_well is too generic: "${wentWell}" — skipped`);
-                return;
-              }
-
-              // Validate suggested_tasks structure
-              const validTasks = suggestedTasks.filter((t: unknown) =>
-                typeof t === "object" && t !== null && typeof (t as Record<string, unknown>).title === "string"
-              );
-
-              // Length checks (match API schema)
-              const safeWentWell = wentWell.slice(0, 2000) || undefined;
-              const safeToImprove = toImprove.slice(0, 2000) || undefined;
-
-              await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprintData.sprint.number}/retro`, {
-                method: "POST",
-                headers: createAuthHeaders(cliArgs.apiKey),
-                body: JSON.stringify({
-                  agent_name: agentConfig.name,
-                  went_well: safeWentWell,
-                  to_improve: safeToImprove,
-                  suggested_tasks: validTasks.length > 0 ? validTasks : undefined,
-                }),
-              });
-              ui.info(`[retro] Submitted: went_well=${!!safeWentWell}, to_improve=${!!safeToImprove}, tasks=${validTasks.length}`);
-              // Fire-and-forget: evaluate retro against playbook rules
-              fireRuleEvaluate({
-                apiUrl: cliArgs.apiUrl,
-                apiKey: cliArgs.apiKey,
-                recordId: task.id,
-                recordType: "retro",
-                text: [safeWentWell || "", safeToImprove || ""].join(" "),
-                improvementNotes: safeToImprove,
-              });
-              return;
-            } catch (err) {
-              ui.warn(`[retro] Failed to parse RETRO_JSON: ${err}`);
+            if (raw) {
+              try {
+                actionCtx.retroJson = JSON.parse(raw);
+              } catch { /* parse error */ }
+              break;
             }
           }
-        };
-        taskLog.stdout(runningAgent.stdout);
-        taskLog.event("post_actions_start", { exitCode, mergeSkipped: actionCtx.mergeSkipped, hasCompletion: !!actionCtx.completionJson, reviewVerdict: actionCtx.reviewVerdict });
-        await executeActions(agentTemplate.post_actions, actionCtx, "post");
-        taskLog.event("post_actions_done", { reviewVerdict: actionCtx.reviewVerdict });
-        taskLog.close();
+
+          actionCtx.onRetro = async () => {
+            // Extract RETRO_JSON from agent stdout, validate, and submit
+            for (const line of runningAgent.stdout) {
+              let raw: string | null = null;
+              if (line.startsWith("RETRO_JSON:")) {
+                raw = line.slice("RETRO_JSON:".length);
+              } else {
+                try {
+                  const event = JSON.parse(line);
+                  if (event.type === "result" && typeof event.result === "string") {
+                    const match = event.result.match(/RETRO_JSON:(\{[\s\S]*\})/);
+                    if (match) raw = match[1];
+                  }
+                } catch { /* not JSON */ }
+              }
+              if (!raw) continue;
+
+              try {
+                const json = JSON.parse(raw);
+
+                // Validate: at least one meaningful field required
+                const wentWell = typeof json.went_well === "string" ? json.went_well.trim() : "";
+                const toImprove = typeof json.to_improve === "string" ? json.to_improve.trim() : "";
+                const suggestedTasks = Array.isArray(json.suggested_tasks) ? json.suggested_tasks : [];
+
+                if (!wentWell && !toImprove && suggestedTasks.length === 0) {
+                  ui.warn("[retro] RETRO_JSON has no meaningful content — skipped");
+                  return;
+                }
+
+                // Reject generic/template responses
+                const genericPatterns = [/^completed?\s*successfully/i, /^nothing/i, /^no\s*issue/i, /^n\/a$/i, /^none$/i];
+                if (wentWell && genericPatterns.some((p) => p.test(wentWell))) {
+                  ui.warn(`[retro] went_well is too generic: "${wentWell}" — skipped`);
+                  return;
+                }
+
+                // Validate suggested_tasks structure
+                const validTasks = suggestedTasks.filter((t: unknown) =>
+                  typeof t === "object" && t !== null && typeof (t as Record<string, unknown>).title === "string"
+                );
+
+                // Length checks (match API schema)
+                const safeWentWell = wentWell.slice(0, 2000) || undefined;
+                const safeToImprove = toImprove.slice(0, 2000) || undefined;
+
+                await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${capturedSprintData.sprint.number}/retro`, {
+                  method: "POST",
+                  headers: createAuthHeaders(cliArgs.apiKey),
+                  body: JSON.stringify({
+                    agent_name: agentConfig.name,
+                    went_well: safeWentWell,
+                    to_improve: safeToImprove,
+                    suggested_tasks: validTasks.length > 0 ? validTasks : undefined,
+                  }),
+                });
+                ui.info(`[retro] Submitted: went_well=${!!safeWentWell}, to_improve=${!!safeToImprove}, tasks=${validTasks.length}`);
+                // Fire-and-forget: evaluate retro against playbook rules
+                fireRuleEvaluate({
+                  apiUrl: cliArgs.apiUrl,
+                  apiKey: cliArgs.apiKey,
+                  recordId: task.id,
+                  recordType: "retro",
+                  text: [safeWentWell || "", safeToImprove || ""].join(" "),
+                  improvementNotes: safeToImprove,
+                });
+                return;
+              } catch (err) {
+                ui.warn(`[retro] Failed to parse RETRO_JSON: ${err}`);
+              }
+            }
+          };
+          taskLog.stdout(runningAgent.stdout);
+          taskLog.event("post_actions_start", { exitCode, mergeSkipped: actionCtx.mergeSkipped, hasCompletion: !!actionCtx.completionJson, reviewVerdict: actionCtx.reviewVerdict });
+
+          // Run post_actions asynchronously, then release the slot
+          executeActions(agentTemplate.post_actions, actionCtx, "post")
+            .then(() => {
+              taskLog.event("post_actions_done", { reviewVerdict: actionCtx.reviewVerdict });
+            })
+            .catch((postErr) => {
+              logError(CLI_ERR.ACTION_FAILED, `Post-actions failed: ${postErr}`, { taskId: task.id }, postErr);
+              ui.error(`[task] Post-actions error for ${task.id.slice(0, 8)}: ${postErr}`);
+            })
+            .finally(() => {
+              taskLog.close();
+              scheduler.releaseSlot(capturedSlotName);
+            });
+        });
+
+        // Agent spawned — loop continues to next task (no await waitForAgent)
+
       } catch (err) {
         logError(CLI_ERR.AGENT_SPAWN_FAILED, `Error spawning agent for task ${task.id}: ${err}`, { taskId: task.id, agentName }, err);
         ui.error(`Error spawning agent for task ${task.id}: ${err}`);
         taskLog.event("error", { message: err instanceof Error ? err.message : String(err) });
         actionCtx.exitCode = 1;
-        await executeActions(agentTemplate.post_actions, actionCtx, "post");
-        taskLog.close();
-      } finally {
-        scheduler.releaseSlot(slotName);
+        // Run post_actions for error case, then release slot
+        executeActions(agentTemplate.post_actions, actionCtx, "post")
+          .catch(() => { /* non-fatal */ })
+          .finally(() => {
+            taskLog.close();
+            scheduler.releaseSlot(slotName);
+          });
       }
     }
 

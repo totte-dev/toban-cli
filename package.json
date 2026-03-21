@@ -18,6 +18,8 @@
     "test": "vitest run",
     "test:e2e": "bash scripts/docker-e2e-test.sh",
     "test:e2e:mock": "bash scripts/mock-e2e-test.sh",
+    "test:e2e:full": "bash scripts/full-e2e-test.sh",
+    "test:e2e:full:preview": "E2E_MODE=preview bash scripts/full-e2e-test.sh",
     "test:ws": "tsx scripts/ws-integration-test.ts"
   },
   "keywords": [
@@ -43,6 +45,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
+    "async-mutex": "^0.5.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {

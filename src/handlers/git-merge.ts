@@ -6,10 +6,14 @@
 import { execSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { Mutex } from "async-mutex";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
 import { resolveRepoRoot } from "../git-ops.js";
+
+/** Module-level mutex to serialize concurrent merge operations */
+const mergeLock = new Mutex();
 
 export async function handleGitMerge(
   action: TemplateAction,
@@ -25,7 +29,8 @@ export async function handleGitMerge(
   const repoDir = resolveRepoRoot(worktreePath);
   const baseBranch = ctx.config.baseBranch;
 
-  // Find the agent's worktree branch
+  // Serialize merge operations to prevent concurrent checkout/merge conflicts
+  const release = await mergeLock.acquire();
   try {
     // Prefer the branch name from context (set by spawner) to avoid picking up wrong branches
     let worktreeBranch = ctx.agentBranch || null;
@@ -102,5 +107,7 @@ export async function handleGitMerge(
     logError(CLI_ERR.GIT_MERGE_FAILED, `git_merge failed: ${msg}`, { taskId: ctx.task.id }, mergeErr);
     ui.warn(`[template] git_merge failed: ${msg}`);
     try { gitExec("git merge --abort", { cwd: repoDir, stdio: "pipe" }); } catch { /* already clean */ }
+  } finally {
+    release();
   }
 }
