@@ -29,13 +29,7 @@ import { TIMEOUTS, INTERVALS } from "../constants.js";
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 
-function waitForAgent(runner: AgentRunner, agentName: string): Promise<void> {
-  return new Promise((resolve) => {
-    const interval = setInterval(() => {
-      if (!runner.status().find((s) => s.name === agentName)) { clearInterval(interval); resolve(); }
-    }, 2000);
-  });
-}
+
 
 // ---------------------------------------------------------------------------
 // Auto-split large tasks
@@ -436,11 +430,11 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
         await runner.spawn(agentConfig, (runningAgent) => {
           // --- Completion handler: runs when agent process exits ---
-          messagePoller.stop();
+          try { messagePoller.stop(); } catch { /* non-fatal */ }
 
           const exitCode = runningAgent.exitCode;
           const succeeded = runningAgent.status === "completed";
-          ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`);
+          try { ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`); } catch { /* non-fatal */ }
 
           // All post-completion logic (merge, push, retro, notify, status) is in template
           actionCtx.exitCode = exitCode;
