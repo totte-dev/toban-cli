@@ -270,6 +270,11 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         continue;
       }
 
+      // Warn if description lacks structured format (acceptance criteria)
+      if (desc.length >= 20 && !desc.includes("Acceptance Criteria") && !desc.includes("acceptance criteria") && !desc.includes("- [ ]")) {
+        ui.warn(`[task] "${task.title}" has no acceptance criteria — agent may produce unclear results`);
+      }
+
       const taskWorkingDir = resolveTaskWorkingDir(
         task, repos, tobanHome, cliArgs.agentName,
         ctx.workingDir, gitToken, gitUserInfo, credentialHelperPath,
