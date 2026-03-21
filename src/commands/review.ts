@@ -310,6 +310,23 @@ export async function handleReview(
 
       // PR mode: post review as PR comment and handle merge
       if (prNumber && prBranch) {
+        // Always save to DB (PR comment may fail due to permissions)
+        if (!task) {
+          try {
+            // No task matched — store as a standalone review via a temp task-like record
+            await fetch(`${apiUrl}/api/v1/messages`, {
+              method: "POST",
+              headers: createAuthHeaders(apiKey),
+              body: JSON.stringify({
+                from: "reviewer",
+                to: "user",
+                content: `PR #${prNumber} review: ${report.verdict}\n${report.code_quality || ""}\n${report.risks || ""}`.slice(0, 4000),
+              }),
+            });
+          } catch { /* non-fatal */ }
+        }
+
+        // Try posting to PR (may fail if GitHub App lacks permission)
         try {
           const commentBody = [
             `## Review: ${report.verdict}`,
@@ -321,7 +338,12 @@ export async function handleReview(
           ].join("\n");
 
           revExec(`gh pr comment ${prNumber} --body "${commentBody.replace(/"/g, '\\"')}"`, { cwd, stdio: "pipe", timeout: 15_000 });
+        } catch (ghErr) {
+          ui.warn(`[review] PR comment failed (permissions?): ${ghErr instanceof Error ? ghErr.message : ghErr}`);
+        }
 
+        // Merge or leave open based on verdict
+        try {
           if (report.verdict === "APPROVE") {
             revExec(`gh pr merge ${prNumber} --squash --delete-branch`, { cwd, stdio: "pipe", timeout: 30_000 });
             console.log(`\nPR #${prNumber} merged and branch deleted.`);
@@ -329,7 +351,7 @@ export async function handleReview(
             console.log(`\nPR #${prNumber} left open — verdict: NEEDS_CHANGES`);
           }
         } catch (ghErr) {
-          ui.warn(`[review] PR comment/merge failed: ${ghErr instanceof Error ? ghErr.message : ghErr}`);
+          ui.warn(`[review] PR merge failed: ${ghErr instanceof Error ? ghErr.message : ghErr}`);
         }
       }
     } catch {
