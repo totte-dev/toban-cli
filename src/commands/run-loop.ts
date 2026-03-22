@@ -28,6 +28,7 @@ import { trackRetry } from "../utils/retry-tracker.js";
 import { OpsRunner } from "../ops-runner.js";
 import { extractJsonObject } from "../utils/extract-json.js";
 import { ChannelMonitor } from "../channel-monitor.js";
+import { syncRuleTelemetry } from "../utils/telemetry-sync.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -586,6 +587,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   opsRunner.stop();
   peerTracker.stop();
   await eventEmitter.flush(); // Ensure all buffered events are sent before exit
+  await syncRuleTelemetry(api, cliArgs.apiUrl, cliArgs.apiKey, ctx.workingDir, sprintData?.sprint?.number);
   await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "Shut down" });
   ui.outro("Shutting down — goodbye");
 }
