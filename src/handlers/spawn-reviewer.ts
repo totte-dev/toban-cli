@@ -79,6 +79,7 @@ export async function handleSpawnReviewer(
           test_coverage: "not assessed",
           risks: `Diff is ${diffLineCount} lines. Task should be split into smaller subtasks for reliable review.`,
         }),
+        review_verdict: "NEEDS_CHANGES",
       } as Partial<Task>);
     } catch { /* non-fatal */ }
     return;
@@ -253,7 +254,13 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
   }
 
   ctx.reviewVerdict = verdict;
-  ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewComment });
+
+  // Persist normalized verdict to dedicated column for analytics
+  try {
+    await ctx.api.updateTask(ctx.task.id, { review_verdict: verdict } as Partial<Task>);
+  } catch { /* non-fatal — review_comment still has the data */ }
+
+  ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewComment, review_verdict: verdict });
   ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewComment);
   ui.info(`[${phase}] ${label}: verdict = ${verdict}`);
 }
