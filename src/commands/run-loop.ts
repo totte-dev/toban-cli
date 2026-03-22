@@ -312,7 +312,32 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           timestamp: new Date().toISOString(),
         });
       }
-      // Future: handle create_task, update_task actions
+      if (ca.action === "create_task" && ca.data) {
+        // Create a follow-up task from channel request/review
+        const sprintNum = (sprintData.sprint as Record<string, unknown>)?.number as number | undefined;
+        if (sprintNum != null) {
+          const owner = ca.data.target as string | undefined;
+          const title = `[channel] ${ca.message.type}: ${ca.message.content.slice(0, 80)}`;
+          try {
+            const headers = createAuthHeaders(cliArgs.apiKey);
+            const res = await fetch(`${cliArgs.apiUrl}/api/v1/tasks`, {
+              method: "POST", headers,
+              body: JSON.stringify({
+                title,
+                description: `Auto-created from channel message.\n\nFrom: ${ca.message.from}\nType: ${ca.message.type}\nTopic: ${ca.message.topic}\n\n${ca.message.content}`,
+                priority: ca.message.type === "review" ? "p1" : "p2",
+                owner: owner && owner !== "all" ? owner : "builder",
+                type: "chore",
+                sprint: sprintNum,
+              }),
+            });
+            if (!res.ok) throw new Error(`API ${res.status}`);
+            ui.step(`[channel] Created task from ${ca.message.type}: "${title.slice(0, 60)}..."`);
+          } catch (err) {
+            ui.warn(`[channel] Failed to create task: ${err}`);
+          }
+        }
+      }
     }
 
     // Only pick up tasks during active phase — don't start work during review/retro
