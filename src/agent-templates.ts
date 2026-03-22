@@ -20,6 +20,7 @@ import { handleSpawnReviewer } from "./handlers/spawn-reviewer.js";
 import { handleReviewChanges } from "./handlers/review-changes.js";
 import { handleInjectMemory, handleCollectMemory } from "./handlers/memory.js";
 import { handleFetchRecentChanges, handleRecordChanges } from "./handlers/context-sharing.js";
+import { handleRuleMatch } from "./handlers/rule-match.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,7 +29,7 @@ import { handleFetchRecentChanges, handleRecordChanges } from "./handlers/contex
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline" | "rule_match";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -88,6 +89,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "record_changes", when: "success", label: "Record change summary for other agents" },
       { type: "merge_pipeline", when: "success", label: "Merge, verify build, push" },
+      { type: "rule_match", when: "success", label: "Match diff against playbook rules" },
       { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for code review" },
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
@@ -547,6 +549,10 @@ export async function executeActions(
         }
         case "merge_pipeline": {
           await handleMergePipeline(action, ctx, phase);
+          break;
+        }
+        case "rule_match": {
+          await handleRuleMatch(action, ctx, phase);
           break;
         }
         default:
