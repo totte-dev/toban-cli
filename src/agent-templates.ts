@@ -7,21 +7,19 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
-import { checkDiffViolations, type GuardrailConfig } from "./utils/guardrail.js";
+import type { GuardrailConfig } from "./utils/guardrail.js";
 import { trackRetry } from "./utils/retry-tracker.js";
 import { handleGitMerge } from "./handlers/git-merge.js";
 import { handleGitPush } from "./handlers/git-push.js";
+import { handleMergePipeline } from "./handlers/merge-pipeline.js";
+import { handleVerifyBuild } from "./handlers/verify-build.js";
 import { handleSpawnReviewer } from "./handlers/spawn-reviewer.js";
 import { handleReviewChanges } from "./handlers/review-changes.js";
 import { handleInjectMemory, handleCollectMemory } from "./handlers/memory.js";
 import { handleFetchRecentChanges, handleRecordChanges } from "./handlers/context-sharing.js";
-import { resolveRepoRoot } from "./git-ops.js";
-import { getExecError } from "./utils/exec-error.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,7 +28,7 @@ import { getExecError } from "./utils/exec-error.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -89,9 +87,7 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
     post_actions: [
       { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "record_changes", when: "success", label: "Record change summary for other agents" },
-      { type: "git_merge", when: "success", label: "Merge branch to base" },
-      { type: "verify_build", when: "success", label: "Verify build and tests pass" },
-      { type: "git_push", when: "success", label: "Push main to remote" },
+      { type: "merge_pipeline", when: "success", label: "Merge, verify build, push" },
       { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for code review" },
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
@@ -546,111 +542,11 @@ export async function executeActions(
           break;
         }
         case "verify_build": {
-          const repoDir = resolveRepoRoot(ctx.config.workingDir);
-          const vbBuildCmd = ctx.config.buildCommand || "npm run build";
-          const vbTestCmd = ctx.config.testCommand || "npm test";
-          const vbTimeout = 180_000; // 3 minutes per command
-
-          // Revert merge on failure (runs before git_push, so no remote damage)
-          const revertMerge = () => {
-            try {
-              execSync("git reset --hard HEAD~1", { cwd: repoDir, stdio: "pipe", timeout: 10_000 });
-              ui.warn(`[${phase}] ${label}: reverted merge on main`);
-            } catch (revertErr) {
-              ui.error(`[${phase}] ${label}: failed to revert merge: ${revertErr}`);
-            }
-          };
-
-          // Layer 4: Pre-merge diff guardrail check
-          try {
-            const diffStat = execSync("git diff HEAD~1..HEAD --stat", { cwd: repoDir, stdio: "pipe", timeout: 10_000 }).toString();
-            const violations = checkDiffViolations(diffStat, ctx.config.guardrailConfig ?? null, ctx.config.autoMode ?? false);
-            if (violations.length > 0) {
-              ui.error(`[${phase}] ${label}: GUARDRAIL VIOLATION — ${violations.map((v) => v.operation).join("; ")}`);
-              ctx.exitCode = 1;
-              revertMerge();
-              ctx.taskLog?.event("guardrail_violation", { violations });
-              break;
-            }
-          } catch { /* diff check failed, continue with build */ }
-
-          // Install dependencies if package.json exists (needed after worktree merge back to main)
-          const pkgJsonPath = join(repoDir, "package.json");
-          if (existsSync(pkgJsonPath)) {
-            const lockfilePath = join(repoDir, "package-lock.json");
-            const installCmd = existsSync(lockfilePath) ? "npm ci" : "npm install";
-            ui.info(`[${phase}] ${label}: installing dependencies (${installCmd})...`);
-            try {
-              execSync(installCmd, { cwd: repoDir, stdio: "pipe", timeout: vbTimeout });
-              ui.info(`[${phase}] ${label}: dependencies installed`);
-            } catch (installErr) {
-              const detail = getExecError(installErr);
-              ui.error(`[${phase}] ${label}: INSTALL FAILED — ${detail.slice(0, 300)}`);
-              ctx.exitCode = 1;
-              revertMerge();
-              ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Install failed: ${detail.slice(0, 200)}` });
-              break;
-            }
-          }
-
-          ui.info(`[${phase}] ${label}: running build (${vbBuildCmd})...`);
-          try {
-            execSync(vbBuildCmd, { cwd: repoDir, stdio: "pipe", timeout: vbTimeout });
-            ui.info(`[${phase}] ${label}: build passed`);
-          } catch (buildErr) {
-            const detail = getExecError(buildErr);
-            ui.error(`[${phase}] ${label}: BUILD FAILED — ${detail.slice(0, 300)}`);
-            ctx.exitCode = 1;
-            revertMerge();
-            ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Build failed: ${detail.slice(0, 200)}` });
-            // Only record failure on first attempt to avoid retry noise
-            const { retryCount: buildRetry } = trackRetry(`build:${ctx.task.id}`);
-            if (buildRetry <= 1) {
-              ctx.api.recordFailure({
-                task_id: ctx.task.id,
-                failure_type: "verify_build",
-                summary: `Build failed: ${vbBuildCmd}\n${detail.slice(0, 500)}`,
-                agent_name: ctx.agentName,
-                sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
-              }).catch(() => { /* best-effort */ });
-            }
-            break;
-          }
-          // Skip test if test script doesn't exist in package.json
-          let hasTestScript = true;
-          if (vbTestCmd === "npm test" && existsSync(pkgJsonPath)) {
-            try {
-              const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
-              hasTestScript = !!(pkg.scripts?.test);
-            } catch { /* parse error, try running anyway */ }
-          }
-          if (!hasTestScript) {
-            ui.info(`[${phase}] ${label}: no test script in package.json — skipping tests`);
-          } else {
-          ui.info(`[${phase}] ${label}: running tests (${vbTestCmd})...`);
-          try {
-            execSync(vbTestCmd, { cwd: repoDir, stdio: "pipe", timeout: vbTimeout });
-            ui.info(`[${phase}] ${label}: tests passed`);
-          } catch (testErr) {
-            const detail = getExecError(testErr);
-            ui.error(`[${phase}] ${label}: TESTS FAILED — ${detail.slice(0, 300)}`);
-            ctx.exitCode = 1;
-            revertMerge();
-            ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Tests failed: ${detail.slice(0, 200)}` });
-            const { retryCount: testRetry } = trackRetry(`test:${ctx.task.id}`);
-            if (testRetry <= 1) {
-              ctx.api.recordFailure({
-                task_id: ctx.task.id,
-                failure_type: "verify_build",
-                summary: `Tests failed: ${vbTestCmd}\n${detail.slice(0, 500)}`,
-                agent_name: ctx.agentName,
-                sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
-              }).catch(() => { /* best-effort */ });
-            }
-            break;
-          }
-          } // end if (hasTestScript)
-          ui.info(`[${phase}] ${label}: all checks passed`);
+          await handleVerifyBuild(action, ctx, phase);
+          break;
+        }
+        case "merge_pipeline": {
+          await handleMergePipeline(action, ctx, phase);
           break;
         }
         default:
