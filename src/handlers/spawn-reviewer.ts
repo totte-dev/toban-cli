@@ -96,6 +96,17 @@ export async function handleSpawnReviewer(
     }
   }
 
+  // Re-fetch task to ensure we have the latest data (prevents wrong-task reference bug)
+  try {
+    const res = await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}`, {
+      headers: createAuthHeaders(ctx.config.apiKey),
+    });
+    if (res.ok) {
+      const freshTask = (await res.json()) as Task;
+      ctx.task = { ...ctx.task, ...freshTask };
+    }
+  } catch { /* use existing task data */ }
+
   // Build reviewer prompt
   const taskType = ctx.task.type as string || "implementation";
   const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");

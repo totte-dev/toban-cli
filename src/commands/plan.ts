@@ -64,7 +64,7 @@ Output ONLY valid JSON (no markdown):
     const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
     const result = execSync(
       `claude --print --model ${resolveModelForRole("strategist")} -p ${JSON.stringify(fullPrompt)}`,
-      { stdio: "pipe", timeout: 180_000, maxBuffer: 10 * 1024 * 1024 }
+      { stdio: "pipe", timeout: 180_000, maxBuffer: 50 * 1024 * 1024 }
     ).toString().trim();
 
     // Parse JSON from result

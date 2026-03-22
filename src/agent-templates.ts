@@ -564,13 +564,17 @@ export async function executeActions(
             ctx.exitCode = 1;
             revertMerge();
             ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Build failed: ${detail.slice(0, 200)}` });
-            ctx.api.recordFailure({
-              task_id: ctx.task.id,
-              failure_type: "verify_build",
-              summary: `Build failed: ${vbBuildCmd}\n${detail.slice(0, 500)}`,
-              agent_name: ctx.agentName,
-              sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
-            }).catch(() => { /* best-effort */ });
+            // Only record failure on first attempt to avoid retry noise
+            const { retryCount: buildRetry } = trackRetry(`build:${ctx.task.id}`);
+            if (buildRetry <= 1) {
+              ctx.api.recordFailure({
+                task_id: ctx.task.id,
+                failure_type: "verify_build",
+                summary: `Build failed: ${vbBuildCmd}\n${detail.slice(0, 500)}`,
+                agent_name: ctx.agentName,
+                sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+              }).catch(() => { /* best-effort */ });
+            }
             break;
           }
           ui.info(`[${phase}] ${label}: running tests (${vbTestCmd})...`);
@@ -583,13 +587,16 @@ export async function executeActions(
             ctx.exitCode = 1;
             revertMerge();
             ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Tests failed: ${detail.slice(0, 200)}` });
-            ctx.api.recordFailure({
-              task_id: ctx.task.id,
-              failure_type: "verify_build",
-              summary: `Tests failed: ${vbTestCmd}\n${detail.slice(0, 500)}`,
-              agent_name: ctx.agentName,
-              sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
-            }).catch(() => { /* best-effort */ });
+            const { retryCount: testRetry } = trackRetry(`test:${ctx.task.id}`);
+            if (testRetry <= 1) {
+              ctx.api.recordFailure({
+                task_id: ctx.task.id,
+                failure_type: "verify_build",
+                summary: `Tests failed: ${vbTestCmd}\n${detail.slice(0, 500)}`,
+                agent_name: ctx.agentName,
+                sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+              }).catch(() => { /* best-effort */ });
+            }
             break;
           }
           ui.info(`[${phase}] ${label}: all checks passed`);
