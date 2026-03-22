@@ -349,6 +349,10 @@ export interface ActionContext {
     buildCommand?: string | null;
     /** Workspace test command (null = auto-detect, fallback to npm test) */
     testCommand?: string | null;
+    /** Guardrail config from workspace settings */
+    guardrailConfig?: GuardrailConfig | null;
+    /** Whether running in auto mode */
+    autoMode?: boolean;
   };
   /** Agent exit code (only available in post_actions) */
   exitCode?: number | null;
@@ -558,9 +562,7 @@ export async function executeActions(
           // Layer 4: Pre-merge diff guardrail check
           try {
             const diffStat = execSync("git diff HEAD~1..HEAD --stat", { cwd: repoDir, stdio: "pipe", timeout: 10_000 }).toString();
-            const guardrailCfg = (ctx.config as Record<string, unknown>).guardrailConfig as GuardrailConfig | undefined;
-            const isAuto = (ctx.config as Record<string, unknown>).autoMode as boolean | undefined;
-            const violations = checkDiffViolations(diffStat, guardrailCfg ?? null, isAuto ?? false);
+            const violations = checkDiffViolations(diffStat, ctx.config.guardrailConfig ?? null, ctx.config.autoMode ?? false);
             if (violations.length > 0) {
               ui.error(`[${phase}] ${label}: GUARDRAIL VIOLATION — ${violations.map((v) => v.operation).join("; ")}`);
               ctx.exitCode = 1;

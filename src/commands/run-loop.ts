@@ -87,7 +87,11 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       ui.info(`[plan] Build: ${workspaceBuildCommand || "(auto)"}, Test: ${workspaceTestCommand || "(auto)"}`);
     }
     // Extract guardrail config
-    guardrailConfig = (limits as unknown as Record<string, unknown>).guardrail_config as GuardrailConfig | null;
+    // guardrail_config is returned by plan-limits but not in the typed PlanLimits interface
+    const limitsRaw = limits as unknown as Record<string, unknown>;
+    if (limitsRaw.guardrail_config && typeof limitsRaw.guardrail_config === "object") {
+      guardrailConfig = limitsRaw.guardrail_config as GuardrailConfig;
+    }
   } catch { /* non-fatal — use defaults */ }
 
   // Start stall detection for agent processes
@@ -402,7 +406,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       const actionCtx: ActionContext = {
         api, task, agentName, template: agentTemplate, taskLog,
-        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine, agentEngine: agentInfo?.engine, buildCommand: workspaceBuildCommand, testCommand: workspaceTestCommand },
+        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine, agentEngine: agentInfo?.engine, buildCommand: workspaceBuildCommand, testCommand: workspaceTestCommand, guardrailConfig, autoMode: cliArgs.autoMode },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({
             type: WS_MSG.DATA_UPDATE,
@@ -736,6 +740,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   }
 
   opsRunner.stop();
+  await eventEmitter.flush(); // Ensure all buffered events are sent before exit
   await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "Shut down" });
   ui.outro("Shutting down — goodbye");
 }
