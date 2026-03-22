@@ -39,7 +39,10 @@ Usage:
 
 Commands:
   init                  Initialize a new project (interactive setup)
-  start                 Start the agent runner loop
+  start                 Start the agent runner (background daemon)
+  start --foreground    Start in foreground (blocks terminal)
+  stop                  Stop the background runner
+  logs                  Show runner log output
   status                Show current sprint state + progress
   backlog               List backlog tasks by priority
   sprint create         Create a new sprint (--goal "...")
@@ -160,6 +163,15 @@ if (process.argv[2] === "peers") {
 } else if (process.argv[2] === "memory") {
   const { handleMemory } = await import("./commands/memory-cmd.js");
   handleMemory(process.argv.slice(3)).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
+} else if (process.argv[2] === "logs") {
+  const { existsSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { homedir } = await import("node:os");
+  const logFile = join(homedir(), ".toban", "logs", "runner.log");
+  if (!existsSync(logFile)) { console.log("No runner log found."); process.exit(0); }
+  const lines = readFileSync(logFile, "utf-8").split("\n");
+  const tail = parseInt(process.argv[3] || "50", 10);
+  console.log(lines.slice(-tail).join("\n"));
 } else if (process.argv[2] === "status") {
   const { handleStatus } = await import("./commands/status-cmd.js");
   const config = loadConfig(process.cwd());
@@ -203,24 +215,36 @@ if (cliArgs.command === "plan") {
     const { handleSprintCmd } = await import("./commands/sprint-cmd.js");
     handleSprintCmd(cliArgs.apiUrl, cliArgs.apiKey, rawArgs.slice(1)).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
   } else { ui.error(`Unknown sprint subcommand: ${rawArgs[1]}`); printUsage(); process.exit(1); }
+} else if (cliArgs.command === "stop") {
+  const { stopRunner } = await import("./commands/daemon.js");
+  stopRunner();
 } else if (cliArgs.command === "start") {
-  const shutdownState = createShutdownState();
-  const runner = new AgentRunner({
-    useDocker: !cliArgs.noDocker,
-    onStdout: (agentName, lines, stream) => {
-      shutdownState.activeWsServer?.broadcastStdout(agentName, lines, stream);
-    },
-    onActivity: (agentName, activity) => {
-      if (shutdownState.activeWsServer) {
-        shutdownState.activeWsServer.broadcast({
-          type: WS_MSG.AGENT_ACTIVITY, agent_name: agentName,
-          content: activity.summary, kind: activity.kind, tool: activity.tool, timestamp: activity.timestamp,
-        });
-      }
-    },
-  });
-  setupShutdownHandlers(runner, shutdownState);
-  runLoop(cliArgs, runner, shutdownState).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  const foreground = process.argv.includes("--foreground") || process.env.TOBAN_FOREGROUND === "1";
+
+  if (foreground) {
+    // Foreground mode: run directly (used by daemon subprocess)
+    const shutdownState = createShutdownState();
+    const runner = new AgentRunner({
+      useDocker: !cliArgs.noDocker,
+      onStdout: (agentName, lines, stream) => {
+        shutdownState.activeWsServer?.broadcastStdout(agentName, lines, stream);
+      },
+      onActivity: (agentName, activity) => {
+        if (shutdownState.activeWsServer) {
+          shutdownState.activeWsServer.broadcast({
+            type: WS_MSG.AGENT_ACTIVITY, agent_name: agentName,
+            content: activity.summary, kind: activity.kind, tool: activity.tool, timestamp: activity.timestamp,
+          });
+        }
+      },
+    });
+    setupShutdownHandlers(runner, shutdownState);
+    runLoop(cliArgs, runner, shutdownState).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  } else {
+    // Daemon mode: spawn background process
+    const { startDaemon } = await import("./commands/daemon.js");
+    startDaemon(process.argv);
+  }
 } else { ui.error(`Unknown command: ${cliArgs.command}`); printUsage(); process.exit(1); }
 
 } // end: non-init commands

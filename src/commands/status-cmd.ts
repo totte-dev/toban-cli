@@ -4,6 +4,7 @@
  */
 
 import { createApiClient } from "../api-client.js";
+import { getRunnerPid } from "./daemon.js";
 
 export async function handleStatus(apiUrl: string, apiKey: string): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
@@ -11,6 +12,10 @@ export async function handleStatus(apiUrl: string, apiKey: string): Promise<void
   // Fetch workspace info
   const ws = await api.fetchWorkspace();
   console.log(`Workspace: ${ws.name}`);
+
+  // Runner status
+  const pid = getRunnerPid();
+  console.log(`Runner: ${pid ? `active (PID ${pid})` : "not running"}`);
   console.log("");
 
   // Fetch sprints — find the latest active or most recent
