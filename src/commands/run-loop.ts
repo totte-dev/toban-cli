@@ -15,19 +15,15 @@ import { logError, CLI_ERR } from "../error-logger.js";
 import { ensureGitUser } from "../spawner.js";
 import { setup, type CliArgs } from "../setup.js";
 import * as ui from "../ui.js";
-import { execSync } from "node:child_process";
-import { join } from "node:path";
-import { existsSync } from "node:fs";
 import { fireRuleEvaluate } from "../rule-evaluate.js";
 import { SprintController } from "./sprint-controller.js";
+import { TaskScheduler } from "./task-scheduler.js";
 import type { ShutdownState } from "./shutdown.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { extractCompletionJson } from "../utils/completion-parser.js";
 import { buildGuardrailRules, checkDiffViolations, type GuardrailConfig } from "../utils/guardrail.js";
 import { createEventEmitter, type EventEmitter } from "../utils/event-emitter.js";
 import { TIMEOUTS, INTERVALS } from "../constants.js";
-import { shouldSplit, autoSplitTasks } from "../task-splitter.js";
-import { detectDependencies, sortByDependency } from "../task-dependency.js";
 import { trackRetry } from "../utils/retry-tracker.js";
 import { OpsRunner } from "../ops-runner.js";
 import { extractJsonObject } from "../utils/extract-json.js";
@@ -136,6 +132,20 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     autoTag: cliArgs.autoTag,
   });
 
+  // Task scheduler — filters, splits, orders, and manages concurrency safety
+  const taskScheduler = new TaskScheduler({
+    api,
+    apiUrl: cliArgs.apiUrl,
+    apiKey: cliArgs.apiKey,
+    agentName: cliArgs.agentName,
+    scheduler,
+    wsServer,
+    configuredBuilderConcurrency,
+    repos,
+    tobanHome,
+    mainGithubRepo: ctx.mainGithubRepo,
+  });
+
   // Start ops task runner (background, parallel to main loop)
   const opsRunner = new OpsRunner({
     apiUrl: cliArgs.apiUrl,
@@ -163,94 +173,14 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       continue;
     }
 
-    // Pick up in_progress tasks + auto-start todo tasks owned by agents
+    // Task scheduler: filter, split, dependency ordering, concurrency safety
     const allTasks = sprintData.tasks as Task[];
-    const agentRoles = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "qa"];
-    const todoForAgents = allTasks.filter((t) => t.status === "todo" && t.owner && agentRoles.includes(t.owner));
-
-    // Auto-split large tasks before transitioning to in_progress
-    const tasksToSplit = todoForAgents.filter((t) => shouldSplit(t, 8));
-    if (tasksToSplit.length > 0) {
-      const sprintNum = (sprintData.sprint as Record<string, unknown>).number as number;
-      const splitResults = await autoSplitTasks(tasksToSplit, sprintNum, {
-        minSp: 8,
-        apiUrl: cliArgs.apiUrl,
-        apiKey: cliArgs.apiKey,
-      });
-      const splitIds = new Set(splitResults.filter((r) => !r.skipped).map((r) => r.taskId));
-      for (const id of splitIds) {
-        wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: id, changes: { status: "blocked" }, timestamp: new Date().toISOString() });
-      }
-    }
-
-    // Auto-transition todo → in_progress for agent-owned tasks (skip split parents)
-    for (const t of todoForAgents) {
-      if ((t.status as string) === "blocked") continue; // already split
-      try {
-        await api.updateTask(t.id, { status: "in_progress" } as Partial<Task>);
-        t.status = "in_progress" as Task["status"];
-        ui.info(`[auto] ${t.owner}/${t.id.slice(0, 8)}: todo → in_progress`);
-        wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: t.id, changes: { status: "in_progress" }, timestamp: new Date().toISOString() });
-      } catch { /* non-fatal */ }
-    }
-
-    // Empty-repo safety: limit builders to 1 when repo is completely empty (0-1 commits)
-    // For repos with any meaningful content, task dependency detection handles ordering.
-    // Check the shared repo (where merges actually land) for accurate commit count.
-    if (repos.length > 0) {
-      const mainRepo = ctx.mainGithubRepo
-        ? repos.find((r) => r.repo_name === ctx.mainGithubRepo || r.repo_path.includes(ctx.mainGithubRepo!))
-        : null;
-      const targetRepo = mainRepo || repos[0];
-      // Check shared repo first (where merges land), fallback to manager's copy
-      const sharedRepoDir = join(tobanHome, "manager-repos", "shared", targetRepo.repo_name);
-      const managerRepoDir = join(tobanHome, cliArgs.agentName, targetRepo.repo_name);
-      const repoDir = existsSync(sharedRepoDir) ? sharedRepoDir : managerRepoDir;
-      try {
-        const commitCount = parseInt(
-          execSync("git rev-list --count HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(),
-          10
-        );
-        if (commitCount <= 1 && scheduler.getMaxConcurrency("builder") > 1) {
-          scheduler.reconfigure("builder", 1);
-          ui.info(`[safety] Repo has ${commitCount} commit(s) — limiting builders to 1 until first task completes`);
-        } else if (commitCount > 1 && scheduler.getMaxConcurrency("builder") < configuredBuilderConcurrency) {
-          scheduler.reconfigure("builder", configuredBuilderConcurrency);
-          ui.info(`[safety] Repo now has ${commitCount} commits — restoring builder concurrency to ${configuredBuilderConcurrency}`);
-        }
-      } catch { /* repo not cloned yet or no HEAD — skip check */ }
-    }
-
-    // Dependency-aware task ordering
-    const inProgressTasks = allTasks
-      .filter((t) => t.status === "in_progress" && t.owner !== "user");
-    const completedTaskIds = new Set(
-      allTasks.filter((t) => t.status === "done" || t.status === "review").map((t) => t.id)
-    );
-    const deps = detectDependencies(inProgressTasks);
-    const orderedTasks = sortByDependency(inProgressTasks, deps, completedTaskIds);
-
-    // Skip tasks whose dependencies are not yet complete
-    const todoTasks = orderedTasks.filter((t) => {
-      if (!t.parallelReady) {
-        ui.info(`[deps] ${t.id.slice(0, 8)}: waiting for ${t.dependsOn.map((d) => d.slice(0, 8)).join(", ")}`);
-        return false;
-      }
-      return true;
-    });
-
-    if (todoTasks.length === 0) {
-      const phase = sprintData.sprint?.status ?? "unknown";
-      const isIdle = phase === "review" || phase === "retrospective" || phase === "completed";
-      const waitMs = isIdle ? POLL_INTERVAL_MS * 4 : POLL_INTERVAL_MS;
-      await api.updateAgent({
-        name: cliArgs.agentName, status: "idle",
-        activity: isIdle ? `Sprint ${phase}, waiting` : "Waiting for tasks",
-      });
-      if (!isIdle && !wsServer?.hasClients) ui.info(`No tasks — polling again in ${waitMs / 1000}s`);
-      await sleep(waitMs);
+    const scheduleResult = await taskScheduler.getDispatchableTasks(allTasks, sprint?.status as string | undefined);
+    if (scheduleResult.status === "idle") {
+      await sleep(POLL_INTERVAL_MS * scheduleResult.waitMultiplier);
       continue;
     }
+    const todoTasks = scheduleResult.tasks;
 
     ui.tasksSummary(todoTasks.length);
 
