@@ -8,7 +8,7 @@
  * This runs synchronously in post-action (T1 tier, ~0ms).
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ApiClient } from "../api-client.js";
@@ -100,33 +100,48 @@ function matchText(
   }> = [];
 
   for (const matcher of matchers) {
-    let bestMatch: { confidence: number; matched_text: string } | null = null;
+    let longestMatch = "";
     let hitCount = 0;
 
     for (const pattern of matcher.patterns) {
       const m = text.match(pattern);
       if (m) {
         hitCount++;
-        if (!bestMatch || m[0].length > bestMatch.matched_text.length) {
-          bestMatch = {
-            confidence: Math.min(0.5 + hitCount * 0.1, 0.95),
-            matched_text: m[0].slice(0, 200),
-          };
+        if (m[0].length > longestMatch.length) {
+          longestMatch = m[0].slice(0, 200);
         }
       }
     }
 
     // Require at least 2 pattern hits to reduce false positives
-    if (bestMatch && hitCount >= 2) {
+    if (hitCount >= 2 && longestMatch) {
       matches.push({
         rule_id: matcher.rule_id,
         category: matcher.category,
-        ...bestMatch,
+        confidence: Math.min(0.5 + hitCount * 0.1, 0.95),
+        matched_text: longestMatch,
       });
     }
   }
 
   return matches.sort((a, b) => b.confidence - a.confidence);
+}
+
+// ---------------------------------------------------------------------------
+// Buffer rotation
+// ---------------------------------------------------------------------------
+
+function rotateBuffer(filePath: string, maxLines: number): void {
+  try {
+    if (!existsSync(filePath)) return;
+    const content = readFileSync(filePath, "utf-8");
+    const lines = content.split("\n").filter(Boolean);
+    if (lines.length > maxLines) {
+      // Keep the most recent entries
+      const trimmed = lines.slice(-maxLines);
+      writeFileSync(filePath, trimmed.join("\n") + "\n");
+    }
+  } catch { /* best-effort */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,13 +191,14 @@ export async function matchRulesLocally(
     sprint,
   }));
 
-  // Buffer to JSONL file
+  // Buffer to JSONL file (with rotation at 1000 lines)
   const bufferPath = getMatchBufferPath();
   for (const result of results) {
     try {
       appendFileSync(bufferPath, JSON.stringify(result) + "\n");
     } catch { /* best-effort */ }
   }
+  rotateBuffer(bufferPath, 1000);
 
   return results;
 }
