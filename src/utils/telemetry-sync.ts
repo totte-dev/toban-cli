@@ -22,7 +22,7 @@ interface RuleStats {
  * Detect project context from the working directory.
  * Returns a comma-separated string of detected technologies.
  */
-function detectContext(workingDir: string): string {
+export function detectContext(workingDir: string): string {
   const signals: string[] = [];
   try {
     const pkgPath = `${workingDir}/package.json`;
@@ -34,6 +34,8 @@ function detectContext(workingDir: string): string {
       if (allDeps.next) signals.push("nextjs");
       if (allDeps.vue) signals.push("vue");
       if (allDeps.express || allDeps.hono || allDeps.fastify) signals.push("node-api");
+      if (allDeps.vitest || allDeps.jest) signals.push("testing");
+      if (allDeps.eslint) signals.push("eslint");
       if (!signals.includes("typescript")) signals.push("javascript");
     }
     if (existsSync(`${workingDir}/requirements.txt`) || existsSync(`${workingDir}/pyproject.toml`)) {
@@ -92,9 +94,18 @@ export async function syncRuleTelemetry(
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     };
-    const res = await fetch(`${apiUrl}/api/v1/rule-evaluations/match-log?limit=200`, { headers });
+    const matchLogController = new AbortController();
+    const matchLogTimeout = setTimeout(() => matchLogController.abort(), 10_000);
+    const res = await fetch(`${apiUrl}/api/v1/rule-evaluations/match-log?limit=200`, {
+      headers,
+      signal: matchLogController.signal,
+    });
+    clearTimeout(matchLogTimeout);
     if (res.ok) {
       const matchLog = (await res.json()) as Array<{ rule_id: string; feedback: string | null }>;
+      if (matchLog.length >= 200) {
+        ui.warn("[telemetry] match-log truncated at 200 entries — confirm/reject counts may be incomplete");
+      }
       for (const entry of matchLog) {
         if (!entry.feedback || !entry.rule_id) continue;
         const existing = statsMap.get(entry.rule_id) || { confirms: 0, rejects: 0, autoHits: 0 };
@@ -121,21 +132,25 @@ export async function syncRuleTelemetry(
 
   const contextVector = detectContext(workingDir);
 
-  // Send to API
+  // Send to API (with 10s timeout to avoid blocking shutdown)
   try {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10_000);
     const res = await fetch(`${apiUrl}/api/v1/telemetry/rules`, {
       method: "POST",
       headers,
+      signal: controller.signal,
       body: JSON.stringify({
         entries: telemetryEntries,
         context_vector: contextVector || undefined,
         sprint,
       }),
     });
+    clearTimeout(timeoutId);
 
     if (res.ok) {
       ui.info(`[telemetry] Synced ${telemetryEntries.length} rule stats`);
