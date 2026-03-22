@@ -109,10 +109,11 @@ describe("WsChatServer review state tracking", () => {
 
       await new Promise((r) => setTimeout(r, 50));
 
-      const reviewMsgs = messages.filter((m) => m.type === "review_update");
+      const reviewMsgs = messages.filter((m) => m.type === "review.update" || m.legacy_type === "review_update");
       expect(reviewMsgs).toHaveLength(1);
       expect(reviewMsgs[0].task_id).toBe("task-100");
-      expect(reviewMsgs[0].phase).toBe("started");
+      const data0 = reviewMsgs[0].data as Record<string, unknown>;
+      expect(data0.phase).toBe("started");
 
       client.close();
     } finally {
@@ -158,17 +159,19 @@ describe("WsChatServer review state tracking", () => {
       const { ws: client2, messages: messages2 } = await connectClient(port);
       await new Promise((r) => setTimeout(r, 100));
 
-      const reviewMsgs = messages2.filter((m) => m.type === "review_update");
+      const reviewMsgs = messages2.filter((m) => m.type === "review.update" || m.legacy_type === "review_update");
       expect(reviewMsgs).toHaveLength(2);
 
       const task200 = reviewMsgs.find((m) => m.task_id === "task-200");
       expect(task200).toBeDefined();
-      expect(task200!.phase).toBe("completed");
-      expect(task200!.review_comment).toBe('{"verdict":"APPROVE"}');
+      const data200 = task200!.data as Record<string, unknown>;
+      expect(data200.phase).toBe("completed");
+      expect(data200.review_comment).toBe('{"verdict":"APPROVE"}');
 
       const task300 = reviewMsgs.find((m) => m.task_id === "task-300");
       expect(task300).toBeDefined();
-      expect(task300!.phase).toBe("analyzing");
+      const data300 = task300!.data as Record<string, unknown>;
+      expect(data300.phase).toBe("analyzing");
 
       client1.close();
       client2.close();
@@ -211,7 +214,7 @@ describe("WsChatServer review state tracking", () => {
       const { ws: client2, messages: messages2 } = await connectClient(port);
       await new Promise((r) => setTimeout(r, 100));
 
-      const reviewMsgs = messages2.filter((m) => m.type === "review_update");
+      const reviewMsgs = messages2.filter((m) => m.type === "review.update" || m.legacy_type === "review_update");
       expect(reviewMsgs).toHaveLength(1);
       expect(reviewMsgs[0].task_id).toBe("task-active");
 
@@ -243,9 +246,9 @@ describe("WsChatServer review state tracking", () => {
 
       await new Promise((r) => setTimeout(r, 50));
 
-      const reviewMsgs = messages.filter((m) => m.type === "review_update");
+      const reviewMsgs = messages.filter((m) => m.type === "review.update" || m.legacy_type === "review_update");
       expect(reviewMsgs).toHaveLength(3);
-      expect(reviewMsgs.map((m) => m.phase)).toEqual(["started", "analyzing", "completed"]);
+      expect(reviewMsgs.map((m) => (m.data as Record<string, unknown>).phase)).toEqual(["started", "analyzing", "completed"]);
 
       client.close();
     } finally {

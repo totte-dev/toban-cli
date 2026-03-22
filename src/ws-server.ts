@@ -13,7 +13,7 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { createAuthHeaders } from "./api-client.js";
-import { WS_MSG, type WsMsgType } from "./ws-types.js";
+import { WS_MSG, type WsMsgType, wrapLegacyMessage, type WsTobanEvent } from "./ws-types.js";
 import * as ui from "./ui.js";
 
 /** Message format over WebSocket */
@@ -99,6 +99,8 @@ export class WsChatServer {
   private chatProcessing = false;
   /** Latest review state per task for re-sending on reconnect */
   private reviewStates = new Map<string, ReviewState>();
+  /** Current sprint number for event context */
+  currentSprint?: number;
 
   /** Whether any browser clients are connected */
   get hasClients(): boolean {
@@ -252,7 +254,22 @@ export class WsChatServer {
       });
     }
 
-    const data = JSON.stringify(message);
+    // Wrap legacy message in TobanEvent envelope
+    const { type: legacyType, ...fields } = message;
+    const envelope = wrapLegacyMessage(legacyType, fields, { sprint: this.currentSprint });
+    const data = JSON.stringify(envelope);
+    for (const client of this.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data);
+      }
+    }
+  }
+
+  /**
+   * Broadcast a TobanEvent directly (new format, no wrapping needed).
+   */
+  broadcastEvent(event: WsTobanEvent): void {
+    const data = JSON.stringify(event);
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
@@ -294,14 +311,14 @@ export class WsChatServer {
         continue;
       }
 
-      ws.send(JSON.stringify({
-        type: WS_MSG.REVIEW_UPDATE,
+      const envelope = wrapLegacyMessage(WS_MSG.REVIEW_UPDATE, {
         task_id: state.task_id,
         agent_name: state.agent_name,
         phase: state.phase,
         review_comment: state.review_comment,
         timestamp: state.timestamp,
-      }));
+      }, { sprint: this.currentSprint });
+      ws.send(JSON.stringify(envelope));
       sent++;
     }
 
