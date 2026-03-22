@@ -76,7 +76,7 @@ export async function handleVerifyBuild(
     ctx.exitCode = 1;
     revertMerge();
     ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Build failed: ${detail.slice(0, 200)}` });
-    const { retryCount: buildRetry } = trackRetry(`build:${ctx.task.id}`);
+    const { retryCount: buildRetry, maxed: buildMaxed } = trackRetry(`build:${ctx.task.id}`);
     if (buildRetry <= 1) {
       ctx.api.recordFailure({
         task_id: ctx.task.id,
@@ -85,6 +85,10 @@ export async function handleVerifyBuild(
         agent_name: ctx.agentName,
         sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
       }).catch(() => { /* best-effort */ });
+    }
+    if (buildMaxed) {
+      ui.error(`[${phase}] ${label}: build failed ${buildRetry} times — blocking task`);
+      ctx.api.updateTask({ id: ctx.task.id, status: "blocked", review_comment: `Build failed ${buildRetry} times: ${detail.slice(0, 300)}` }).catch(() => {});
     }
     return;
   }
@@ -111,7 +115,7 @@ export async function handleVerifyBuild(
       ctx.exitCode = 1;
       revertMerge();
       ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Tests failed: ${detail.slice(0, 200)}` });
-      const { retryCount: testRetry } = trackRetry(`test:${ctx.task.id}`);
+      const { retryCount: testRetry, maxed: testMaxed } = trackRetry(`test:${ctx.task.id}`);
       if (testRetry <= 1) {
         ctx.api.recordFailure({
           task_id: ctx.task.id,
@@ -120,6 +124,10 @@ export async function handleVerifyBuild(
           agent_name: ctx.agentName,
           sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
         }).catch(() => { /* best-effort */ });
+      }
+      if (testMaxed) {
+        ui.error(`[${phase}] ${label}: tests failed ${testRetry} times — blocking task`);
+        ctx.api.updateTask({ id: ctx.task.id, status: "blocked", review_comment: `Tests failed ${testRetry} times: ${detail.slice(0, 300)}` }).catch(() => {});
       }
       return;
     }
