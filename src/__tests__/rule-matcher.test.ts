@@ -86,3 +86,50 @@ describe("matchText", () => {
     }
   });
 });
+
+describe("anti-pattern filtering", () => {
+  it("removes patterns matching anti-pattern tokens", () => {
+    const matchers = _buildMatchers([
+      { id: "r1", category: "security", title: "SQL Injection Prevention", content: "Always use parameterized queries to prevent attacks", tags: null },
+    ]);
+
+    // Before filtering: should have patterns
+    const originalCount = matchers[0].patterns.length;
+    expect(originalCount).toBeGreaterThan(0);
+
+    // Simulate anti-pattern filtering (as done in matchRulesLocally)
+    const antiPatterns: Record<string, string[]> = {
+      r1: ["injection", "prevention"],
+    };
+
+    const filtered = matchers.map((m) => {
+      const excluded = antiPatterns[m.rule_id];
+      if (!excluded || excluded.length === 0) return m;
+      const excludeSet = new Set(excluded.map((t) => t.toLowerCase()));
+      return {
+        ...m,
+        patterns: m.patterns.filter((p) => !excludeSet.has(p.source.toLowerCase())),
+      };
+    });
+
+    // After filtering: should have fewer patterns
+    expect(filtered[0].patterns.length).toBeLessThan(originalCount);
+  });
+
+  it("does not filter patterns for rules without anti-patterns", () => {
+    const matchers = _buildMatchers([
+      { id: "r2", category: "quality", title: "Error Handling", content: "Catch exceptions and provide meaningful error messages", tags: null },
+    ]);
+    const originalCount = matchers[0].patterns.length;
+
+    const antiPatterns: Record<string, string[]> = {};
+    const filtered = matchers.map((m) => {
+      const excluded = antiPatterns[m.rule_id];
+      if (!excluded || excluded.length === 0) return m;
+      const excludeSet = new Set(excluded.map((t) => t.toLowerCase()));
+      return { ...m, patterns: m.patterns.filter((p) => !excludeSet.has(p.source.toLowerCase())) };
+    });
+
+    expect(filtered[0].patterns.length).toBe(originalCount);
+  });
+});
