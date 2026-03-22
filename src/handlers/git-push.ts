@@ -4,10 +4,12 @@
  */
 
 import { execSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../error-logger.js";
-import { resolveRepoRoot } from "../git-ops.js";
+import { resolveRepoRoot, setupGitCredentialHelper, cleanRepoAuth } from "../git-ops.js";
 
 export async function handleGitPush(
   action: TemplateAction,
@@ -19,6 +21,13 @@ export async function handleGitPush(
   const pushExec = execSync;
   // Resolve repo root (workingDir may be a worktree)
   const pushRepoDir = resolveRepoRoot(ctx.config.workingDir);
+
+  // Refresh credential helper with current API key before push
+  // (prevents stale tokens from previous sessions)
+  const tobanHome = join(homedir(), ".toban");
+  const helperPath = setupGitCredentialHelper(tobanHome, ctx.config.apiUrl, ctx.config.apiKey);
+  cleanRepoAuth(pushRepoDir, helperPath);
+
   // Stash any unstaged changes (e.g. inject_memory's CLAUDE.md modifications)
   try {
     pushExec("git stash --include-untracked", { cwd: pushRepoDir, stdio: "pipe" });
