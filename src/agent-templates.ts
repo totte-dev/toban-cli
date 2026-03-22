@@ -10,6 +10,7 @@ import { execSync } from "node:child_process";
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
+import { checkDiffViolations, type GuardrailConfig } from "./utils/guardrail.js";
 import { trackRetry } from "./utils/retry-tracker.js";
 import { handleGitMerge } from "./handlers/git-merge.js";
 import { handleGitPush } from "./handlers/git-push.js";
@@ -553,6 +554,21 @@ export async function executeActions(
               ui.error(`[${phase}] ${label}: failed to revert merge: ${revertErr}`);
             }
           };
+
+          // Layer 4: Pre-merge diff guardrail check
+          try {
+            const diffStat = execSync("git diff HEAD~1..HEAD --stat", { cwd: repoDir, stdio: "pipe", timeout: 10_000 }).toString();
+            const guardrailCfg = (ctx.config as Record<string, unknown>).guardrailConfig as GuardrailConfig | undefined;
+            const isAuto = (ctx.config as Record<string, unknown>).autoMode as boolean | undefined;
+            const violations = checkDiffViolations(diffStat, guardrailCfg ?? null, isAuto ?? false);
+            if (violations.length > 0) {
+              ui.error(`[${phase}] ${label}: GUARDRAIL VIOLATION — ${violations.map((v) => v.operation).join("; ")}`);
+              ctx.exitCode = 1;
+              revertMerge();
+              ctx.taskLog?.event("guardrail_violation", { violations });
+              break;
+            }
+          } catch { /* diff check failed, continue with build */ }
 
           ui.info(`[${phase}] ${label}: running build (${vbBuildCmd})...`);
           try {

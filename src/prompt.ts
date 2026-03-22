@@ -48,6 +48,8 @@ export interface PromptContext {
   pastFailures?: Array<{ summary: string; failure_type: string; agent_name: string | null }>;
   /** Previous review comment from a failed attempt (injected on retry) */
   previousReview?: string;
+  /** Guardrail rules to inject (from buildGuardrailRules) */
+  guardrailRules?: string[];
 }
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -206,9 +208,15 @@ export function buildAgentPrompt(ctx: PromptContext): string {
     completionInstructions];
   const fixedCost = fixedParts.reduce((sum, p) => sum + estimateTokens(p), 0);
 
+  // Guardrail rules block
+  const guardrailBlock = ctx.guardrailRules?.length
+    ? `\n## Guardrail Rules (MANDATORY)\n${ctx.guardrailRules.map((r) => `- ${r}`).join("\n")}\n`
+    : "";
+
   // Variable sections in priority order (highest first, lowest dropped first)
   const variableSections = [
     securityRules,
+    guardrailBlock,
     playbookBlock,
     failuresBlock,
     specBlock,

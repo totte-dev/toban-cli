@@ -70,10 +70,11 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(0);
-    expect(execSyncMock).toHaveBeenCalledTimes(2);
-    // First call = build, second = test
-    expect(execSyncMock.mock.calls[0][0]).toBe("npm run build");
-    expect(execSyncMock.mock.calls[1][0]).toBe("npm test");
+    expect(execSyncMock).toHaveBeenCalledTimes(3);
+    // First call = guardrail diff check, second = build, third = test
+    expect(execSyncMock.mock.calls[0][0]).toContain("git diff");
+    expect(execSyncMock.mock.calls[1][0]).toBe("npm run build");
+    expect(execSyncMock.mock.calls[2][0]).toBe("npm test");
     expect(ctx.api.recordFailure).not.toHaveBeenCalled();
   });
 
@@ -93,8 +94,8 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(0);
-    expect(execSyncMock.mock.calls[0][0]).toBe("make build");
-    expect(execSyncMock.mock.calls[1][0]).toBe("make test");
+    expect(execSyncMock.mock.calls[1][0]).toBe("make build");
+    expect(execSyncMock.mock.calls[2][0]).toBe("make test");
   });
 
   it("sets exitCode=1 and records failure when build fails", async () => {
@@ -112,9 +113,9 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(1);
-    // Build (1) + git reset to revert merge (2), test was skipped
-    expect(execSyncMock).toHaveBeenCalledTimes(2);
-    expect(execSyncMock.mock.calls[1][0]).toContain("git reset --hard");
+    // Diff check (1) + Build (2) + git reset to revert merge (3), test was skipped
+    expect(execSyncMock).toHaveBeenCalledTimes(3);
+    expect(execSyncMock.mock.calls[2][0]).toContain("git reset --hard");
     expect(ctx.api.recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         task_id: "task-123",
@@ -139,9 +140,9 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(1);
-    // Build (1) + test (2) + git reset to revert merge (3)
-    expect(execSyncMock).toHaveBeenCalledTimes(3);
-    expect(execSyncMock.mock.calls[2][0]).toContain("git reset --hard");
+    // Diff check (1) + Build (2) + test (3) + git reset to revert merge (4)
+    expect(execSyncMock).toHaveBeenCalledTimes(4);
+    expect(execSyncMock.mock.calls[3][0]).toContain("git reset --hard");
     expect(ctx.api.recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         failure_type: "verify_build",

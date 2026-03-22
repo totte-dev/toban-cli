@@ -21,6 +21,8 @@ import { fireRuleEvaluate } from "../rule-evaluate.js";
 import type { ShutdownState } from "./shutdown.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { extractCompletionJson } from "../utils/completion-parser.js";
+import { buildGuardrailRules, checkDiffViolations, type GuardrailConfig } from "../utils/guardrail.js";
+import { createEventEmitter, type EventEmitter } from "../utils/event-emitter.js";
 import { TIMEOUTS, INTERVALS } from "../constants.js";
 import { shouldSplit, autoSplitTasks } from "../task-splitter.js";
 import { detectDependencies, sortByDependency } from "../task-dependency.js";
@@ -58,6 +60,17 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   // Fetch plan limits and reconfigure scheduler
   let workspaceBuildCommand: string | null = null;
   let workspaceTestCommand: string | null = null;
+  let guardrailConfig: GuardrailConfig | null = null;
+
+  // Create event emitter for recording lifecycle events
+  const sprintNum = sprintData?.sprint?.number as number | undefined;
+  const eventEmitter: EventEmitter = createEventEmitter(api, sprintNum);
+
+  // Set currentSprint on WS server for envelope context
+  if (wsServer && sprintNum != null) {
+    wsServer.currentSprint = sprintNum;
+  }
+
   try {
     const limits = await api.fetchPlanLimits();
     scheduler.reconfigure("builder", limits.max_builders);
@@ -73,6 +86,8 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     if (workspaceBuildCommand || workspaceTestCommand) {
       ui.info(`[plan] Build: ${workspaceBuildCommand || "(auto)"}, Test: ${workspaceTestCommand || "(auto)"}`);
     }
+    // Extract guardrail config
+    guardrailConfig = (limits as unknown as Record<string, unknown>).guardrail_config as GuardrailConfig | null;
   } catch { /* non-fatal — use defaults */ }
 
   // Start stall detection for agent processes
@@ -463,6 +478,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         apiDocs: apiDocs || undefined, engineHint: getEngine(cliArgs.engine).promptHint,
         pastFailures: pastFailures.length > 0 ? pastFailures : undefined,
         previousReview,
+        guardrailRules: buildGuardrailRules(guardrailConfig, cliArgs.autoMode),
       });
 
       try {
@@ -507,6 +523,9 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         const capturedSlotName = slotName;
         const capturedSprintData = sprintData;
 
+        // Record agent spawn event
+        eventEmitter.agentSpawned(agentName, task.id, { role: agentRole, model: agentConfig.model });
+
         await runner.spawn(agentConfig, (runningAgent) => {
           // --- Completion handler: runs when agent process exits ---
           try { messagePoller.stop(); } catch { /* non-fatal */ }
@@ -515,6 +534,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           const succeeded = runningAgent.status === "completed";
           const wasStalled = runningAgent.status === "failed" && runningAgent.stderr.some((l) => l.includes("stall detected"));
           try { ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`); } catch { /* non-fatal */ }
+
+          // Record agent completion/failure event
+          if (succeeded) {
+            eventEmitter.agentCompleted(agentName, task.id, { role: agentRole, exit_code: exitCode });
+          } else {
+            eventEmitter.agentFailed(agentName, task.id, { role: agentRole, exit_code: exitCode, stalled: wasStalled });
+          }
 
           // Record stall kills to Failure DB for visibility
           if (wasStalled) {
