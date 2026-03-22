@@ -18,8 +18,8 @@ import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { handlePropose } from "./propose.js";
 import { fireRuleEvaluate } from "../rule-evaluate.js";
+import { SprintController } from "./sprint-controller.js";
 import type { ShutdownState } from "./shutdown.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { extractCompletionJson } from "../utils/completion-parser.js";
@@ -122,22 +122,19 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   // Channel monitor: watches for actionable messages (blockers, requests, reviews)
   const channelMonitor = new ChannelMonitor();
 
-  // Auto mode state
-  let autoModeStartedAt: number | null = null;
-  let autoModeSprintCount = 0;
-  const autoModeMaxSprints = cliArgs.maxSprints ?? 10;
-  const autoModeMaxHours = cliArgs.maxHours ?? 8;
-
-  if (cliArgs.autoMode) {
-    autoModeStartedAt = Date.now();
-    ui.info(`[auto-mode] Enabled. Max sprints: ${autoModeMaxSprints}, Max hours: ${autoModeMaxHours}`);
-    // Create checkpoint tag
-    try {
-      const tagName = `auto-start-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
-      execSync(`git tag "${tagName}"`, { stdio: "pipe" });
-      ui.info(`[auto-mode] Checkpoint tag: ${tagName}`);
-    } catch { /* non-fatal */ }
-  }
+  // Sprint controller — handles phase transitions, auto-mode, timebox, channel actions
+  const sprintController = new SprintController({
+    apiUrl: cliArgs.apiUrl,
+    apiKey: cliArgs.apiKey,
+    wsServer: wsServer,
+    channelMonitor,
+    autoMode: {
+      enabled: !!cliArgs.autoMode,
+      maxSprints: cliArgs.maxSprints ?? 10,
+      maxHours: cliArgs.maxHours ?? 8,
+    },
+    autoTag: cliArgs.autoTag,
+  });
 
   // Start ops task runner (background, parallel to main loop)
   const opsRunner = new OpsRunner({
@@ -157,191 +154,11 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       continue;
     }
 
-    // Auto-mode: check stop conditions
-    if (cliArgs.autoMode && autoModeStartedAt) {
-      const hoursElapsed = (Date.now() - autoModeStartedAt) / (1000 * 60 * 60);
-      if (hoursElapsed >= autoModeMaxHours) {
-        ui.info(`[auto-mode] Time limit reached (${autoModeMaxHours}h). Stopping.`);
-        break;
-      }
-      if (autoModeSprintCount >= autoModeMaxSprints) {
-        ui.info(`[auto-mode] Sprint limit reached (${autoModeMaxSprints}). Stopping.`);
-        break;
-      }
-    }
-
-    // Wait for sprint to be created (Setup not completed yet)
-    if (!sprintData.sprint) {
-      ui.info("No active sprint — waiting for project setup to complete...");
-      await sleep(POLL_INTERVAL_MS);
-      continue;
-    }
-
-    // Auto-tag on sprint completion (opt-in via workspace setting or CLI flag)
+    // Sprint controller: phase transitions, auto-mode, timebox, channel messages
     const sprint = sprintData.sprint as Record<string, unknown> | undefined;
-    if (sprint?.status === "completed" && cliArgs.autoTag) {
-      const tagName = `sprint-${sprint.number}`;
-      try {
-        const existing = execSync(`git tag -l "${tagName}"`, { stdio: "pipe" }).toString().trim();
-        if (!existing) {
-          execSync(`git tag "${tagName}"`, { stdio: "pipe" });
-          try { execSync(`git push origin "${tagName}"`, { stdio: "pipe" }); } catch { /* push may fail */ }
-          ui.step(`[sprint] Tagged ${tagName}`);
-        }
-      } catch { /* non-fatal */ }
-    }
-
-    // Auto-run Strategist proposals when sprint enters retrospective (once only)
-    if (sprint?.status === "retrospective") {
-      try {
-        const headers = createAuthHeaders(cliArgs.apiKey);
-        const plansRes = await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}/plan`, { headers });
-        if (plansRes.ok) {
-          const plan = (await plansRes.json()) as { status: string; id: string };
-          if (plan.status === "generating") {
-            ui.info("[strategist] Sprint entered retrospective — generating improvement proposals...");
-            // Mark as in-progress immediately to prevent re-trigger on next poll
-            try {
-              await api.updateAgent({ name: "strategist", status: "working", activity: "Generating proposals..." });
-            } catch { /* non-fatal */ }
-
-            let success = false;
-            try {
-              await handlePropose(cliArgs.apiUrl, cliArgs.apiKey);
-              success = true;
-            } catch (err) {
-              ui.warn(`[strategist] Proposal generation failed: ${err}`);
-            }
-
-            // Always overwrite generating plan to prevent infinite loop
-            const planSummary = success
-              ? "Proposals generated — review in Backlog > Proposals"
-              : "Proposal generation failed";
-            try {
-              await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}/plan`, {
-                method: "POST", headers,
-                body: JSON.stringify({ summary: planSummary, tasks: [{ id: "done", title: planSummary, reason: "" }], total_sp: 0 }),
-              });
-            } catch {
-              // If API is unreachable, update DB directly won't work — log and move on
-              ui.warn("[strategist] Could not update plan status — will retry next poll");
-            }
-          }
-        }
-      } catch { /* non-fatal */ }
-    }
-
-    // Timebox: auto-transition to review if deadline has passed
-    if (sprint?.status === "active" && sprint?.deadline) {
-      const deadline = new Date(sprint.deadline as string).getTime();
-      if (Date.now() > deadline) {
-        ui.warn(`[timebox] Sprint deadline passed — transitioning to review`);
-        try {
-          await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}`, {
-            method: "PATCH",
-            headers: createAuthHeaders(cliArgs.apiKey),
-            body: JSON.stringify({ status: "review" }),
-          });
-          wsServer?.broadcast({ type: "data_update" as const, entity: "sprint", task_id: String(sprint.number), changes: { status: "review" }, timestamp: new Date().toISOString() });
-        } catch { /* non-fatal */ }
-        await sleep(POLL_INTERVAL_MS);
-        continue;
-      }
-    }
-
-    // Auto-mode: handle phase transitions automatically
-    if (cliArgs.autoMode && sprint) {
-      const headers = createAuthHeaders(cliArgs.apiKey);
-
-      // Review → auto-accept → Retro
-      if (sprint.status === "review") {
-        ui.info("[auto-mode] Review phase — auto-accepting Sprint");
-        try {
-          await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}`, {
-            method: "PATCH", headers,
-            body: JSON.stringify({ status: "retrospective" }),
-          });
-        } catch { /* non-fatal */ }
-        await sleep(POLL_INTERVAL_MS);
-        continue;
-      }
-
-      // Completed → create next sprint and continue
-      if (sprint.status === "completed") {
-        autoModeSprintCount++;
-        const nextNumber = (sprint.number as number) + 1;
-
-        // Check backlog for remaining tasks
-        try {
-          const backlogRes = await fetch(`${cliArgs.apiUrl}/api/v1/tasks?sprint=-1&limit=1`, { headers });
-          if (backlogRes.ok) {
-            const backlog = (await backlogRes.json()) as unknown[];
-            if (Array.isArray(backlog) && backlog.length === 0) {
-              ui.info("[auto-mode] Backlog empty. Stopping.");
-              break;
-            }
-          }
-        } catch { /* non-fatal */ }
-
-        ui.info(`[auto-mode] Starting Sprint #${nextNumber} (auto ${autoModeSprintCount}/${autoModeMaxSprints})`);
-        try {
-          await fetch(`${cliArgs.apiUrl}/api/v1/sprints`, {
-            method: "POST", headers,
-            body: JSON.stringify({ number: nextNumber, status: "active", goal: `Auto Sprint #${nextNumber}` }),
-          });
-          // Tag for rollback
-          try {
-            execSync(`git tag "sprint-${nextNumber}-auto"`, { stdio: "pipe" });
-          } catch { /* tag may already exist */ }
-        } catch (err) {
-          ui.warn(`[auto-mode] Failed to create Sprint #${nextNumber}: ${err}`);
-        }
-        await sleep(POLL_INTERVAL_MS);
-        continue;
-      }
-    }
-
-    // Process channel messages — detect blockers, requests, review feedback
-    const channelActions = channelMonitor.processNewMessages();
-    for (const ca of channelActions) {
-      if (ca.action === "notify") {
-        // Broadcast blocker to dashboard
-        wsServer?.broadcast({
-          type: WS_MSG.CHANNEL_MESSAGE,
-          messages: [{ from: ca.message.from, type: ca.message.type, topic: ca.message.topic, text: ca.message.content, ts: ca.message.ts }],
-          timestamp: new Date().toISOString(),
-        });
-      }
-      if (ca.action === "create_task" && ca.data) {
-        // Create a follow-up task from channel request/review
-        const sprintNum = (sprintData.sprint as Record<string, unknown>)?.number as number | undefined;
-        if (sprintNum != null) {
-          const owner = ca.data.target as string | undefined;
-          const title = `[channel] ${ca.message.type}: ${ca.message.content.slice(0, 80)}`;
-          try {
-            const headers = createAuthHeaders(cliArgs.apiKey);
-            const res = await fetch(`${cliArgs.apiUrl}/api/v1/tasks`, {
-              method: "POST", headers,
-              body: JSON.stringify({
-                title,
-                description: `Auto-created from channel message.\n\nFrom: ${ca.message.from}\nType: ${ca.message.type}\nTopic: ${ca.message.topic}\n\n${ca.message.content}`,
-                priority: ca.message.type === "review" ? "p1" : "p2",
-                owner: owner && owner !== "all" ? owner : "builder",
-                type: "chore",
-                sprint: sprintNum,
-              }),
-            });
-            if (!res.ok) throw new Error(`API ${res.status}`);
-            ui.step(`[channel] Created task from ${ca.message.type}: "${title.slice(0, 60)}..."`);
-          } catch (err) {
-            ui.warn(`[channel] Failed to create task: ${err}`);
-          }
-        }
-      }
-    }
-
-    // Only pick up tasks during active phase — don't start work during review/retro
-    if (sprint?.status !== "active") {
+    const tickResult = await sprintController.tick(sprint);
+    if (tickResult.action === "stop") break;
+    if (tickResult.action === "wait") {
       await sleep(POLL_INTERVAL_MS);
       continue;
     }
