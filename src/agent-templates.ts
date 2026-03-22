@@ -107,7 +107,17 @@ Do NOT call curl or any API endpoints directly — the CLI handles all API commu
 When completing a task:
 1. Commit your changes: git add -A && git commit -m "<message>"
 2. Output a completion report on a new line in this exact format:
-COMPLETION_JSON:{"review_comment":"<summary: what was changed, key files, approach taken>","commits":"<comma-separated commit hashes from git log --format=%H origin/HEAD..HEAD>"}
+COMPLETION_JSON:{"review_comment":"<detailed summary — see below>","commits":"<comma-separated commit hashes from git log --format=%H origin/HEAD..HEAD>"}
+
+review_comment MUST include ALL of these sections (2-4 sentences each):
+- **Why**: What problem this solves and why the change was needed
+- **What**: Specific changes made (new files, modified logic, removed code)
+- **Files**: Key files changed and what was done in each
+- **Decisions**: Any design choices made and why (e.g. "used X instead of Y because...")
+- **Testing**: How the changes were verified (tests added, manual checks)
+
+Bad example: "Implemented the feature"
+Good example: "Why: Auth middleware was missing, causing unauthenticated API access. What: Added JWT verification + session management. Files: middleware/auth.ts (new, 45 lines), routes/index.ts (added auth guard to 3 endpoints). Decisions: Self-implemented JWT instead of express-jwt to avoid adding a dependency. Testing: Added 5 unit tests for token validation edge cases."
 
 The CLI will automatically update the task status and submit this data. Do NOT manually call any API.`,
     },
@@ -186,7 +196,7 @@ Do NOT run git push — the CLI will handle pushing after you finish.
 When completing a task:
 1. Commit your changes: git add -A && git commit -m "<message>"
 2. Output a completion report on a new line in this exact format:
-COMPLETION_JSON:{"review_comment":"<summary: what docs were created/updated, key changes>","commits":"<commit hashes>"}`,
+COMPLETION_JSON:{"review_comment":"<detailed summary: Why this doc was needed, What was created/updated, Key sections added, Decisions on structure/format>","commits":"<commit hashes>"}`,
       rules: [
         "Only modify documentation files (docs/, README, etc.)",
         "Do NOT change application source code",
