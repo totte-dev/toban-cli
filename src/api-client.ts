@@ -117,6 +117,21 @@ export interface ApiClient {
   recordFailure(data: { task_id: string; failure_type: string; summary: string; agent_name?: string; sprint?: number; review_comment?: string; files_involved?: string }): Promise<void>;
   /** Fetch plan limits (max concurrent builders, etc.) */
   fetchPlanLimits(): Promise<PlanLimits>;
+  /** Record a single event to the unified event store */
+  recordEvent(event: EventInput): Promise<void>;
+  /** Record multiple events in a batch (max 50) */
+  recordEvents(events: EventInput[]): Promise<void>;
+}
+
+export interface EventInput {
+  type: string;
+  trace_id?: string;
+  span_id?: string;
+  parent_span_id?: string;
+  sprint?: number;
+  task_id?: string;
+  agent_name?: string;
+  data?: Record<string, unknown>;
 }
 
 export interface PlanLimits {
@@ -388,6 +403,27 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       } catch { /* non-fatal */ }
       // Default: free tier limits
       return { max_builders: 1, max_cloud_engineers: 1, build_command: null, test_command: null, stall_timeout_minutes: 10 };
+    },
+
+    async recordEvent(event: EventInput): Promise<void> {
+      try {
+        await fetch(`${apiUrl}/api/v1/events`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(event),
+        });
+      } catch { /* best-effort, don't block agent execution */ }
+    },
+
+    async recordEvents(events: EventInput[]): Promise<void> {
+      if (events.length === 0) return;
+      try {
+        await fetch(`${apiUrl}/api/v1/events`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(events),
+        });
+      } catch { /* best-effort */ }
     },
   };
 }
