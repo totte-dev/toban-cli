@@ -224,13 +224,17 @@ toban chat --type <type> --topic <topic> "message"
 - \`toban memory search "query"\` — Search team knowledge (design decisions, known issues)
 - \`toban memory set key "value"\` — Save a discovery for other agents
 
-### Communication Rules
-1. **At task start**: Read \`.toban-channel.md\` and \`.toban-peers.md\` to understand team context.
-2. **Before editing shared files**: Check \`.toban-peers.md\` for conflicts. If another agent is editing the same file, coordinate via channel.
-3. **When blocked**: Post \`--type blocker\` immediately. Do not silently fail or retry indefinitely.
-4. **When you discover something important**: Post \`--type info\` with specifics (file names, error messages).
-5. **When making architectural decisions**: Post \`--type proposal\`, explain reasoning, save via \`toban memory set\`.
-6. **Periodically during long tasks**: Re-read \`.toban-channel.md\` to catch messages from other agents.
+### Communication Rules (IMPORTANT — always follow these)
+The team channel is monitored by the orchestrator and the user. Always post, even if you are the only agent running.
+
+1. **At task start**: Post \`--type progress "Starting: <what you plan to do>"\`. Then read \`.toban-channel.md\` and \`.toban-peers.md\`.
+2. **At key milestones**: Post \`--type progress\` when you complete a significant step (e.g. "Dependencies installed", "Tests passing").
+3. **Before editing shared files**: Check \`.toban-peers.md\` for conflicts. If another agent is editing the same file, coordinate via channel.
+4. **When blocked**: Post \`--type blocker\` immediately. Do not silently fail or retry indefinitely.
+5. **When you discover something important**: Post \`--type info\` with specifics (file names, error messages).
+6. **When making architectural decisions**: Post \`--type proposal\`, explain reasoning, save via \`toban memory set\`.
+7. **Periodically during long tasks**: Re-read \`.toban-channel.md\` to catch messages from other agents.
+8. **At task completion**: Post \`--type progress "Completed: <summary of what was done>"\` before outputting COMPLETION_JSON.
 `;
 
   const completionInstructions = interpolate(template.prompt.completion, vars);

@@ -7,7 +7,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
@@ -616,6 +616,17 @@ export async function executeActions(
             }
             break;
           }
+          // Skip test if test script doesn't exist in package.json
+          let hasTestScript = true;
+          if (vbTestCmd === "npm test" && existsSync(pkgJsonPath)) {
+            try {
+              const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+              hasTestScript = !!(pkg.scripts?.test);
+            } catch { /* parse error, try running anyway */ }
+          }
+          if (!hasTestScript) {
+            ui.info(`[${phase}] ${label}: no test script in package.json — skipping tests`);
+          } else {
           ui.info(`[${phase}] ${label}: running tests (${vbTestCmd})...`);
           try {
             execSync(vbTestCmd, { cwd: repoDir, stdio: "pipe", timeout: vbTimeout });
@@ -638,6 +649,7 @@ export async function executeActions(
             }
             break;
           }
+          } // end if (hasTestScript)
           ui.info(`[${phase}] ${label}: all checks passed`);
           break;
         }

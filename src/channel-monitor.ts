@@ -31,8 +31,9 @@ export class ChannelMonitor {
   private lastCheckedTs: string;
   private processedIds = new Set<string>();
 
-  constructor() {
-    this.lastCheckedTs = new Date().toISOString();
+  constructor(sinceTs?: string) {
+    // Default: start monitoring from now. Pass a past timestamp to catch existing messages.
+    this.lastCheckedTs = sinceTs ?? new Date().toISOString();
   }
 
   /**
