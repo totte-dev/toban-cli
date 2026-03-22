@@ -43,6 +43,9 @@ export interface CliArgs {
   debug: boolean;
   engine: AgentType;
   autoTag: boolean;
+  autoMode: boolean;
+  maxSprints?: number;
+  maxHours?: number;
 }
 
 /** All state produced by the setup phase, consumed by the main loop */

@@ -55,6 +55,9 @@ Options:
   --docker              Enable Docker isolation for agents (default: off)
   --ws-port <port>      WebSocket server port for direct chat (default: 4000, 0=auto)
   --push                Push the sprint tag to origin (sprint complete only)
+  --auto-mode           Run in full auto mode (no human intervention)
+  --max-sprints <n>     Max sprints in auto mode (default: 10)
+  --max-hours <n>       Max hours in auto mode (default: 8)
   --debug               Enable verbose debug output (or DEBUG=1 env)
   --help                Show this help
 
@@ -103,6 +106,9 @@ function parseArgs(argv: string[]): CliArgs {
     debug: args.includes("--debug") || process.env.DEBUG === "1",
     engine: (getFlag("--engine") ?? "claude") as AgentType,
     autoTag: args.includes("--auto-tag"),
+    autoMode: args.includes("--auto-mode"),
+    maxSprints: getFlag("--max-sprints") ? parseInt(getFlag("--max-sprints")!, 10) : undefined,
+    maxHours: getFlag("--max-hours") ? parseInt(getFlag("--max-hours")!, 10) : undefined,
   };
 }
 

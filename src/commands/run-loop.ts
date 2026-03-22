@@ -78,6 +78,23 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   // Start stall detection for agent processes
   runner.startStallDetection();
 
+  // Auto mode state
+  let autoModeStartedAt: number | null = null;
+  let autoModeSprintCount = 0;
+  const autoModeMaxSprints = cliArgs.maxSprints ?? 10;
+  const autoModeMaxHours = cliArgs.maxHours ?? 8;
+
+  if (cliArgs.autoMode) {
+    autoModeStartedAt = Date.now();
+    ui.info(`[auto-mode] Enabled. Max sprints: ${autoModeMaxSprints}, Max hours: ${autoModeMaxHours}`);
+    // Create checkpoint tag
+    try {
+      const tagName = `auto-start-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
+      execSync(`git tag "${tagName}"`, { stdio: "pipe" });
+      ui.info(`[auto-mode] Checkpoint tag: ${tagName}`);
+    } catch { /* non-fatal */ }
+  }
+
   // Start ops task runner (background, parallel to main loop)
   const opsRunner = new OpsRunner({
     apiUrl: cliArgs.apiUrl,
@@ -94,6 +111,19 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       ui.warn(`Failed to refresh sprint: ${err}`);
       await sleep(POLL_INTERVAL_MS);
       continue;
+    }
+
+    // Auto-mode: check stop conditions
+    if (cliArgs.autoMode && autoModeStartedAt) {
+      const hoursElapsed = (Date.now() - autoModeStartedAt) / (1000 * 60 * 60);
+      if (hoursElapsed >= autoModeMaxHours) {
+        ui.info(`[auto-mode] Time limit reached (${autoModeMaxHours}h). Stopping.`);
+        break;
+      }
+      if (autoModeSprintCount >= autoModeMaxSprints) {
+        ui.info(`[auto-mode] Sprint limit reached (${autoModeMaxSprints}). Stopping.`);
+        break;
+      }
     }
 
     // Wait for sprint to be created (Setup not completed yet)
@@ -170,6 +200,58 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           });
           wsServer?.broadcast({ type: "data_update" as const, entity: "sprint", task_id: String(sprint.number), changes: { status: "review" }, timestamp: new Date().toISOString() });
         } catch { /* non-fatal */ }
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+    }
+
+    // Auto-mode: handle phase transitions automatically
+    if (cliArgs.autoMode && sprint) {
+      const headers = createAuthHeaders(cliArgs.apiKey);
+
+      // Review → auto-accept → Retro
+      if (sprint.status === "review") {
+        ui.info("[auto-mode] Review phase — auto-accepting Sprint");
+        try {
+          await fetch(`${cliArgs.apiUrl}/api/v1/sprints/${sprint.number}`, {
+            method: "PATCH", headers,
+            body: JSON.stringify({ status: "retrospective" }),
+          });
+        } catch { /* non-fatal */ }
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+
+      // Completed → create next sprint and continue
+      if (sprint.status === "completed") {
+        autoModeSprintCount++;
+        const nextNumber = (sprint.number as number) + 1;
+
+        // Check backlog for remaining tasks
+        try {
+          const backlogRes = await fetch(`${cliArgs.apiUrl}/api/v1/tasks?sprint=-1&limit=1`, { headers });
+          if (backlogRes.ok) {
+            const backlog = (await backlogRes.json()) as unknown[];
+            if (Array.isArray(backlog) && backlog.length === 0) {
+              ui.info("[auto-mode] Backlog empty. Stopping.");
+              break;
+            }
+          }
+        } catch { /* non-fatal */ }
+
+        ui.info(`[auto-mode] Starting Sprint #${nextNumber} (auto ${autoModeSprintCount}/${autoModeMaxSprints})`);
+        try {
+          await fetch(`${cliArgs.apiUrl}/api/v1/sprints`, {
+            method: "POST", headers,
+            body: JSON.stringify({ number: nextNumber, status: "active", goal: `Auto Sprint #${nextNumber}` }),
+          });
+          // Tag for rollback
+          try {
+            execSync(`git tag "sprint-${nextNumber}-auto"`, { stdio: "pipe" });
+          } catch { /* tag may already exist */ }
+        } catch (err) {
+          ui.warn(`[auto-mode] Failed to create Sprint #${nextNumber}: ${err}`);
+        }
         await sleep(POLL_INTERVAL_MS);
         continue;
       }
