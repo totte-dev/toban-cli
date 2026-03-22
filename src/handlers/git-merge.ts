@@ -225,7 +225,9 @@ export async function handleGitMerge(
         try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
       }
 
-      // Clean untracked files that may block checkout (e.g., node_modules artifacts from verify_build)
+      // Clean working directory to prevent checkout failures
+      // verify_build may have left modified files (npm install changes package-lock.json, etc.)
+      try { gitExec("git checkout -- .", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
       try { gitExec("git clean -fd", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
 
       // ── Rebase onto base branch before merging ──
