@@ -111,6 +111,8 @@ export interface ApiClient {
   fetchPlaybookRules(): Promise<Array<{ id: string; category: string; title: string; content: string; tags: string | null }>>;
   /** Create a custom playbook rule */
   createPlaybookRule(title: string, content: string, category: string): Promise<void>;
+  /** Fetch anti-patterns (rejected false positive tokens) per rule */
+  fetchAntiPatterns(): Promise<Record<string, string[]>>;
   fetchMessages(channel: string): Promise<Message[]>;
   sendMessage(from: string, to: string, content: string): Promise<void>;
   fetchMySecrets(): Promise<Record<string, string>>;
@@ -341,6 +343,16 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         headers,
         body: JSON.stringify({ title, content, category }),
       });
+    },
+
+    async fetchAntiPatterns(): Promise<Record<string, string[]>> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/rule-evaluations/anti-patterns`, { headers });
+        if (!res.ok) return {};
+        return (await res.json()) as Record<string, string[]>;
+      } catch {
+        return {};
+      }
     },
 
     async fetchPlaybookRules(): Promise<Array<{ id: string; category: string; title: string; content: string; tags: string | null }>> {

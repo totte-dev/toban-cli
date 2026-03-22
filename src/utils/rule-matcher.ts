@@ -170,8 +170,22 @@ export async function matchRulesLocally(
 
   if (rules.length === 0) return [];
 
-  // Build matchers and run keyword matching
-  const matchers = buildMatchers(rules);
+  // Fetch anti-patterns (rejected false positives) to filter out
+  let antiPatterns: Record<string, string[]> = {};
+  try {
+    antiPatterns = await api.fetchAntiPatterns();
+  } catch { /* non-fatal */ }
+
+  // Build matchers and apply anti-pattern filtering
+  const matchers = buildMatchers(rules).map((m) => {
+    const excluded = antiPatterns[m.rule_id];
+    if (!excluded || excluded.length === 0) return m;
+    const excludeSet = new Set(excluded.map((t) => t.toLowerCase()));
+    return {
+      ...m,
+      patterns: m.patterns.filter((p) => !excludeSet.has(p.source.toLowerCase())),
+    };
+  });
   const rawMatches = matchText(diffText, matchers);
 
   if (rawMatches.length === 0) return [];
