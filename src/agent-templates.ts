@@ -276,7 +276,7 @@ CRITICAL RULES:
 - Do NOT explore the codebase beyond the diff. Do NOT read unrelated files.
 - Output COMPLETION_JSON within your FIRST 3 TURNS. Every turn without COMPLETION_JSON is wasted.
 
-COMPLETION_JSON:{"verdict":"APPROVE or NEEDS_CHANGES","requirement_match":"met/partial/not — explain","files_changed":"file: summary","code_quality":"issues or clean","test_coverage":"tested or not","risks":"risks or none"}`,
+COMPLETION_JSON:{"verdict":"APPROVE or NEEDS_CHANGES","requirement_match":"met/partial/not — explain","files_changed":"file.ts (+10 -3): summary of change","code_quality":"issues or clean","test_coverage":"tested or not","risks":"risks or none"}`,
       rules: [
         "You MUST NOT create, edit, write, or delete any files.",
         "You MUST NOT run git add, git commit, git push.",

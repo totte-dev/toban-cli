@@ -49,11 +49,12 @@ export async function handleSpawnReviewer(
     } catch { return "HEAD~1..HEAD"; }
   })();
 
-  // Get diff stat for context
+  // Get diff stat for context (full output with line counts)
   let filesChanged: string[] = [];
+  let diffStatFull = "";
   try {
-    const diffStat = revExec2(`git diff ${diffRef} --stat`, { cwd: reviewRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
-    filesChanged = diffStat.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
+    diffStatFull = revExec2(`git diff ${diffRef} --stat`, { cwd: reviewRepoDir, stdio: "pipe", timeout: 10_000 }).toString().trim();
+    filesChanged = diffStatFull.split("\n").slice(0, -1).map(l => l.trim().split(/\s+/)[0]).filter(Boolean);
   } catch { /* empty */ }
 
   // Check diff size — too large means task should be split
@@ -74,7 +75,7 @@ export async function handleSpawnReviewer(
         review_comment: JSON.stringify({
           verdict: "NEEDS_CHANGES",
           requirement_match: "not assessed — diff too large",
-          files_changed: filesChanged.join(", "),
+          files_changed: diffStatFull || filesChanged.join(", "),
           code_quality: "not assessed",
           test_coverage: "not assessed",
           risks: `Diff is ${diffLineCount} lines. Task should be split into smaller subtasks for reliable review.`,
@@ -163,7 +164,7 @@ Output format: ${outputFormat}`;
       testCommand: ctx.config.testCommand || "npm test",
     });
 
-    fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\nFiles changed: ${filesChanged.join(", ") || "unknown"}\n${builderIntent}\n${reviewPrompt}`;
+    fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\n\n## Diff Stat\n${diffStatFull || "unknown"}\n${builderIntent}\n${reviewPrompt}`;
   }
 
   // Spawn reviewer as agent process
