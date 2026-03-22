@@ -117,6 +117,8 @@ export interface ApiClient {
   recordFailure(data: { task_id: string; failure_type: string; summary: string; agent_name?: string; sprint?: number; review_comment?: string; files_involved?: string }): Promise<void>;
   /** Fetch plan limits (max concurrent builders, etc.) */
   fetchPlanLimits(): Promise<PlanLimits>;
+  /** Check and trigger automatic sprint phase transition */
+  checkAutoTransition(sprintNumber: number): Promise<{ transitioned: boolean; from?: string; to?: string; reason?: string }>;
   /** Record a single event to the unified event store */
   recordEvent(event: EventInput): Promise<void>;
   /** Record multiple events in a batch (max 50) */
@@ -403,6 +405,19 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       } catch { /* non-fatal */ }
       // Default: free tier limits
       return { max_builders: 1, max_cloud_engineers: 1, build_command: null, test_command: null, stall_timeout_minutes: 10 };
+    },
+
+    async checkAutoTransition(sprintNumber: number): Promise<{ transitioned: boolean; from?: string; to?: string; reason?: string }> {
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/sprints/${sprintNumber}/auto-transition`, {
+          method: "POST",
+          headers,
+        });
+        if (res.ok) {
+          return (await res.json()) as { transitioned: boolean; from?: string; to?: string; reason?: string };
+        }
+      } catch { /* non-fatal */ }
+      return { transitioned: false, reason: "API call failed" };
     },
 
     async recordEvent(event: EventInput): Promise<void> {

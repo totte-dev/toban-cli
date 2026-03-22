@@ -582,8 +582,16 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
           // Run post_actions asynchronously, then release the slot
           executeActions(agentTemplate.post_actions, actionCtx, "post")
-            .then(() => {
+            .then(async () => {
               taskLog.event("post_actions_done", { reviewVerdict: actionCtx.reviewVerdict });
+              // Check auto-transition: if all tasks done, move sprint to review phase
+              if (actionCtx.reviewVerdict === "APPROVE" && capturedSprintData?.sprint?.number != null) {
+                const result = await api.checkAutoTransition(capturedSprintData.sprint.number);
+                if (result.transitioned) {
+                  ui.info(`[sprint] Auto-transition: ${result.from} → ${result.to}`);
+                  actionCtx.onDataUpdate?.("sprint", String(capturedSprintData.sprint.number), { status: result.to });
+                }
+              }
             })
             .catch((postErr) => {
               logError(CLI_ERR.ACTION_FAILED, `Post-actions failed: ${postErr}`, { taskId: task.id }, postErr);

@@ -178,6 +178,19 @@ ${outputFormat}`;
           const reviewJson = JSON.stringify(report);
           ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewJson, commits: commitHash });
           ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewJson);
+
+          // Auto-approve: if verdict is APPROVE, automatically move task to done
+          if (report.verdict === "APPROVE") {
+            try {
+              await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks/${ctx.task.id}/approve`, {
+                method: "POST",
+                headers: createAuthHeaders(ctx.config.apiKey),
+              });
+              ctx.onDataUpdate?.("task", ctx.task.id, { status: "done" });
+              ui.info(`[review] Auto-approved task ${ctx.task.id}`);
+            } catch { /* approve API may fail; task stays in review for manual approval */ }
+          }
+
           // Fire-and-forget: evaluate review against playbook rules
           fireRuleEvaluate({
             apiUrl: ctx.config.apiUrl,
