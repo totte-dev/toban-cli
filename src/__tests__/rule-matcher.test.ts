@@ -88,32 +88,40 @@ describe("matchText", () => {
 });
 
 describe("anti-pattern filtering", () => {
+  function applyAntiPatterns(
+    matchers: ReturnType<typeof _buildMatchers>,
+    antiPatterns: Record<string, string[]>,
+  ) {
+    return matchers.map((m) => {
+      const excluded = antiPatterns[m.rule_id];
+      if (!excluded || excluded.length === 0) return m;
+      const excludeSet = new Set(excluded.map((t) => t.toLowerCase()));
+      const filteredKeywords = m.keywords.filter((kw) => !excludeSet.has(kw));
+      const excludedKeywords = new Set(m.keywords.filter((kw) => excludeSet.has(kw)));
+      return {
+        ...m,
+        patterns: m.patterns.filter((_, i) => !excludedKeywords.has(m.keywords[i])),
+        keywords: filteredKeywords,
+      };
+    });
+  }
+
   it("removes patterns matching anti-pattern tokens", () => {
     const matchers = _buildMatchers([
       { id: "r1", category: "security", title: "SQL Injection Prevention", content: "Always use parameterized queries to prevent attacks", tags: null },
     ]);
 
-    // Before filtering: should have patterns
     const originalCount = matchers[0].patterns.length;
     expect(originalCount).toBeGreaterThan(0);
 
-    // Simulate anti-pattern filtering (as done in matchRulesLocally)
-    const antiPatterns: Record<string, string[]> = {
+    const filtered = applyAntiPatterns(matchers, {
       r1: ["injection", "prevention"],
-    };
-
-    const filtered = matchers.map((m) => {
-      const excluded = antiPatterns[m.rule_id];
-      if (!excluded || excluded.length === 0) return m;
-      const excludeSet = new Set(excluded.map((t) => t.toLowerCase()));
-      return {
-        ...m,
-        patterns: m.patterns.filter((p) => !excludeSet.has(p.source.toLowerCase())),
-      };
     });
 
-    // After filtering: should have fewer patterns
     expect(filtered[0].patterns.length).toBeLessThan(originalCount);
+    // Excluded keywords should not be in the filtered keywords list
+    expect(filtered[0].keywords).not.toContain("injection");
+    expect(filtered[0].keywords).not.toContain("prevention");
   });
 
   it("does not filter patterns for rules without anti-patterns", () => {
@@ -122,14 +130,15 @@ describe("anti-pattern filtering", () => {
     ]);
     const originalCount = matchers[0].patterns.length;
 
-    const antiPatterns: Record<string, string[]> = {};
-    const filtered = matchers.map((m) => {
-      const excluded = antiPatterns[m.rule_id];
-      if (!excluded || excluded.length === 0) return m;
-      const excludeSet = new Set(excluded.map((t) => t.toLowerCase()));
-      return { ...m, patterns: m.patterns.filter((p) => !excludeSet.has(p.source.toLowerCase())) };
-    });
-
+    const filtered = applyAntiPatterns(matchers, {});
     expect(filtered[0].patterns.length).toBe(originalCount);
+  });
+
+  it("keywords list tracks original extracted keywords", () => {
+    const matchers = _buildMatchers([
+      { id: "r1", category: "test", title: "SQL Injection", content: "parameterized queries", tags: null },
+    ]);
+    expect(matchers[0].keywords.length).toBe(matchers[0].patterns.length);
+    expect(matchers[0].keywords.every((kw) => typeof kw === "string" && kw === kw.toLowerCase())).toBe(true);
   });
 });

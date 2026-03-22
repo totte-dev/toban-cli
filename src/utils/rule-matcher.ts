@@ -43,6 +43,8 @@ interface MatcherPattern {
   rule_id: string;
   category: string;
   patterns: RegExp[];
+  /** Original keywords (lowercased) for anti-pattern comparison */
+  keywords: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -59,9 +61,15 @@ export function getMatchBufferPath(): string {
 // Build matchers from playbook rules
 // ---------------------------------------------------------------------------
 
+/** Escape regex metacharacters in a string. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function buildMatchers(rules: PlaybookRule[]): MatcherPattern[] {
   return rules.map((r) => {
     const patterns: RegExp[] = [];
+    const keywordList: string[] = [];
 
     // Extract keywords from title + content
     const text = [r.title, r.content].join(" ");
@@ -75,12 +83,13 @@ function buildMatchers(rules: PlaybookRule[]): MatcherPattern[] {
         .slice(0, 15);
       for (const kw of unique) {
         try {
-          patterns.push(new RegExp(kw, "i"));
+          patterns.push(new RegExp(escapeRegex(kw), "i"));
+          keywordList.push(kw.toLowerCase());
         } catch { /* skip invalid regex */ }
       }
     }
 
-    return { rule_id: r.id, category: r.category, patterns };
+    return { rule_id: r.id, category: r.category, patterns, keywords: keywordList };
   });
 }
 
@@ -176,14 +185,18 @@ export async function matchRulesLocally(
     antiPatterns = await api.fetchAntiPatterns();
   } catch { /* non-fatal */ }
 
-  // Build matchers and apply anti-pattern filtering
+  // Build matchers and apply anti-pattern filtering using original keywords
   const matchers = buildMatchers(rules).map((m) => {
     const excluded = antiPatterns[m.rule_id];
     if (!excluded || excluded.length === 0) return m;
     const excludeSet = new Set(excluded.map((t) => t.toLowerCase()));
+    // Filter by keyword, not regex source, to avoid escaping mismatches
+    const filteredKeywords = m.keywords.filter((kw) => !excludeSet.has(kw));
+    const excludedKeywords = new Set(m.keywords.filter((kw) => excludeSet.has(kw)));
     return {
       ...m,
-      patterns: m.patterns.filter((p) => !excludeSet.has(p.source.toLowerCase())),
+      patterns: m.patterns.filter((_, i) => !excludedKeywords.has(m.keywords[i])),
+      keywords: filteredKeywords,
     };
   });
   const rawMatches = matchText(diffText, matchers);
