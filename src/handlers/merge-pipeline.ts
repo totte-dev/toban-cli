@@ -58,11 +58,15 @@ export async function handleMergePipeline(
   await handleGitPush(pushAction, ctx, phase);
 
   const totalSeconds = Math.round((Date.now() - pipelineStart) / 1000);
+  const pushFailed = ctx.exitCode != null && ctx.exitCode !== 0;
   ctx.taskLog?.event("merge_pipeline_done", {
-    result: "success",
+    result: pushFailed ? "push_failed" : "success",
     duration_seconds: totalSeconds,
     merge_seconds: Math.round(mergeMs / 1000),
     verify_seconds: Math.round(verifyMs / 1000),
     push_seconds: totalSeconds - Math.round(mergeMs / 1000) - Math.round(verifyMs / 1000),
   });
+  if (pushFailed) {
+    ui.warn(`[${phase}] merge-pipeline: push failed — merge is local only`);
+  }
 }

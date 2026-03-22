@@ -3,8 +3,8 @@
  *
  * The orchestrator (run-loop) calls processNewMessages() each poll cycle.
  * Based on message type, it triggers appropriate actions:
- *   - blocker: log + broadcast to dashboard
- *   - request: queue task for target agent
+ *   - blocker: notify (log + broadcast to dashboard)
+ *   - request: notify (inform, but don't auto-create tickets)
  *   - review: create follow-up task for fixes
  *   - decision: log consensus reached
  *
@@ -91,7 +91,7 @@ export class ChannelMonitor {
       case "request":
         ui.info(`[channel] REQUEST from ${msg.from} → ${msg.to}: ${msg.content}`);
         return {
-          action: "create_task",
+          action: "notify",
           message: msg,
           description: `${msg.from} requests ${msg.to}: ${msg.content}`,
           data: {

@@ -38,7 +38,8 @@ export async function handleGitPush(
     } catch (retryErr) {
       const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
       logError(CLI_ERR.GIT_PUSH_FAILED, `git_push failed after rebase: ${msg}`, { taskId: ctx.task.id, repoDir: pushRepoDir }, retryErr);
-      ui.warn(`[template] git_push failed after rebase: ${msg}`);
+      ui.error(`[${phase}] ${label}: push FAILED — changes are local only: ${msg}`);
+      ctx.exitCode = 1;
     }
   }
   // Restore stashed changes (non-fatal if nothing was stashed)

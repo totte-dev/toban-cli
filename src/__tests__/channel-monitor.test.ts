@@ -23,7 +23,7 @@ describe("ChannelMonitor", () => {
     expect(actions[0].description).toContain("builder-1");
   });
 
-  it("detects request messages and returns create_task action", () => {
+  it("detects request messages and returns notify action (not create_task)", () => {
     const monitor = new ChannelMonitor("2000-01-01T00:00:00Z");
 
     postMessage({
@@ -34,7 +34,7 @@ describe("ChannelMonitor", () => {
 
     const actions = monitor.processNewMessages();
     expect(actions).toHaveLength(1);
-    expect(actions[0].action).toBe("create_task");
+    expect(actions[0].action).toBe("notify");
     expect(actions[0].data?.target).toBe("builder-1");
   });
 
@@ -115,6 +115,6 @@ describe("ChannelMonitor", () => {
     postMessage({ from: "b3", type: "progress", topic: "g", to: "all", replyTo: null, content: "ok", task_id: null, task_title: null, sprint: 1 });
 
     const actions = monitor.processNewMessages();
-    expect(actions).toHaveLength(2); // blocker + request, progress ignored
+    expect(actions).toHaveLength(2); // blocker (notify) + request (notify), progress ignored
   });
 });
