@@ -4,6 +4,7 @@ import {
   pathsOverlap,
   detectDependencies,
   sortByDependency,
+  isBootstrapTask,
   type Dependency,
 } from "../task-dependency.js";
 import type { Task } from "../api-client.js";
@@ -132,6 +133,50 @@ describe("detectDependencies", () => {
 
     const deps = detectDependencies([taskA, taskB]);
     expect(deps).toHaveLength(0);
+  });
+
+  it("detects bootstrap tasks and makes them dependencies for all others", () => {
+    const setup = makeTask({ id: "setup", title: "プロジェクト初期構成: Vite + React + TypeScript のセットアップ" });
+    const taskA = makeTask({ id: "a", title: "Todo コアコンポーネント: TodoList, TodoItem の実装" });
+    const taskB = makeTask({ id: "b", title: "フィルタリング機能: 全て/未完了/完了 の表示切り替え" });
+
+    const deps = detectDependencies([setup, taskA, taskB]);
+    // setup should block both taskA and taskB
+    expect(deps.filter((d) => d.from === "setup")).toHaveLength(2);
+    expect(deps.find((d) => d.from === "setup" && d.to === "a")).toBeDefined();
+    expect(deps.find((d) => d.from === "setup" && d.to === "b")).toBeDefined();
+  });
+
+  it("detects English bootstrap tasks", () => {
+    const setup = makeTask({ id: "setup", title: "Initial setup: scaffold project with Next.js" });
+    const taskA = makeTask({ id: "a", title: "Implement user authentication" });
+
+    const deps = detectDependencies([setup, taskA]);
+    expect(deps.find((d) => d.from === "setup" && d.to === "a")).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isBootstrapTask
+// ---------------------------------------------------------------------------
+
+describe("isBootstrapTask", () => {
+  it("detects Japanese bootstrap tasks", () => {
+    expect(isBootstrapTask(makeTask({ title: "プロジェクト初期構成: Vite + React" }))).toBe(true);
+    expect(isBootstrapTask(makeTask({ title: "環境構築: Node.js + TypeScript" }))).toBe(true);
+    expect(isBootstrapTask(makeTask({ title: "初期設定とパッケージインストール" }))).toBe(true);
+  });
+
+  it("detects English bootstrap tasks", () => {
+    expect(isBootstrapTask(makeTask({ title: "Initial setup: create project structure" }))).toBe(true);
+    expect(isBootstrapTask(makeTask({ title: "Bootstrap the application" }))).toBe(true);
+    expect(isBootstrapTask(makeTask({ title: "Scaffold React app with Vite" }))).toBe(true);
+  });
+
+  it("does not flag non-bootstrap tasks", () => {
+    expect(isBootstrapTask(makeTask({ title: "Add user authentication" }))).toBe(false);
+    expect(isBootstrapTask(makeTask({ title: "Fix bug in login flow" }))).toBe(false);
+    expect(isBootstrapTask(makeTask({ title: "フィルタリング機能の実装" }))).toBe(false);
   });
 });
 

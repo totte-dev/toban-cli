@@ -41,10 +41,14 @@ export function rebaseOntoBase(
 ): RebaseResult {
   try {
     // Switch to the worktree branch for rebasing
+    ui.info(`[git_merge] rebase: checkout ${worktreeBranch} in ${repoDir}`);
     exec(`git checkout "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
+    ui.info(`[git_merge] rebase: rebase onto ${baseBranch}`);
     exec(`git rebase "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
     return { success: true, conflictedFiles: [] };
   } catch (err) {
+    const errMsg = err instanceof Error ? (err as { stderr?: Buffer }).stderr?.toString() || err.message : String(err);
+    ui.warn(`[git_merge] rebase failed: ${errMsg.slice(0, 300)}`);
     // Rebase failed — extract conflicted files before aborting
     let conflictedFiles: string[] = [];
     try {
@@ -213,6 +217,17 @@ export async function handleGitMerge(
 
       ui.info(`[${phase}] ${label}: ${agentCommits.split("\n").length} commit(s), ${meaningfulFiles.length} file(s)`);
 
+      // ── Remove worktree BEFORE rebase/merge ──
+      // git refuses to checkout a branch that's checked out in a worktree,
+      // so we must detach the worktree first while keeping the branch.
+      if (existsSync(worktreeDir)) {
+        try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
+        try { gitExec("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+      }
+
+      // Clean untracked files that may block checkout (e.g., node_modules artifacts from verify_build)
+      try { gitExec("git clean -fd", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+
       // ── Rebase onto base branch before merging ──
       // This incorporates any commits merged by other agents while this one was working.
       // If rebase encounters conflicts, we abort and escalate.
@@ -224,8 +239,9 @@ export async function handleGitMerge(
           `Rebase conflict on ${worktreeBranch}: ${rebaseResult.conflictedFiles.join(", ")}`,
           { taskId: ctx.task.id }
         );
-        // Clean up — the branch is back to pre-rebase state (rebase --abort was called)
-        cleanupBranch(repoDir, worktreeDir, worktreeBranch);
+        // Switch back to base branch before deleting agent branch
+        try { gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+        try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
         return;
       }
 
@@ -235,8 +251,8 @@ export async function handleGitMerge(
       gitExec(`git merge --no-ff "${worktreeBranch}" -m "merge: ${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
       ui.info( `[${phase}] ${label}: merged ${worktreeBranch}`);
 
-      // Clean up worktree
-      cleanupBranch(repoDir, worktreeDir, worktreeBranch);
+      // Clean up branch (worktree already removed above)
+      try { gitExec(`git branch -D "${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
     } else {
       ui.info( `[${phase}] ${label}: no agent branch found, skipping`);
     }

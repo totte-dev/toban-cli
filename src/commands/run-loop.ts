@@ -16,6 +16,7 @@ import { ensureGitUser } from "../spawner.js";
 import { setup, type CliArgs } from "../setup.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
+import { join } from "node:path";
 import { handlePropose } from "./propose.js";
 import { fireRuleEvaluate } from "../rule-evaluate.js";
 import type { ShutdownState } from "./shutdown.js";
@@ -71,8 +72,10 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     wsServer.currentSprint = sprintNum;
   }
 
+  let configuredBuilderConcurrency = 2; // default, updated from plan limits
   try {
     const limits = await api.fetchPlanLimits();
+    configuredBuilderConcurrency = limits.max_builders;
     scheduler.reconfigure("builder", limits.max_builders);
     scheduler.reconfigure("cloud-engineer", limits.max_cloud_engineers);
     workspaceBuildCommand = limits.build_command;
@@ -311,6 +314,29 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         ui.info(`[auto] ${t.owner}/${t.id.slice(0, 8)}: todo → in_progress`);
         wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: t.id, changes: { status: "in_progress" }, timestamp: new Date().toISOString() });
       } catch { /* non-fatal */ }
+    }
+
+    // Empty-repo safety: limit builders to 1 when repo has few commits
+    // This prevents parallel agents from creating overlapping files in new projects
+    if (repos.length > 0) {
+      const mainRepo = ctx.mainGithubRepo
+        ? repos.find((r) => r.repo_name === ctx.mainGithubRepo || r.repo_path.includes(ctx.mainGithubRepo!))
+        : null;
+      const targetRepo = mainRepo || repos[0];
+      const repoDir = join(tobanHome, cliArgs.agentName, targetRepo.repo_name);
+      try {
+        const commitCount = parseInt(
+          execSync("git rev-list --count HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(),
+          10
+        );
+        if (commitCount <= 3 && scheduler.getMaxConcurrency("builder") > 1) {
+          scheduler.reconfigure("builder", 1);
+          ui.info(`[safety] Repo has ${commitCount} commit(s) — limiting builders to 1 until project is established`);
+        } else if (commitCount > 3 && scheduler.getMaxConcurrency("builder") < configuredBuilderConcurrency) {
+          scheduler.reconfigure("builder", configuredBuilderConcurrency);
+          ui.info(`[safety] Repo now has ${commitCount} commits — restoring builder concurrency to ${configuredBuilderConcurrency}`);
+        }
+      } catch { /* repo not cloned yet or no HEAD — skip check */ }
     }
 
     // Dependency-aware task ordering

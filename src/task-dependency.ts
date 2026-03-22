@@ -42,6 +42,24 @@ const EXPLICIT_DEPENDENCY_PATTERNS: RegExp[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Bootstrap task detection — these tasks must run before all others
+// ---------------------------------------------------------------------------
+
+const BOOTSTRAP_PATTERNS: RegExp[] = [
+  /(?:初期構成|初期設定|プロジェクト初期|環境構築|セットアップ)/,
+  /(?:initial\s+setup|project\s+setup|scaffold|bootstrap|boilerplate|初期化)/i,
+  /(?:vite|create-react-app|next\.js|nuxt).*(?:セットアップ|setup|init)/i,
+];
+
+/**
+ * Check if a task is a bootstrap/setup task that should run before all others.
+ */
+export function isBootstrapTask(task: Task): boolean {
+  const text = `${task.title}\n${task.description || ""}`;
+  return BOOTSTRAP_PATTERNS.some((p) => p.test(text));
+}
+
+// ---------------------------------------------------------------------------
 // File/path extraction from text
 // ---------------------------------------------------------------------------
 
@@ -104,6 +122,28 @@ export function detectDependencies(tasks: Task[]): Dependency[] {
     text: `${t.title}\n${t.description || ""}`,
     paths: extractPaths(`${t.title}\n${t.description || ""}`),
   }));
+
+  // 0. Bootstrap task detection — setup tasks block all non-setup tasks
+  const bootstrapIds = new Set<string>();
+  for (const entry of taskTexts) {
+    if (isBootstrapTask(entry.task)) {
+      bootstrapIds.add(entry.task.id);
+    }
+  }
+  if (bootstrapIds.size > 0) {
+    for (const entry of taskTexts) {
+      if (!bootstrapIds.has(entry.task.id)) {
+        for (const bId of bootstrapIds) {
+          deps.push({
+            from: bId,
+            to: entry.task.id,
+            reason: `bootstrap: setup task must complete first`,
+            type: "explicit",
+          });
+        }
+      }
+    }
+  }
 
   for (let i = 0; i < taskTexts.length; i++) {
     const current = taskTexts[i];

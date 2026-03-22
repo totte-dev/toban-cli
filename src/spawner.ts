@@ -33,6 +33,8 @@ export function createWorktree(
     try { rmSync(worktreeDir, { recursive: true, force: true }); } catch { /* non-fatal */ }
   }
   try { execSync("git worktree prune", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
+  // Ensure we're on the base branch before deleting agent branch (can't delete checked-out branch)
+  try { execSync(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
   try { execSync(`git branch -D "${branchName}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* may not exist */ }
 
   // Check if base branch exists (empty repos may not have any branches)
