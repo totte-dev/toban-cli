@@ -573,7 +573,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
                 });
                 return;
               } catch (err) {
-                ui.warn(`[retro] Failed to parse RETRO_JSON: ${err}`);
+                ui.warn(`[retro] Failed to parse RETRO_JSON: ${err}. Raw (first 200 chars): ${raw?.slice(0, 200)}`);
               }
             }
           };
