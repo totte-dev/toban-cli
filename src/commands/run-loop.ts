@@ -365,7 +365,8 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         const capturedSlotName = slotName;
         const capturedSprintData = sprintData;
 
-        // Record agent spawn event
+        // Record agent spawn event + capture start time for duration tracking
+        const agentStartTime = Date.now();
         eventEmitter.agentSpawned(agentName, task.id, { role: agentRole, model: agentConfig.model });
 
         // Register with peer tracker so other agents can see our working files
@@ -381,11 +382,12 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           const wasStalled = runningAgent.status === "failed" && runningAgent.stderr.some((l) => l.includes("stall detected"));
           try { ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`); } catch { /* non-fatal */ }
 
-          // Record agent completion/failure event
+          // Record agent completion/failure event with duration
+          const durationSeconds = Math.round((Date.now() - agentStartTime) / 1000);
           if (succeeded) {
-            eventEmitter.agentCompleted(agentName, task.id, { role: agentRole, exit_code: exitCode });
+            eventEmitter.agentCompleted(agentName, task.id, { role: agentRole, exit_code: exitCode, duration_seconds: durationSeconds });
           } else {
-            eventEmitter.agentFailed(agentName, task.id, { role: agentRole, exit_code: exitCode, stalled: wasStalled });
+            eventEmitter.agentFailed(agentName, task.id, { role: agentRole, exit_code: exitCode, stalled: wasStalled, duration_seconds: durationSeconds });
           }
 
           // Record stall kills to Failure DB for visibility
