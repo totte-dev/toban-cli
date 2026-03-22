@@ -45,6 +45,8 @@ interface WsMessage {
   /** Review update fields */
   phase?: string;
   review_comment?: string;
+  /** Channel message fields */
+  messages?: Array<Record<string, unknown>>;
 }
 
 export interface WsChatServerOptions {

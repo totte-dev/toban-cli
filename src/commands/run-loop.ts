@@ -30,6 +30,7 @@ import { detectDependencies, sortByDependency } from "../task-dependency.js";
 import { trackRetry } from "../utils/retry-tracker.js";
 import { OpsRunner } from "../ops-runner.js";
 import { extractJsonObject } from "../utils/extract-json.js";
+import { ChannelMonitor } from "../channel-monitor.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -108,13 +109,17 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       wsServer.broadcast({
         type: WS_MSG.CHANNEL_MESSAGE,
         messages: messages.map((m) => ({
-          from: m.from, task_title: m.task_title, text: m.text, ts: m.ts,
+          from: m.from, task_title: m.task_title, text: m.content, ts: m.ts,
+          type: m.type, topic: m.topic,
         })),
         timestamp: new Date().toISOString(),
       });
     }
   };
   peerTracker.start();
+
+  // Channel monitor: watches for actionable messages (blockers, requests, reviews)
+  const channelMonitor = new ChannelMonitor();
 
   // Auto mode state
   let autoModeStartedAt: number | null = null;
@@ -293,6 +298,20 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         await sleep(POLL_INTERVAL_MS);
         continue;
       }
+    }
+
+    // Process channel messages — detect blockers, requests, review feedback
+    const channelActions = channelMonitor.processNewMessages();
+    for (const ca of channelActions) {
+      if (ca.action === "notify") {
+        // Broadcast blocker to dashboard
+        wsServer?.broadcast({
+          type: WS_MSG.CHANNEL_MESSAGE,
+          messages: [{ from: ca.message.from, type: ca.message.type, topic: ca.message.topic, text: ca.message.content, ts: ca.message.ts }],
+          timestamp: new Date().toISOString(),
+        });
+      }
+      // Future: handle create_task, update_task actions
     }
 
     // Only pick up tasks during active phase — don't start work during review/retro

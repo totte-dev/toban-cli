@@ -187,28 +187,50 @@ export function buildAgentPrompt(ctx: PromptContext): string {
 
   const peerAwarenessBlock = `
 ## Peer Awareness & Communication
-You are part of a team of agents. Use these resources:
+You are part of a team of agents working in parallel. Communication is critical for coordination.
 
-### Files (auto-updated in repo root)
+### Files (auto-updated in repo root every 15s)
 - \`.toban-peers.md\` — Active peers and their modified files. Check before editing shared files.
-- \`.toban-channel.md\` — Recent team conversation. Read to understand context and ongoing discussions.
+- \`.toban-channel.md\` — Team channel (grouped by topic). Read at start and periodically during work.
 
-### Commands (run via Bash tool)
-- \`toban chat "message"\` — Post to the team channel. Share intent, findings, warnings.
-- \`toban chat\` — Read recent channel messages.
-- \`toban peers\` — List active peers and their files.
-- \`toban task info\` — Re-read your task details and acceptance criteria.
-- \`toban task list\` — See all sprint tasks to understand your scope.
-- \`toban task blocker "reason"\` — Report when you're stuck.
-- \`toban context\` — Get project spec, playbook rules, past failures.
-- \`toban memory search "query"\` — Search team knowledge (design decisions, known issues).
-- \`toban memory set key "value"\` — Save a discovery for other agents.
+### Channel Protocol
+Post structured messages with type and topic for effective team communication:
 
-### When to communicate
-- Before modifying shared files, check \`.toban-peers.md\` for conflicts.
-- When you discover something important (bugs, design issues), post via \`toban chat\`.
-- When you make architectural decisions, explain your reasoning in the channel and save via \`toban memory set\`.
-- If stuck, report via \`toban task blocker\` instead of silently failing.
+\`\`\`bash
+toban chat --type <type> --topic <topic> "message"
+\`\`\`
+
+**Message types** (use the right type — the orchestrator monitors these):
+| Type | When to use | Example |
+|------|-------------|---------|
+| progress | Share what you're working on | \`toban chat --type progress "Refactoring auth module"\` |
+| blocker | You're stuck and need help | \`toban chat --type blocker "DB migration fails on column X"\` |
+| info | Share a finding or FYI | \`toban chat --type info "Found unused API endpoint in routes.ts"\` |
+| request | Ask another agent to do something | \`toban chat --type request --to builder-2 "Please avoid editing auth.ts"\` |
+| proposal | Propose a design decision | \`toban chat --type proposal --topic architecture "Use repository pattern for DB"\` |
+| opinion | Respond to a proposal | \`toban chat --type opinion --reply <id> "Agree, but add interface first"\` |
+| decision | Declare consensus (Strategist only) | \`toban chat --type decision --topic architecture "Approved: repository pattern"\` |
+
+**Topics**: Auto-set to \`task-{id}\` for your current task. Use explicit topics for cross-task discussions:
+\`sprint-planning\`, \`sprint-review\`, \`retro\`, \`architecture\`, \`general\`
+
+### Other Commands
+- \`toban chat\` — Read recent channel messages (or \`toban chat --topic <topic>\` for filtered view)
+- \`toban peers\` — List active peers and their files
+- \`toban task info\` — Re-read your task details and acceptance criteria
+- \`toban task list\` — See all sprint tasks to understand your scope
+- \`toban task blocker "reason"\` — Report blocker (also posts to channel)
+- \`toban context\` — Get project spec, playbook rules, past failures
+- \`toban memory search "query"\` — Search team knowledge (design decisions, known issues)
+- \`toban memory set key "value"\` — Save a discovery for other agents
+
+### Communication Rules
+1. **At task start**: Read \`.toban-channel.md\` and \`.toban-peers.md\` to understand team context.
+2. **Before editing shared files**: Check \`.toban-peers.md\` for conflicts. If another agent is editing the same file, coordinate via channel.
+3. **When blocked**: Post \`--type blocker\` immediately. Do not silently fail or retry indefinitely.
+4. **When you discover something important**: Post \`--type info\` with specifics (file names, error messages).
+5. **When making architectural decisions**: Post \`--type proposal\`, explain reasoning, save via \`toban memory set\`.
+6. **Periodically during long tasks**: Re-read \`.toban-channel.md\` to catch messages from other agents.
 `;
 
   const completionInstructions = interpolate(template.prompt.completion, vars);

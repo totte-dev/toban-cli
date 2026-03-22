@@ -92,11 +92,12 @@ export async function handleInjectMemory(
         "# Recent Team Chat",
         "",
         ...channelMessages.map((m) => {
+          const typeLabel = (m.type || "info").toUpperCase();
           const tag = m.task_title ? `${m.from} | ${m.task_title}` : m.from;
-          return `[${m.ts.slice(11, 19)}] [${tag}] ${m.text}`;
+          return `[${m.ts.slice(11, 19)}] [${typeLabel}] [${tag}] ${m.content}`;
         }),
         "",
-        "Use `toban chat \"message\"` to post. Check `.toban-channel.md` for live updates.",
+        "Use `toban chat --type <type> \"message\"` to post. Check `.toban-channel.md` for live updates.",
         "<!-- TOBAN_CHANNEL_END -->",
       ].join("\n");
 
