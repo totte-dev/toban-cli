@@ -26,6 +26,7 @@ export const WS_MSG = {
   AGENT_ACTIVITY: "agent_activity",
   DATA_UPDATE: "data_update",
   REVIEW_UPDATE: "review_update",
+  CHANNEL_MESSAGE: "channel_message",
 } as const;
 
 export type WsMsgType = typeof WS_MSG[keyof typeof WS_MSG];
@@ -75,6 +76,7 @@ export const LEGACY_TYPE_MAP: Record<WsMsgType, string> = {
   agent_activity: "agent.activity",
   data_update: "data.update",
   review_update: "review.update",
+  channel_message: "channel.message",
 };
 
 /** Generate a time-sortable event ID */

@@ -7,6 +7,8 @@ export interface AgentConfig {
   type: AgentType;
   /** Task ID this agent is working on */
   taskId: string;
+  /** Task title (for channel metadata) */
+  taskTitle?: string;
   /** Absolute path to the repository root */
   workingDir: string;
   /** Base branch to create worktree from (defaults to "main") */

@@ -138,6 +138,8 @@ export function spawnAgent(
       TOBAN_API_URL: config.apiUrl,
       TOBAN_AGENT_NAME: config.name,
       TOBAN_TASK_ID: config.taskId,
+      ...(config.taskTitle ? { TOBAN_TASK_TITLE: config.taskTitle } : {}),
+      ...(config.sprintNumber != null ? { TOBAN_SPRINT: String(config.sprintNumber) } : {}),
       ...(config.managerPort ? { TOBAN_MANAGER_PORT: String(config.managerPort) } : {}),
       // Inject project secrets directly as env vars (no prefix in non-Docker mode)
       ...(config.secrets ?? {}),
@@ -206,6 +208,8 @@ export function spawnAgentInTerminal(
     TOBAN_API_URL: config.apiUrl,
     TOBAN_AGENT_NAME: config.name,
     TOBAN_TASK_ID: config.taskId,
+    ...(config.taskTitle ? { TOBAN_TASK_TITLE: config.taskTitle } : {}),
+    ...(config.sprintNumber != null ? { TOBAN_SPRINT: String(config.sprintNumber) } : {}),
   };
 
   const shellCommand = buildShellCommand(cmd, args, agentEnv);

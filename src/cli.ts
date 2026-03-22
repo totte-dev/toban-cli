@@ -41,6 +41,18 @@ Commands:
   init                  Initialize a new project (interactive setup)
   start                 Start the agent runner loop
   sprint complete       Complete the current sprint and create a git tag
+  peers                 Show active peer agents and their working files
+  peers files           Show file-centric conflict view
+  chat                  Read recent agent channel messages
+  chat "message"        Post a message to the agent channel
+  task info             Get current task details
+  task list             List all sprint tasks
+  task complete "msg"   Report task completion
+  task blocker "reason" Report blocker
+  context               Get project spec, rules, past failures
+  memory search "q"     Search shared knowledge
+  memory set key "val"  Save a memory (shared with team)
+  memory list           List your memories
 
 Options:
   --api-url <url>       Toban API base URL (or TOBAN_API_URL env)
@@ -123,6 +135,25 @@ function parseArgs(argv: string[]): CliArgs {
     handleInit().catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
   }
 }
+
+// Lightweight commands: use env vars for auth (TOBAN_API_KEY, TOBAN_API_URL)
+// These are designed to be called by agents via Bash tool
+if (process.argv[2] === "peers") {
+  const { handlePeers } = await import("./commands/peers.js");
+  handlePeers(process.argv[3]).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
+} else if (process.argv[2] === "chat") {
+  const { handleChat } = await import("./commands/chat.js");
+  handleChat(process.argv.slice(3)).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
+} else if (process.argv[2] === "task") {
+  const { handleTaskCmd } = await import("./commands/task-cmd.js");
+  handleTaskCmd(process.argv.slice(3)).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
+} else if (process.argv[2] === "context") {
+  const { handleContext } = await import("./commands/context-cmd.js");
+  handleContext(process.argv.slice(3)).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
+} else if (process.argv[2] === "memory") {
+  const { handleMemory } = await import("./commands/memory-cmd.js");
+  handleMemory(process.argv.slice(3)).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
+} else
 
 // All other commands go through parseArgs (which requires api-url/api-key)
 if (process.argv[2] !== "init") {

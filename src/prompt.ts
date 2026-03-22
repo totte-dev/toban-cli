@@ -185,6 +185,32 @@ export function buildAgentPrompt(ctx: PromptContext): string {
     ? `\n## Additional Rules\n${template.prompt.rules.map((r) => `- ${r}`).join("\n")}\n`
     : "";
 
+  const peerAwarenessBlock = `
+## Peer Awareness & Communication
+You are part of a team of agents. Use these resources:
+
+### Files (auto-updated in repo root)
+- \`.toban-peers.md\` — Active peers and their modified files. Check before editing shared files.
+- \`.toban-channel.md\` — Recent team conversation. Read to understand context and ongoing discussions.
+
+### Commands (run via Bash tool)
+- \`toban chat "message"\` — Post to the team channel. Share intent, findings, warnings.
+- \`toban chat\` — Read recent channel messages.
+- \`toban peers\` — List active peers and their files.
+- \`toban task info\` — Re-read your task details and acceptance criteria.
+- \`toban task list\` — See all sprint tasks to understand your scope.
+- \`toban task blocker "reason"\` — Report when you're stuck.
+- \`toban context\` — Get project spec, playbook rules, past failures.
+- \`toban memory search "query"\` — Search team knowledge (design decisions, known issues).
+- \`toban memory set key "value"\` — Save a discovery for other agents.
+
+### When to communicate
+- Before modifying shared files, check \`.toban-peers.md\` for conflicts.
+- When you discover something important (bugs, design issues), post via \`toban chat\`.
+- When you make architectural decisions, explain your reasoning in the channel and save via \`toban memory set\`.
+- If stuck, report via \`toban task blocker\` instead of silently failing.
+`;
+
   const completionInstructions = interpolate(template.prompt.completion, vars);
 
   const engineHintLine = ctx.engineHint ? `\n${ctx.engineHint}` : "";
@@ -217,6 +243,7 @@ export function buildAgentPrompt(ctx: PromptContext): string {
   const variableSections = [
     securityRules,
     guardrailBlock,
+    peerAwarenessBlock,
     playbookBlock,
     failuresBlock,
     specBlock,

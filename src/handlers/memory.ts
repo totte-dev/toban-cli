@@ -9,6 +9,7 @@ import type { TemplateAction, ActionContext } from "../agent-templates.js";
 import { createAuthHeaders, type AgentMemory } from "../api-client.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
+import { readRecentMessages, formatChannelMarkdown } from "../agent-channel.js";
 
 export async function handleInjectMemory(
   action: TemplateAction,
@@ -81,6 +82,31 @@ export async function handleInjectMemory(
     fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
     injected = allMemories.length;
   }
+
+  // Inject recent channel messages so agent starts with team context
+  try {
+    const channelMessages = readRecentMessages(20);
+    if (channelMessages.length > 0) {
+      const channelBlock = [
+        "<!-- TOBAN_CHANNEL_START -->",
+        "# Recent Team Chat",
+        "",
+        ...channelMessages.map((m) => {
+          const tag = m.task_title ? `${m.from} | ${m.task_title}` : m.from;
+          return `[${m.ts.slice(11, 19)}] [${tag}] ${m.text}`;
+        }),
+        "",
+        "Use `toban chat \"message\"` to post. Check `.toban-channel.md` for live updates.",
+        "<!-- TOBAN_CHANNEL_END -->",
+      ].join("\n");
+
+      let content = fs.readFileSync(claudeMdPath, "utf-8");
+      content = content.replace(/<!-- TOBAN_CHANNEL_START -->[\s\S]*?<!-- TOBAN_CHANNEL_END -->\n?/g, "").trimEnd();
+      fs.writeFileSync(claudeMdPath, content + "\n\n" + channelBlock + "\n");
+      injected += channelMessages.length;
+      ui.info(`[${phase}] ${label}: ${channelMessages.length} channel messages injected`);
+    }
+  } catch { /* non-fatal */ }
 
   // Mark CLAUDE.md as assume-unchanged so inject_memory additions don't get committed
   // Agent can still read the file, but git won't track the memory block changes

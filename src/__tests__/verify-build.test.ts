@@ -8,6 +8,12 @@ vi.mock("node:child_process", () => ({
   execSync: (...args: unknown[]) => execSyncMock(...args),
 }));
 
+// Mock existsSync for package.json / package-lock.json detection
+const existsSyncMock = vi.fn().mockReturnValue(false);
+vi.mock("node:fs", () => ({
+  existsSync: (...args: unknown[]) => existsSyncMock(...args),
+}));
+
 // Mock resolveRepoRoot to return cwd as-is
 vi.mock("../git-ops.js", () => ({
   resolveRepoRoot: (dir: string) => dir,
@@ -61,6 +67,8 @@ const VERIFY_BUILD: TemplateAction = {
 describe("verify_build action", () => {
   beforeEach(() => {
     execSyncMock.mockReset();
+    existsSyncMock.mockReset();
+    existsSyncMock.mockReturnValue(false);
   });
 
   it("passes when both build and test succeed", async () => {
@@ -200,6 +208,67 @@ describe("verify_build action", () => {
     expect(actionOkCalls).toHaveLength(0);
     expect(actionErrorCalls).toHaveLength(1);
     expect(actionErrorCalls[0][1].error).toContain("compile error");
+  });
+
+  it("runs npm ci before build when package.json and lockfile exist", async () => {
+    existsSyncMock.mockImplementation((p: string) => {
+      if (p.endsWith("package.json")) return true;
+      if (p.endsWith("package-lock.json")) return true;
+      return false;
+    });
+    execSyncMock.mockReturnValue(Buffer.from("ok"));
+    const ctx = createCtx();
+
+    await executeActions([VERIFY_BUILD], ctx, "post");
+
+    expect(ctx.exitCode).toBe(0);
+    // diff check (1) + npm ci (2) + build (3) + test (4)
+    expect(execSyncMock).toHaveBeenCalledTimes(4);
+    expect(execSyncMock.mock.calls[1][0]).toBe("npm ci");
+    expect(execSyncMock.mock.calls[2][0]).toBe("npm run build");
+  });
+
+  it("runs npm install when package.json exists but no lockfile", async () => {
+    existsSyncMock.mockImplementation((p: string) => {
+      if (p.endsWith("package.json")) return true;
+      return false;
+    });
+    execSyncMock.mockReturnValue(Buffer.from("ok"));
+    const ctx = createCtx();
+
+    await executeActions([VERIFY_BUILD], ctx, "post");
+
+    expect(ctx.exitCode).toBe(0);
+    expect(execSyncMock.mock.calls[1][0]).toBe("npm install");
+  });
+
+  it("sets exitCode=1 when npm install fails", async () => {
+    existsSyncMock.mockImplementation((p: string) => p.endsWith("package.json"));
+    execSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === "npm install") throw Object.assign(new Error("fail"), { stderr: Buffer.from("ERESOLVE"), stdout: Buffer.from("") });
+      return Buffer.from("ok");
+    });
+    const ctx = createCtx();
+
+    await executeActions([VERIFY_BUILD], ctx, "post");
+
+    expect(ctx.exitCode).toBe(1);
+    // diff check (1) + npm install fail (2) + git reset (3)
+    expect(execSyncMock).toHaveBeenCalledTimes(3);
+    expect(execSyncMock.mock.calls[2][0]).toContain("git reset --hard");
+  });
+
+  it("skips npm install when no package.json", async () => {
+    existsSyncMock.mockReturnValue(false);
+    execSyncMock.mockReturnValue(Buffer.from("ok"));
+    const ctx = createCtx();
+
+    await executeActions([VERIFY_BUILD], ctx, "post");
+
+    expect(ctx.exitCode).toBe(0);
+    // diff check (1) + build (2) + test (3) — no install step
+    expect(execSyncMock).toHaveBeenCalledTimes(3);
+    expect(execSyncMock.mock.calls[1][0]).toBe("npm run build");
   });
 
   it("skips verify_build when exitCode already non-zero", async () => {

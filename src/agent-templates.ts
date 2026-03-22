@@ -7,6 +7,8 @@
  */
 
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
@@ -571,6 +573,25 @@ export async function executeActions(
               break;
             }
           } catch { /* diff check failed, continue with build */ }
+
+          // Install dependencies if package.json exists (needed after worktree merge back to main)
+          const pkgJsonPath = join(repoDir, "package.json");
+          if (existsSync(pkgJsonPath)) {
+            const lockfilePath = join(repoDir, "package-lock.json");
+            const installCmd = existsSync(lockfilePath) ? "npm ci" : "npm install";
+            ui.info(`[${phase}] ${label}: installing dependencies (${installCmd})...`);
+            try {
+              execSync(installCmd, { cwd: repoDir, stdio: "pipe", timeout: vbTimeout });
+              ui.info(`[${phase}] ${label}: dependencies installed`);
+            } catch (installErr) {
+              const detail = getExecError(installErr);
+              ui.error(`[${phase}] ${label}: INSTALL FAILED — ${detail.slice(0, 300)}`);
+              ctx.exitCode = 1;
+              revertMerge();
+              ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Install failed: ${detail.slice(0, 200)}` });
+              break;
+            }
+          }
 
           ui.info(`[${phase}] ${label}: running build (${vbBuildCmd})...`);
           try {

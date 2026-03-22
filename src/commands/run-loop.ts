@@ -100,6 +100,22 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   // Start stall detection for agent processes
   runner.startStallDetection();
 
+  // Peer awareness: track active agents' working files for conflict avoidance
+  const { PeerTracker } = await import("../peer-tracker.js");
+  const peerTracker = new PeerTracker();
+  peerTracker.onChannelMessage = (messages) => {
+    if (wsServer) {
+      wsServer.broadcast({
+        type: WS_MSG.CHANNEL_MESSAGE,
+        messages: messages.map((m) => ({
+          from: m.from, task_title: m.task_title, text: m.text, ts: m.ts,
+        })),
+        timestamp: new Date().toISOString(),
+      });
+    }
+  };
+  peerTracker.start();
+
   // Auto mode state
   let autoModeStartedAt: number | null = null;
   let autoModeSprintCount = 0;
@@ -526,7 +542,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
         const agentConfig = {
           name: agentName,
-          type: cliArgs.engine, taskId: task.id, workingDir: taskWorkingDir,
+          type: cliArgs.engine, taskId: task.id, taskTitle: task.title, workingDir: taskWorkingDir,
           branch: cliArgs.baseBranch, apiKey: cliArgs.apiKey, apiUrl: cliArgs.apiUrl,
           prompt, parentAgent: cliArgs.agentName, sprintNumber: sprintData.sprint.number,
           model: agentModel,
@@ -556,9 +572,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         // Record agent spawn event
         eventEmitter.agentSpawned(agentName, task.id, { role: agentRole, model: agentConfig.model });
 
+        // Register with peer tracker so other agents can see our working files
+        peerTracker.register(agentName, task.id, task.title, taskWorkingDir);
+
         await runner.spawn(agentConfig, (runningAgent) => {
           // --- Completion handler: runs when agent process exits ---
           try { messagePoller.stop(); } catch { /* non-fatal */ }
+          peerTracker.unregister(agentName);
 
           const exitCode = runningAgent.exitCode;
           const succeeded = runningAgent.status === "completed";
@@ -766,6 +786,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   }
 
   opsRunner.stop();
+  peerTracker.stop();
   await eventEmitter.flush(); // Ensure all buffered events are sent before exit
   await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "Shut down" });
   ui.outro("Shutting down — goodbye");
