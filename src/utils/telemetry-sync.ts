@@ -9,7 +9,6 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { getMatchBufferPath } from "./rule-matcher.js";
 import type { RuleMatchResult } from "./rule-matcher.js";
-import type { ApiClient } from "../api-client.js";
 import * as ui from "../ui.js";
 
 interface RuleStats {
@@ -53,7 +52,6 @@ function detectContext(workingDir: string): string {
  * then clears the buffer.
  */
 export async function syncRuleTelemetry(
-  api: ApiClient,
   apiUrl: string,
   apiKey: string,
   workingDir: string,
@@ -79,16 +77,33 @@ export async function syncRuleTelemetry(
 
   if (entries.length === 0) return;
 
-  // Aggregate by rule_id
+  // Aggregate T1 auto_hits by rule_id
   const statsMap = new Map<string, { confirms: number; rejects: number; autoHits: number }>();
   for (const entry of entries) {
     const key = entry.rule_id;
     const existing = statsMap.get(key) || { confirms: 0, rejects: 0, autoHits: 0 };
     if (entry.tier === "auto_hit") existing.autoHits++;
-    // Note: confirm/reject counts come from T2 evaluation results,
-    // but we can count auto_hits from T1 here
     statsMap.set(key, existing);
   }
+
+  // Fetch T2 confirm/reject counts from API match-log
+  try {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    };
+    const res = await fetch(`${apiUrl}/api/v1/rule-evaluations/match-log?limit=200`, { headers });
+    if (res.ok) {
+      const matchLog = (await res.json()) as Array<{ rule_id: string; feedback: string | null }>;
+      for (const entry of matchLog) {
+        if (!entry.feedback || !entry.rule_id) continue;
+        const existing = statsMap.get(entry.rule_id) || { confirms: 0, rejects: 0, autoHits: 0 };
+        if (entry.feedback === "confirm") existing.confirms++;
+        else if (entry.feedback === "reject") existing.rejects++;
+        statsMap.set(entry.rule_id, existing);
+      }
+    }
+  } catch { /* non-fatal: proceed with auto_hit counts only */ }
 
   // Hash rule_ids for anonymization
   const telemetryEntries: RuleStats[] = [];

@@ -587,7 +587,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   opsRunner.stop();
   peerTracker.stop();
   await eventEmitter.flush(); // Ensure all buffered events are sent before exit
-  await syncRuleTelemetry(api, cliArgs.apiUrl, cliArgs.apiKey, ctx.workingDir, sprintData?.sprint?.number);
+  await syncRuleTelemetry(cliArgs.apiUrl, cliArgs.apiKey, ctx.workingDir, sprintData?.sprint?.number);
   await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "Shut down" });
   ui.outro("Shutting down — goodbye");
 }
