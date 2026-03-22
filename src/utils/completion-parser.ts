@@ -3,11 +3,17 @@
  *
  * Parses both direct `COMPLETION_JSON:{...}` lines and stream-json `result`
  * events that contain COMPLETION_JSON inside the result text.
+ *
+ * Uses standardized completion schemas (completion-schema.ts) and normalizes
+ * all output to the AgentCompletion format while maintaining backwards
+ * compatibility with the legacy { review_comment, commits } format.
  */
 
 import type { TemplateAction } from "../agent-templates.js";
 import * as ui from "../ui.js";
+import { normalizeCompletion, toLegacyFormat, type AgentCompletion } from "./completion-schema.js";
 
+/** Legacy format — kept for backwards compatibility */
 export interface CompletionResult {
   review_comment: string;
   commits: string;
@@ -26,6 +32,15 @@ function injectIntoPostActions(actions: TemplateAction[], review_comment: string
 }
 
 /**
+ * Parse raw JSON into normalized AgentCompletion + legacy CompletionResult.
+ */
+function parseCompletionJson(json: Record<string, unknown>): { completion: AgentCompletion; legacy: CompletionResult } {
+  const completion = normalizeCompletion(json);
+  const legacy = toLegacyFormat(completion);
+  return { completion, legacy };
+}
+
+/**
  * Extract COMPLETION_JSON from agent stdout lines.
  * Returns the parsed completion data or null if not found.
  *
@@ -38,6 +53,8 @@ export function extractCompletionJson(
     onReviewUpdate?: (taskId: string, phase: string, reviewComment: string) => void;
     taskId?: string;
     taskLog?: { event: (name: string, data: Record<string, unknown>) => void };
+    /** New: receive the normalized completion */
+    onCompletion?: (completion: AgentCompletion) => void;
   }
 ): CompletionResult | null {
   // Pass 1: stream-json result events (fallback for when no direct COMPLETION_JSON line exists)
@@ -46,24 +63,28 @@ export function extractCompletionJson(
       const ev = JSON.parse(l);
       if (ev.type === "result" && ev.subtype === "success" && typeof ev.result === "string") {
         const cjMatch = ev.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
-        let resultText: string;
         let result: CompletionResult;
+        let completion: AgentCompletion;
         if (cjMatch) {
           try {
             const cj = JSON.parse(cjMatch[1]);
-            result = { review_comment: cj.review_comment, commits: cj.commits };
-            resultText = cj.review_comment || ev.result.slice(0, 2000);
+            const parsed = parseCompletionJson(cj);
+            completion = parsed.completion;
+            result = parsed.legacy;
           } catch {
-            resultText = ev.result.slice(0, 2000);
+            const resultText = ev.result.slice(0, 2000);
+            completion = { summary: resultText };
             result = { review_comment: resultText, commits: "" };
           }
         } else {
-          resultText = ev.result.slice(0, 2000);
+          const resultText = ev.result.slice(0, 2000);
+          completion = { summary: resultText };
           result = { review_comment: resultText, commits: "" };
         }
-        injectIntoPostActions(postActions, resultText, "");
+        injectIntoPostActions(postActions, result.review_comment, "");
         ui.info(`[completion] Extracted completion from stream result (no COMPLETION_JSON)`);
-        callbacks?.taskLog?.event("completion_parse", { source: "stream_result", review_comment: resultText.slice(0, 200) });
+        callbacks?.taskLog?.event("completion_parse", { source: "stream_result", summary: completion.summary.slice(0, 200) });
+        callbacks?.onCompletion?.(completion);
         return result;
       }
     } catch { /* skip */ }
@@ -75,13 +96,20 @@ export function extractCompletionJson(
     if (line.startsWith("COMPLETION_JSON:")) {
       try {
         const json = JSON.parse(line.slice("COMPLETION_JSON:".length));
-        injectIntoPostActions(postActions, json.review_comment, json.commits);
-        ui.info(`[completion] Parsed COMPLETION_JSON: ${json.review_comment?.slice(0, 80)}...`);
-        callbacks?.taskLog?.event("completion_parse", { source: "completion_json", review_comment: json.review_comment?.slice(0, 200), commits: json.commits });
-        if (json.review_comment && callbacks?.onReviewUpdate && callbacks?.taskId) {
-          callbacks.onReviewUpdate(callbacks.taskId, "agent_submitted", json.review_comment);
+        const { completion, legacy } = parseCompletionJson(json);
+        injectIntoPostActions(postActions, legacy.review_comment, legacy.commits);
+        ui.info(`[completion] Parsed COMPLETION_JSON: ${completion.summary.slice(0, 80)}...`);
+        callbacks?.taskLog?.event("completion_parse", {
+          source: "completion_json",
+          summary: completion.summary.slice(0, 200),
+          commits: completion.commits,
+          files_changed: completion.files_changed,
+        });
+        if (completion.summary && callbacks?.onReviewUpdate && callbacks?.taskId) {
+          callbacks.onReviewUpdate(callbacks.taskId, "agent_submitted", completion.summary);
         }
-        return { review_comment: json.review_comment, commits: json.commits };
+        callbacks?.onCompletion?.(completion);
+        return legacy;
       } catch { /* skip */ }
     }
 
@@ -92,12 +120,14 @@ export function extractCompletionJson(
         const match = event.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
         if (match) {
           const json = JSON.parse(match[1]);
-          injectIntoPostActions(postActions, json.review_comment, json.commits);
-          ui.info(`[completion] Parsed COMPLETION_JSON from stream: ${json.review_comment?.slice(0, 80)}...`);
-          if (json.review_comment && callbacks?.onReviewUpdate && callbacks?.taskId) {
-            callbacks.onReviewUpdate(callbacks.taskId, "agent_submitted", json.review_comment);
+          const { completion, legacy } = parseCompletionJson(json);
+          injectIntoPostActions(postActions, legacy.review_comment, legacy.commits);
+          ui.info(`[completion] Parsed COMPLETION_JSON from stream: ${completion.summary.slice(0, 80)}...`);
+          if (completion.summary && callbacks?.onReviewUpdate && callbacks?.taskId) {
+            callbacks.onReviewUpdate(callbacks.taskId, "agent_submitted", completion.summary);
           }
-          return { review_comment: json.review_comment, commits: json.commits };
+          callbacks?.onCompletion?.(completion);
+          return legacy;
         }
       }
     } catch { /* not JSON */ }
