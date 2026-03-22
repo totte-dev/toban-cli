@@ -11,7 +11,6 @@ import type { ApiClient, Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { logError, CLI_ERR } from "./error-logger.js";
 import type { GuardrailConfig } from "./utils/guardrail.js";
-import { trackRetry } from "./utils/retry-tracker.js";
 import { handleGitMerge } from "./handlers/git-merge.js";
 import { handleGitPush } from "./handlers/git-push.js";
 import { handleMergePipeline } from "./handlers/merge-pipeline.js";
@@ -90,10 +89,11 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "record_changes", when: "success", label: "Record change summary for other agents" },
       { type: "merge_pipeline", when: "success", label: "Merge, verify build, push" },
       { type: "rule_match", when: "success", label: "Match diff against playbook rules" },
-      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for code review" },
+      // Slot released here — spawn_reviewer runs after idle, doesn't block next task
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
       { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
+      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for code review (async)" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
       { type: "notify_user", params: { message: "⚠️ Task \"{{taskTitle}}\" {{status}}" }, when: "failure", label: "Notify user of failure" },
       { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
@@ -171,10 +171,10 @@ DO NOT: git add, git commit, git push, or modify any files. Only read and analyz
       { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "git_merge", when: "success", label: "Merge branch to base" },
       { type: "git_push", when: "success", label: "Push main to remote" },
-      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for content review" },
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
       { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
+      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for content review (async)" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
       { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
     ],
@@ -404,38 +404,8 @@ export async function executeActions(
       switch (action.type) {
         case "update_task": {
           const updates = { ...(action.params ?? {}) } as Record<string, unknown>;
-          // If Reviewer already saved a structured review via review-report API,
-          // don't overwrite with Builder's COMPLETION_JSON text
-          if (ctx.reviewVerdict && updates.review_comment && updates.status === "review") {
-            delete updates.review_comment;
-            delete updates.commits;
-          }
-          // If review verdict is NEEDS_CHANGES, check retry count
-          if (updates.status === "review" && ctx.reviewVerdict === "NEEDS_CHANGES") {
-            const { retryCount, maxed } = trackRetry(ctx.task.id);
-
-            // Record failure to Failure DB (only on first attempt — avoid retry noise)
-            if (retryCount === 1) {
-              const reviewComment = typeof ctx.task.review_comment === "string" ? ctx.task.review_comment : undefined;
-              ctx.api.recordFailure({
-                task_id: ctx.task.id,
-                failure_type: "reject",
-                summary: `NEEDS_CHANGES: ${ctx.task.title}`,
-                agent_name: ctx.agentName,
-                sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
-                review_comment: reviewComment,
-              }).catch(() => { /* best-effort */ });
-            }
-
-            if (maxed) {
-              updates.status = "review";
-              updates.review_comment = `Blocked: task failed ${retryCount} times. Needs human intervention.`;
-              ui.error(`[${phase}] Task failed ${retryCount} times — moved to review for human intervention`);
-            } else {
-              updates.status = "todo";
-              ui.warn(`[${phase}] Review verdict: NEEDS_CHANGES (attempt ${retryCount}/3) — resetting to todo`);
-            }
-          }
+          // Note: NEEDS_CHANGES retry logic is handled by spawn_reviewer itself
+          // (runs async after slot release, self-contained retry + auto-transition)
           await ctx.api.updateTask(ctx.task.id, updates as Partial<Task>);
           ctx.onDataUpdate?.("task", ctx.task.id, updates);
           ui.info( `[${phase}] ${label}`);
@@ -499,7 +469,10 @@ export async function executeActions(
           break;
         }
         case "spawn_reviewer": {
-          await handleSpawnReviewer(action, ctx, phase, actions);
+          // Fire-and-forget: Reviewer runs async, doesn't block slot release
+          handleSpawnReviewer(action, ctx, phase, actions)
+            .catch((err) => ui.warn(`[${phase}] spawn_reviewer error: ${err}`));
+          ui.info(`[${phase}] ${label}: spawned async (slot already released)`);
           break;
         }
         case "review_changes": {

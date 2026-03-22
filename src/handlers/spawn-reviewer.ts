@@ -263,4 +263,48 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
   ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewComment, review_verdict: verdict });
   ctx.onReviewUpdate?.(ctx.task.id, "completed", reviewComment);
   ui.info(`[${phase}] ${label}: verdict = ${verdict}`);
+
+  // --- Async self-contained post-review logic ---
+  // Since spawn_reviewer runs fire-and-forget (after slot release),
+  // retry and auto-transition must be handled here.
+
+  if (verdict === "NEEDS_CHANGES") {
+    const { trackRetry } = await import("../utils/retry-tracker.js");
+    const { retryCount, maxed } = trackRetry(ctx.task.id);
+
+    // Record failure to Failure DB (only on first attempt)
+    if (retryCount === 1) {
+      ctx.api.recordFailure({
+        task_id: ctx.task.id,
+        failure_type: "reject",
+        summary: `NEEDS_CHANGES: ${ctx.task.title}`,
+        agent_name: ctx.agentName,
+        sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+        review_comment: reviewComment,
+      }).catch(() => { /* best-effort */ });
+    }
+
+    if (maxed) {
+      await ctx.api.updateTask(ctx.task.id, {
+        status: "review",
+        review_comment: `Blocked: task failed ${retryCount} times. Needs human intervention.`,
+      } as Partial<Task>);
+      ui.error(`[reviewer] Task failed ${retryCount} times — blocked for human intervention`);
+    } else {
+      await ctx.api.updateTask(ctx.task.id, { status: "todo" } as Partial<Task>);
+      ctx.onDataUpdate?.("task", ctx.task.id, { status: "todo" });
+      ui.warn(`[reviewer] NEEDS_CHANGES (attempt ${retryCount}/3) — resetting to todo`);
+    }
+  } else if (verdict === "APPROVE") {
+    // Check auto-transition: if all tasks done, move sprint to review phase
+    if (ctx.config.sprintNumber != null) {
+      try {
+        const result = await ctx.api.checkAutoTransition(ctx.config.sprintNumber);
+        if (result.transitioned) {
+          ui.info(`[sprint] Auto-transition: ${result.from} → ${result.to}`);
+          ctx.onDataUpdate?.("sprint", String(ctx.config.sprintNumber), { status: result.to });
+        }
+      } catch { /* non-fatal */ }
+    }
+  }
 }

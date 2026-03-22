@@ -538,17 +538,12 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           taskLog.event("post_actions_start", { exitCode, mergeSkipped: actionCtx.mergeSkipped, hasCompletion: !!actionCtx.completionJson, reviewVerdict: actionCtx.reviewVerdict });
 
           // Run post_actions asynchronously, then release the slot
+          // Note: spawn_reviewer runs fire-and-forget within post_actions,
+          // so slot is released before review completes. Retry and auto-transition
+          // are handled inside spawn-reviewer.ts.
           executeActions(agentTemplate.post_actions, actionCtx, "post")
-            .then(async () => {
-              taskLog.event("post_actions_done", { reviewVerdict: actionCtx.reviewVerdict });
-              // Check auto-transition: if all tasks done, move sprint to review phase
-              if (actionCtx.reviewVerdict === "APPROVE" && capturedSprintData?.sprint?.number != null) {
-                const result = await api.checkAutoTransition(capturedSprintData.sprint.number);
-                if (result.transitioned) {
-                  ui.info(`[sprint] Auto-transition: ${result.from} → ${result.to}`);
-                  actionCtx.onDataUpdate?.("sprint", String(capturedSprintData.sprint.number), { status: result.to });
-                }
-              }
+            .then(() => {
+              taskLog.event("post_actions_done");
             })
             .catch((postErr) => {
               logError(CLI_ERR.ACTION_FAILED, `Post-actions failed: ${postErr}`, { taskId: task.id }, postErr);
