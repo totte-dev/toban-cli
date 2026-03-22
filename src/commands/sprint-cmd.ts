@@ -77,10 +77,114 @@ export async function handleSprintCmd(apiUrl: string, apiKey: string, args: stri
     return;
   }
 
+  if (sub === "retro") {
+    const comment = args.slice(1).join(" ").trim();
+    if (!comment) { console.error("Usage: toban sprint retro \"your retro comment\""); return; }
+
+    // Find current sprint (active or retrospective)
+    const sprints = (await apiFetch(`${apiUrl}/api/v1/sprints`, apiKey)) as Array<{ number: number; status: string }>;
+    const current = sprints.filter((s) => s.status === "active" || s.status === "retrospective" || s.status === "review");
+    if (current.length === 0) { console.error("No active sprint."); return; }
+    const sprintNumber = current[current.length - 1].number;
+
+    await apiFetch(`${apiUrl}/api/v1/sprints/${sprintNumber}/retro`, apiKey, {
+      method: "POST",
+      body: JSON.stringify({ agent_name: "user", to_improve: comment }),
+    });
+
+    console.log(`Retro comment saved for Sprint #${sprintNumber}`);
+    return;
+  }
+
+  if (sub === "summary") {
+    // Find the most recent completed sprint, or current if specified
+    const sprints = (await apiFetch(`${apiUrl}/api/v1/sprints`, apiKey)) as Array<{
+      number: number; status: string; goal: string | null;
+      completed_at: string | null; retro_summary: string | null;
+    }>;
+
+    const targetNum = args[1] ? parseInt(args[1], 10) : undefined;
+    const target = targetNum
+      ? sprints.find((s) => s.number === targetNum)
+      : [...sprints].reverse().find((s) => s.status === "completed") || sprints[sprints.length - 1];
+
+    if (!target) { console.log("No sprints found."); return; }
+
+    console.log(`Sprint #${target.number} [${target.status}]`);
+    if (target.goal) console.log(`Goal: ${target.goal}`);
+    console.log("");
+
+    // Tasks
+    const tasks = (await apiFetch(`${apiUrl}/api/v1/tasks?sprint=${target.number}`, apiKey)) as Array<{
+      title: string; status: string; story_points: number | null;
+      review_verdict: string | null; type: string | null;
+    }>;
+
+    const done = tasks.filter((t) => t.status === "done");
+    const totalSP = tasks.reduce((s, t) => s + (t.story_points || 0), 0);
+    const doneSP = done.reduce((s, t) => s + (t.story_points || 0), 0);
+    const rejected = tasks.filter((t) => t.review_verdict === "NEEDS_CHANGES").length;
+
+    console.log(`Results: ${doneSP}/${totalSP} SP completed (${done.length}/${tasks.length} tasks)`);
+    if (rejected > 0) console.log(`Rejected: ${rejected} task(s) received NEEDS_CHANGES`);
+    console.log("");
+
+    // Completed tasks
+    if (done.length > 0) {
+      console.log("Completed:");
+      for (const t of done) console.log(`  - ${t.title}`);
+      console.log("");
+    }
+
+    // Retro comments
+    try {
+      const retros = (await apiFetch(`${apiUrl}/api/v1/sprints/${target.number}/retro`, apiKey)) as Array<{
+        agent_name: string; went_well: string | null; to_improve: string | null;
+      }>;
+      if (retros.length > 0) {
+        console.log("Retro:");
+        for (const r of retros) {
+          if (r.went_well) console.log(`  [${r.agent_name}] Went well: ${r.went_well}`);
+          if (r.to_improve) console.log(`  [${r.agent_name}] To improve: ${r.to_improve}`);
+        }
+        console.log("");
+      }
+    } catch { /* retro may not exist */ }
+
+    // Rule suggestions
+    try {
+      const suggestions = (await apiFetch(`${apiUrl}/api/v1/sprints/${target.number}/retro/rule-suggestions`, apiKey)) as {
+        suggestions: Array<{ title: string; status: string; source: string }>;
+      };
+      const accepted = suggestions.suggestions.filter((s) => s.status === "accepted");
+      const pending = suggestions.suggestions.filter((s) => s.status === "pending");
+      if (accepted.length > 0) {
+        console.log(`Rules added (${accepted.length}):`);
+        for (const s of accepted) console.log(`  - ${s.title}`);
+        console.log("");
+      }
+      if (pending.length > 0) {
+        console.log(`Pending rule suggestions (${pending.length}):`);
+        for (const s of pending) console.log(`  - ${s.title}`);
+        console.log("");
+      }
+    } catch { /* suggestions may not exist */ }
+
+    // Saved summary
+    if (target.retro_summary) {
+      console.log("Summary:");
+      console.log(target.retro_summary);
+    }
+
+    return;
+  }
+
   console.error(`Unknown sprint subcommand: ${sub}`);
   console.log(`Usage:
   toban sprint create [--goal "..."]   Create a new sprint
   toban sprint add <task-id>           Add task to current sprint
   toban sprint remove <task-id>        Move task back to backlog
+  toban sprint retro "comment"         Submit a retro comment
+  toban sprint summary [N]             Show sprint results + learnings
   toban sprint complete [--push]       Complete the current sprint`);
 }

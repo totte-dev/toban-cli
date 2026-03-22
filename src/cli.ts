@@ -48,6 +48,8 @@ Commands:
   sprint create         Create a new sprint (--goal "...")
   sprint add <id>       Add a task to the current sprint
   sprint remove <id>    Remove a task from the sprint (back to backlog)
+  sprint retro "msg"    Submit a retro comment for the current sprint
+  sprint summary        Show previous sprint results + learnings
   sprint complete       Complete the current sprint and create a git tag
   task create "title"   Create a task (--desc, --priority, --type, --sprint, --sp)
   task done <id>        Mark a task as done
@@ -211,7 +213,7 @@ if (cliArgs.command === "plan") {
   const rawArgs = process.argv.slice(2);
   if (rawArgs[1] === "complete") {
     handleSprintComplete(cliArgs.apiUrl, cliArgs.apiKey, rawArgs.includes("--push")).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
-  } else if (rawArgs[1] === "create" || rawArgs[1] === "add" || rawArgs[1] === "remove") {
+  } else if (rawArgs[1] === "create" || rawArgs[1] === "add" || rawArgs[1] === "remove" || rawArgs[1] === "retro" || rawArgs[1] === "summary") {
     const { handleSprintCmd } = await import("./commands/sprint-cmd.js");
     handleSprintCmd(cliArgs.apiUrl, cliArgs.apiKey, rawArgs.slice(1)).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
   } else { ui.error(`Unknown sprint subcommand: ${rawArgs[1]}`); printUsage(); process.exit(1); }
