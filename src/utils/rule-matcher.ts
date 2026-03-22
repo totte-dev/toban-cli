@@ -49,7 +49,7 @@ interface MatcherPattern {
 // Buffer path
 // ---------------------------------------------------------------------------
 
-function getMatchBufferPath(): string {
+export function getMatchBufferPath(): string {
   const dir = join(homedir(), ".toban", "events");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   return join(dir, "rule-matches.jsonl");

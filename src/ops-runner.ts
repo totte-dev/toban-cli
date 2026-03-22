@@ -10,12 +10,10 @@ import type { Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
 import { fireRuleEvaluate } from "./rule-evaluate.js";
 import { getExecError } from "./utils/exec-error.js";
 import { evaluateRuleMatches, type RuleMatch } from "./rule-evaluator.js";
-import { readPendingCandidates, type RuleMatchResult } from "./utils/rule-matcher.js";
+import { readPendingCandidates, getMatchBufferPath, type RuleMatchResult } from "./utils/rule-matcher.js";
 
 /** QA scan configuration parsed from ops task description JSON */
 export interface QaScanConfig {
@@ -447,7 +445,7 @@ export class OpsRunner {
 
     // Mark local candidates as evaluated by removing them from buffer
     if (localCandidates.length > 0) {
-      this.clearEvaluatedCandidates(localCandidates, results);
+      this.clearEvaluatedCandidates(results);
     }
 
     const summary = `Evaluated ${results.length}: ${confirmed} confirmed, ${rejected} rejected`;
@@ -456,9 +454,9 @@ export class OpsRunner {
   }
 
   /** Remove evaluated candidates from the local JSONL buffer. */
-  private clearEvaluatedCandidates(_candidates: RuleMatchResult[], results: Array<{ matchId: string }>): void {
+  private clearEvaluatedCandidates(results: Array<{ matchId: string }>): void {
     const evaluatedIds = new Set(results.map((r) => r.matchId));
-    const bufferPath = join(homedir(), ".toban", "events", "rule-matches.jsonl");
+    const bufferPath = getMatchBufferPath();
 
     if (!existsSync(bufferPath)) return;
     try {
@@ -474,7 +472,9 @@ export class OpsRunner {
           } catch { return true; }
         });
       writeFileSync(bufferPath, remaining.length > 0 ? remaining.join("\n") + "\n" : "");
-    } catch { /* best-effort */ }
+    } catch (err) {
+      ui.warn(`[rule-eval] Failed to clear evaluated candidates: ${err}`);
+    }
   }
 
   /** Check if an agent exists and is active in the workspace. */
