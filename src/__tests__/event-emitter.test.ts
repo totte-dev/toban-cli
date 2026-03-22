@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createEventEmitter } from "../utils/event-emitter.js";
 import type { ApiClient, EventInput } from "../api-client.js";
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 function createMockApiClient(): ApiClient & { recordedEvents: EventInput[][] } {
   const recorded: EventInput[][] = [];
@@ -8,7 +11,6 @@ function createMockApiClient(): ApiClient & { recordedEvents: EventInput[][] } {
     recordedEvents: recorded,
     recordEvent: vi.fn(async () => {}),
     recordEvents: vi.fn(async (events: EventInput[]) => { recorded.push(events); }),
-    // Stub other methods (not used in these tests)
     fetchWorkspace: vi.fn(),
     fetchGitToken: vi.fn(),
     fetchTasks: vi.fn(),
@@ -34,28 +36,35 @@ function createMockApiClient(): ApiClient & { recordedEvents: EventInput[][] } {
   } as unknown as ApiClient & { recordedEvents: EventInput[][] };
 }
 
+/** Clear the disk buffer to isolate tests */
+function clearDiskBuffer(): void {
+  const dir = join(homedir(), ".toban", "events");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "buffer.jsonl"), "");
+}
+
 describe("EventEmitter", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    clearDiskBuffer();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    clearDiskBuffer();
   });
 
-  it("buffers events and flushes after 1 second", async () => {
+  it("does not send events until flush is called", async () => {
     const api = createMockApiClient();
     const emitter = createEventEmitter(api, 76);
 
     emitter.agentSpawned("builder", "task-1", { role: "builder" });
     emitter.agentSpawned("builder", "task-2", { role: "builder" });
 
-    // Not flushed yet
+    // Not flushed yet — no API calls
     expect(api.recordEvents).not.toHaveBeenCalled();
+    expect(emitter.pending).toBe(2);
 
-    // Advance timer
-    vi.advanceTimersByTime(1000);
-    await vi.runAllTimersAsync();
+    // Flush sends all buffered events
+    await emitter.flush();
 
     expect(api.recordEvents).toHaveBeenCalledTimes(1);
     const batch = (api.recordEvents as ReturnType<typeof vi.fn>).mock.calls[0][0] as EventInput[];
@@ -167,7 +176,7 @@ describe("EventEmitter", () => {
     expect(batch[0].data?.layer).toBe(1);
   });
 
-  it("flush sends immediately without waiting for timer", async () => {
+  it("flush sends immediately without waiting", async () => {
     const api = createMockApiClient();
     const emitter = createEventEmitter(api, 76);
 
@@ -181,7 +190,7 @@ describe("EventEmitter", () => {
     const api = createMockApiClient();
     const emitter = createEventEmitter(api, 76);
 
-    await emitter.flush(); // Should not throw
+    await emitter.flush();
     expect(api.recordEvents).not.toHaveBeenCalled();
   });
 
@@ -195,5 +204,16 @@ describe("EventEmitter", () => {
 
     const batch = (api.recordEvents as ReturnType<typeof vi.fn>).mock.calls[0][0] as EventInput[];
     expect(batch[0].span_id).not.toBe(batch[1].span_id);
+  });
+
+  it("clears pending count after flush", async () => {
+    const api = createMockApiClient();
+    const emitter = createEventEmitter(api, 76);
+
+    emitter.agentSpawned("builder", "task-1");
+    expect(emitter.pending).toBe(1);
+
+    await emitter.flush();
+    expect(emitter.pending).toBe(0);
   });
 });
