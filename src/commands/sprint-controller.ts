@@ -102,10 +102,9 @@ export class SprintController {
       } catch { /* non-fatal */ }
     }
 
-    // Strategist proposals on retrospective entry
-    if (sprint.status === "retrospective") {
-      await this.handleRetrospective(sprint);
-    }
+    // Retrospective: Rule suggestions are generated server-side via
+    // GET /sprints/:number/retro/rule-suggestions (displayed in dashboard).
+    // Strategist LLM proposals removed — replaced by data-driven rule suggestions.
 
     // Timebox: auto-transition to review if deadline passed
     if (sprint.status === "active" && sprint.deadline) {
