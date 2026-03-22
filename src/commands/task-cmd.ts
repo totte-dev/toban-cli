@@ -104,8 +104,16 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
     }
 
     case "create": {
-      const title = args.slice(1).filter((a) => !a.startsWith("--")).join(" ").trim();
-      if (!title) { console.error("Usage: toban task create \"title\" [--desc \"...\"] [--priority p1] [--type feature] [--sprint N]"); return; }
+      // Extract title: everything after "create" that isn't a flag or flag value
+      const flagNames = new Set(["--desc", "--priority", "--type", "--sprint", "--sp"]);
+      const titleParts: string[] = [];
+      for (let i = 1; i < args.length; i++) {
+        if (flagNames.has(args[i])) { i++; continue; } // skip flag + its value
+        if (args[i].startsWith("--")) continue;
+        titleParts.push(args[i]);
+      }
+      const title = titleParts.join(" ").trim();
+      if (!title) { console.error("Usage: toban task create \"title\" [--desc \"...\"] [--priority p1] [--type feature] [--sprint N] [--sp N]"); return; }
       const desc = getArg(args, "--desc");
       const priority = getArg(args, "--priority") || "p2";
       const type = getArg(args, "--type") || "feature";
@@ -115,7 +123,7 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
         method: "POST",
         body: JSON.stringify({ title, description: desc, priority, type, sprint, owner: "user", story_points: sp }),
       })) as { id: string };
-      console.log(`Created: ${result.id?.slice(0, 8)} | ${title}`);
+      console.log(`Created: ${result.id} | ${title}`);
       break;
     }
 
