@@ -109,6 +109,8 @@ export interface ApiClient {
   fetchPlaybookPrompt(agentName?: string, taskTags?: string[]): Promise<string>;
   /** Fetch raw playbook rules for local keyword matching */
   fetchPlaybookRules(): Promise<Array<{ id: string; category: string; title: string; content: string; tags: string | null }>>;
+  /** Create a custom playbook rule */
+  createPlaybookRule(title: string, content: string, category: string): Promise<void>;
   fetchMessages(channel: string): Promise<Message[]>;
   sendMessage(from: string, to: string, content: string): Promise<void>;
   fetchMySecrets(): Promise<Record<string, string>>;
@@ -331,6 +333,14 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       } catch {
         return "";
       }
+    },
+
+    async createPlaybookRule(title: string, content: string, category: string): Promise<void> {
+      await fetch(`${apiUrl}/api/v1/playbook`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ title, content, category }),
+      });
     },
 
     async fetchPlaybookRules(): Promise<Array<{ id: string; category: string; title: string; content: string; tags: string | null }>> {

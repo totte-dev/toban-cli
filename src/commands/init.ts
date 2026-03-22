@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "n
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { createApiClient, type WorkspaceInfo } from "../api-client.js";
+import { analyzeProjectAndSuggestRules } from "../utils/rule-suggestions.js";
 
 // ---------------------------------------------------------------------------
 // Git hook installer
@@ -326,11 +327,11 @@ export async function handleInit(): Promise<void> {
   p.log.success(`Config saved to ${CONFIG_DIR}/${CONFIG_FILE}`);
 
   // 7. Install git pre-push hook for auto-review
+  const gitDir = findGitDir(cwd);
   const hookInstalled = installPostPushHook(cwd, apiUrl, apiKey);
   if (hookInstalled) {
     p.log.success("Git pre-push hook installed (auto-review on push)");
   } else {
-    const gitDir = findGitDir(cwd);
     if (!gitDir) {
       p.log.warning("Not a git repository — skipping auto-review hook");
     } else {
@@ -338,13 +339,55 @@ export async function handleInit(): Promise<void> {
     }
   }
 
-  // 8. Optionally create first sprint
+  // 8. Suggest playbook rules based on project analysis
+  const api = createApiClient(apiUrl, apiKey);
+  if (gitDir) {
+    const suggestRules = await p.confirm({
+      message: "Analyze project and suggest playbook rules?",
+      initialValue: true,
+    });
+    if (!isCancel(suggestRules) && suggestRules) {
+      spin.start("Analyzing project...");
+      try {
+        const suggestions = await analyzeProjectAndSuggestRules(cwd);
+        spin.stop(`Found ${suggestions.length} rule suggestion(s)`);
+
+        if (suggestions.length > 0) {
+          const selected = await p.multiselect({
+            message: "Select rules to add to your Playbook",
+            options: suggestions.map((s, i) => ({
+              value: i,
+              label: s.title,
+              hint: s.source,
+            })),
+            required: false,
+          });
+
+          if (!isCancel(selected) && Array.isArray(selected) && selected.length > 0) {
+            let added = 0;
+            for (const idx of selected) {
+              const rule = suggestions[idx as number];
+              try {
+                await api.createPlaybookRule(rule.title, rule.content, rule.category);
+                added++;
+              } catch { /* skip on error */ }
+            }
+            p.log.success(`Added ${added} rule(s) to Playbook`);
+          }
+        }
+      } catch (err) {
+        spin.stop("Analysis failed");
+        p.log.warning(`Could not analyze project: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  // 9. Optionally create first sprint
   const createSprint = await p.confirm({
     message: "Create and start the first sprint now?",
     initialValue: false,
   });
   if (!isCancel(createSprint) && createSprint) {
-    const api = createApiClient(apiUrl, apiKey);
     spin.start("Starting sprint...");
     try {
       const result = await api.startSprint();
