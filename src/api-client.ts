@@ -92,7 +92,7 @@ export interface AgentMemory {
 export interface ApiClient {
   fetchWorkspace(): Promise<WorkspaceInfo>;
   fetchGitToken(): Promise<{ token: string; repo: string | null } | null>;
-  fetchTasks(): Promise<Task[]>;
+  fetchTasks(sprint?: number): Promise<Task[]>;
   fetchRepositories(): Promise<WorkspaceRepository[]>;
   startSprint(): Promise<SprintStartResult>;
   fetchSprintData(): Promise<SprintStartResult>;
@@ -177,8 +177,9 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
       return (await res.json()) as WorkspaceInfo;
     },
 
-    async fetchTasks(): Promise<Task[]> {
-      const res = await fetch(`${apiUrl}/api/v1/tasks`, { headers });
+    async fetchTasks(sprint?: number): Promise<Task[]> {
+      const qs = sprint != null ? `?sprint=${sprint}` : "";
+      const res = await fetch(`${apiUrl}/api/v1/tasks${qs}`, { headers });
       if (!res.ok) {
         throw new Error(`Failed to fetch tasks: ${res.status} ${res.statusText}`);
       }

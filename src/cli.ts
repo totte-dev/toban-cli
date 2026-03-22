@@ -40,6 +40,8 @@ Usage:
 Commands:
   init                  Initialize a new project (interactive setup)
   start                 Start the agent runner loop
+  status                Show current sprint state + progress
+  backlog               List backlog tasks by priority
   sprint complete       Complete the current sprint and create a git tag
   peers                 Show active peer agents and their working files
   peers files           Show file-centric conflict view
@@ -153,6 +155,20 @@ if (process.argv[2] === "peers") {
 } else if (process.argv[2] === "memory") {
   const { handleMemory } = await import("./commands/memory-cmd.js");
   handleMemory(process.argv.slice(3)).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
+} else if (process.argv[2] === "status") {
+  const { handleStatus } = await import("./commands/status-cmd.js");
+  const config = loadConfig(process.cwd());
+  const apiUrl = process.env.TOBAN_API_URL ?? config?.api_url;
+  const apiKey = process.env.TOBAN_API_KEY ?? config?.api_key;
+  if (!apiUrl || !apiKey) { console.error("API credentials required. Run `toban init` or set TOBAN_API_URL/TOBAN_API_KEY."); process.exit(1); }
+  handleStatus(apiUrl, apiKey).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
+} else if (process.argv[2] === "backlog") {
+  const { handleBacklog } = await import("./commands/backlog-cmd.js");
+  const config = loadConfig(process.cwd());
+  const apiUrl = process.env.TOBAN_API_URL ?? config?.api_url;
+  const apiKey = process.env.TOBAN_API_KEY ?? config?.api_key;
+  if (!apiUrl || !apiKey) { console.error("API credentials required. Run `toban init` or set TOBAN_API_URL/TOBAN_API_KEY."); process.exit(1); }
+  handleBacklog(apiUrl, apiKey).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
 } else
 
 // All other commands go through parseArgs (which requires api-url/api-key)
