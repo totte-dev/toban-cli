@@ -9,10 +9,13 @@ import { createAuthHeaders, fetchWithRetry } from "./api-client.js";
 import type { Task } from "./api-client.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { fireRuleEvaluate } from "./rule-evaluate.js";
 import { getExecError } from "./utils/exec-error.js";
 import { evaluateRuleMatches, type RuleMatch } from "./rule-evaluator.js";
+import { readPendingCandidates, type RuleMatchResult } from "./utils/rule-matcher.js";
 
 /** QA scan configuration parsed from ops task description JSON */
 export interface QaScanConfig {
@@ -360,44 +363,63 @@ export class OpsRunner {
   // Rule Evaluate (LLM-based re-evaluation of keyword matches)
   // ---------------------------------------------------------------------------
 
-  /** Re-evaluate keyword matches using Claude CLI for precision improvement. */
+  /** Re-evaluate keyword matches using Claude CLI for precision improvement.
+   *
+   * Two-source strategy:
+   * 1. Local JSONL buffer (T1 candidates from rule-matcher.ts) — preferred
+   * 2. API match-log (legacy, for matches from server-side evaluation)
+   */
   async runRuleEvaluate(task: OpsTask): Promise<void> {
-    ui.info("[rule-eval] Fetching unreviewed matches...");
+    ui.info("[rule-eval] Checking for unreviewed matches...");
 
-    // 1. Fetch unreviewed matches from API
-    let matches: RuleMatch[] = [];
-    try {
-      const res = await fetchWithRetry(
-        `${this.apiUrl}/api/v1/rule-evaluations/match-log?feedback=null&limit=20`,
-        { headers: this.headers },
-      );
-      if (res.ok) {
-        const data = await res.json() as { matches?: RuleMatch[] } | RuleMatch[];
-        matches = Array.isArray(data) ? data : (data.matches ?? []);
+    // Source 1: Local JSONL buffer (T1 llm_candidate tier)
+    const localCandidates = readPendingCandidates(10);
+    const localMatches: RuleMatch[] = localCandidates.map((c) => ({
+      id: c.id,
+      rule_id: c.rule_id,
+      rule_title: c.category, // category as fallback title
+      rule_content: "",
+      matched_text: c.matched_text,
+      confidence: c.confidence,
+    }));
+
+    // Source 2: API match-log (fallback)
+    let apiMatches: RuleMatch[] = [];
+    if (localMatches.length < 10) {
+      try {
+        const res = await fetchWithRetry(
+          `${this.apiUrl}/api/v1/rule-evaluations/match-log?feedback=null&limit=${10 - localMatches.length}`,
+          { headers: this.headers },
+        );
+        if (res.ok) {
+          const data = await res.json() as { matches?: RuleMatch[] } | RuleMatch[];
+          apiMatches = Array.isArray(data) ? data : (data.matches ?? []);
+        }
+      } catch (err) {
+        ui.warn(`[rule-eval] Failed to fetch API matches: ${err}`);
       }
-    } catch (err) {
-      ui.warn(`[rule-eval] Failed to fetch matches: ${err}`);
     }
 
+    const matches = [...localMatches, ...apiMatches];
     if (matches.length === 0) {
       ui.info("[rule-eval] No unreviewed matches");
       await this.reportResult(task.id, true, "No unreviewed matches", "");
       return;
     }
 
-    ui.info(`[rule-eval] Evaluating ${matches.length} match(es)...`);
+    ui.info(`[rule-eval] Evaluating ${matches.length} match(es) (${localMatches.length} local, ${apiMatches.length} API)...`);
 
-    // 2. Evaluate matches via Claude CLI
+    // Evaluate matches via Claude CLI
     let results;
     try {
-      results = await evaluateRuleMatches(matches, 20);
+      results = await evaluateRuleMatches(matches, 10);
     } catch (err) {
       ui.warn(`[rule-eval] Evaluation failed: ${err}`);
       await this.reportResult(task.id, false, "Evaluation failed", String(err));
       return;
     }
 
-    // 3. Send feedback for each evaluation
+    // Send feedback for each evaluation
     let confirmed = 0;
     let rejected = 0;
     for (const result of results) {
@@ -410,6 +432,7 @@ export class OpsRunner {
             headers: this.headers,
             body: JSON.stringify({
               record_id: result.matchId,
+              match_log_id: result.matchId,
               action,
               comment: `LLM evaluation (${result.confidence.toFixed(1)}): ${result.reasoning}`,
             }),
@@ -422,9 +445,36 @@ export class OpsRunner {
       }
     }
 
+    // Mark local candidates as evaluated by removing them from buffer
+    if (localCandidates.length > 0) {
+      this.clearEvaluatedCandidates(localCandidates, results);
+    }
+
     const summary = `Evaluated ${results.length}: ${confirmed} confirmed, ${rejected} rejected`;
     await this.reportResult(task.id, true, summary, JSON.stringify({ results, timestamp: new Date().toISOString() }));
     ui.info(`[rule-eval] ${summary}`);
+  }
+
+  /** Remove evaluated candidates from the local JSONL buffer. */
+  private clearEvaluatedCandidates(_candidates: RuleMatchResult[], results: Array<{ matchId: string }>): void {
+    const evaluatedIds = new Set(results.map((r) => r.matchId));
+    const bufferPath = join(homedir(), ".toban", "events", "rule-matches.jsonl");
+
+    if (!existsSync(bufferPath)) return;
+    try {
+      const content = readFileSync(bufferPath, "utf-8").trim();
+      if (!content) return;
+      const remaining = content
+        .split("\n")
+        .filter(Boolean)
+        .filter((line) => {
+          try {
+            const entry = JSON.parse(line) as { id?: string };
+            return !evaluatedIds.has(entry.id ?? "");
+          } catch { return true; }
+        });
+      writeFileSync(bufferPath, remaining.length > 0 ? remaining.join("\n") + "\n" : "");
+    } catch { /* best-effort */ }
   }
 
   /** Check if an agent exists and is active in the workspace. */
