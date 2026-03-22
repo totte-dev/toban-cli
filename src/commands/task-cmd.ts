@@ -42,8 +42,10 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
     console.log(`Usage:
   toban task info              Get current task details
   toban task list              List all sprint tasks
-  toban task complete "msg"    Report task completion
-  toban task blocker "reason"  Report blocker`);
+  toban task create "title"    Create a new task (--desc, --priority, --type, --sprint)
+  toban task done <id>         Mark a task as done
+  toban task complete "msg"    Report task completion (agent use)
+  toban task blocker "reason"  Report blocker (agent use)`);
     return;
   }
 
@@ -101,7 +103,40 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
       break;
     }
 
+    case "create": {
+      const title = args.slice(1).filter((a) => !a.startsWith("--")).join(" ").trim();
+      if (!title) { console.error("Usage: toban task create \"title\" [--desc \"...\"] [--priority p1] [--type feature] [--sprint N]"); return; }
+      const desc = getArg(args, "--desc");
+      const priority = getArg(args, "--priority") || "p2";
+      const type = getArg(args, "--type") || "feature";
+      const sprint = getArg(args, "--sprint") ? parseInt(getArg(args, "--sprint")!, 10) : -1;
+      const sp = getArg(args, "--sp") ? parseInt(getArg(args, "--sp")!, 10) : undefined;
+      const result = (await apiFetch(`${apiUrl}/api/v1/tasks`, apiKey, {
+        method: "POST",
+        body: JSON.stringify({ title, description: desc, priority, type, sprint, owner: "user", story_points: sp }),
+      })) as { id: string };
+      console.log(`Created: ${result.id?.slice(0, 8)} | ${title}`);
+      break;
+    }
+
+    case "done": {
+      const id = args[1];
+      if (!id) { console.error("Usage: toban task done <task-id>"); return; }
+      await apiFetch(`${apiUrl}/api/v1/tasks/${id}`, apiKey, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "done" }),
+      });
+      console.log(`Task ${id.slice(0, 8)} marked as done.`);
+      break;
+    }
+
     default:
       console.error(`Unknown subcommand: ${sub}. Run 'toban task help' for usage.`);
   }
+}
+
+function getArg(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  if (idx === -1 || idx + 1 >= args.length) return undefined;
+  return args[idx + 1];
 }
