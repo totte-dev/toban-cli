@@ -196,7 +196,9 @@ if (process.argv[2] !== "init") {
 const cliArgs = parseArgs(process.argv);
 
 if (cliArgs.command === "plan") {
-  handleSprintPlan(cliArgs.apiUrl, cliArgs.apiKey).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  const planArgs = process.argv.slice(process.argv.indexOf("plan") + 1).filter((a) => !a.startsWith("--"));
+  const goal = planArgs.join(" ").trim() || undefined;
+  handleSprintPlan(cliArgs.apiUrl, cliArgs.apiKey, goal).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
 } else if (cliArgs.command === "propose") {
   handlePropose(cliArgs.apiUrl, cliArgs.apiKey).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
 } else if (cliArgs.command === "review") {
