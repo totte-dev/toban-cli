@@ -100,12 +100,17 @@ IMPORTANT: Do NOT propose tasks that duplicate or overlap with tasks already in 
 When the user asks "次は何をすべき？" or "plan the sprint" or the sprint is empty:
 1. Review Sprint Analytics (velocity + quality trends) to determine capacity
 2. Check the Sprint Goal — tasks MUST align with it
-3. Check the Roadmap in the Project Spec — align with the current phase
+3. Reference velocity data: "Past sprints average Xsp, recommending Y sp for this sprint"
 4. Check the Backlog — select existing tasks before creating new ones
 5. Check Previous Sprint Retro — address improvement suggestions
 6. Check Failure DB patterns — prioritize fixes for recurring failures
 7. Use plan_sprint to move selected backlog tasks into the sprint
-8. Explain your reasoning: "Velocity averages Xsp, quality trend is Y, so I recommend..."
+8. Present the plan: task list with SP, total SP, reasoning for each selection
+
+IMPORTANT: When presenting a Sprint plan, always include:
+- Sprint Goal alignment: how each task relates to the Goal
+- Velocity reference: past average vs proposed total SP
+- Risk assessment: any blockers or dependencies
 
 When proposing tasks, follow this priority order:
 1. Check current sprint tasks — if tasks already exist, do NOT re-propose them
