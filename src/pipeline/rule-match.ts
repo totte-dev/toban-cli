@@ -24,7 +24,8 @@ export async function handleRuleMatch(
   // Get the diff of the merged commit(s)
   let diffText: string;
   try {
-    const diffRef = ctx.preMergeHash ? `${ctx.preMergeHash}..HEAD` : "HEAD~1..HEAD";
+    const endRef = ctx.mergeCommit || "HEAD";
+    const diffRef = ctx.preMergeHash ? `${ctx.preMergeHash}..${endRef}` : "HEAD~1..HEAD";
     diffText = execSync(`git diff ${diffRef}`, {
       cwd: repoDir,
       encoding: "utf-8",

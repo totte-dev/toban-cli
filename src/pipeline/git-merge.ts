@@ -251,6 +251,8 @@ export async function handleGitMerge(
       try { ctx.preMergeHash = gitExec("git rev-parse HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(); } catch { /* non-fatal */ }
       gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
       gitExec(`git merge --no-ff "${worktreeBranch}" -m "merge: ${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
+      // Record merge commit hash — reviewer should use preMergeHash..mergeCommit (not ..HEAD)
+      try { ctx.mergeCommit = gitExec("git rev-parse HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(); } catch { /* non-fatal */ }
       ui.info( `[${phase}] ${label}: merged ${worktreeBranch}`);
 
       // Clean up branch (worktree already removed above)

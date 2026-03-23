@@ -377,6 +377,8 @@ export interface ActionContext {
   reviewVerdict?: "APPROVE" | "NEEDS_CHANGES";
   /** Hash of HEAD before merge (set by git_merge, used by reviewer for accurate diff) */
   preMergeHash?: string;
+  /** Hash of the merge commit itself (set by git_merge, used to bound reviewer diff) */
+  mergeCommit?: string;
   /** Set to true if git_merge was skipped (no agent commits or metadata-only) */
   mergeSkipped?: boolean;
   /** Parsed COMPLETION_JSON from agent output (set by cli.ts after agent finishes) */
@@ -503,9 +505,10 @@ export async function executeActions(
               status: "pending",
               taskId: ctx.task.id,
               createdAt: new Date().toISOString(),
-              diffRange: ctx.preMergeHash ? `${ctx.preMergeHash}..HEAD` : undefined,
+              diffRange: ctx.preMergeHash ? `${ctx.preMergeHash}..${ctx.mergeCommit || "HEAD"}` : undefined,
               retroJson: ctx.retroJson ? JSON.stringify(ctx.retroJson) : undefined,
               preMergeHash: ctx.preMergeHash,
+              mergeCommit: ctx.mergeCommit,
             });
             ui.info(`[${phase}] ${label}: enqueued review job`);
           } else {

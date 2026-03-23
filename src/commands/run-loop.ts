@@ -143,6 +143,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: repos[0]?.path || process.cwd(), baseBranch: "main" },
         exitCode: 0,
         preMergeHash: (job as any).preMergeHash,
+        mergeCommit: (job as any).mergeCommit,
         retroJson: (job as any).retroJson ? JSON.parse((job as any).retroJson) : undefined,
       };
       await handleSpawnReviewer({ type: "spawn_reviewer", when: "success", label: "Review" }, reviewCtx as any, "post", []);

@@ -41,8 +41,10 @@ export async function handleSpawnReviewer(
   // Resolve repo root
   const reviewRepoDir = resolveRepoRoot(ctx.config.workingDir);
 
-  // Get diff ref for the reviewer prompt — use preMergeHash for accurate agent-only diff
+  // Get diff ref for the reviewer prompt — use preMergeHash..mergeCommit for accurate agent-only diff
+  // Using mergeCommit (not HEAD) prevents including unrelated commits added after the merge
   const diffRef = (() => {
+    if (ctx.preMergeHash && ctx.mergeCommit) return `${ctx.preMergeHash}..${ctx.mergeCommit}`;
     if (ctx.preMergeHash) return `${ctx.preMergeHash}..HEAD`;
     try {
       const parents = revExec2("git cat-file -p HEAD", { cwd: reviewRepoDir, stdio: "pipe" }).toString();
