@@ -215,7 +215,6 @@ Output format: ${outputFormat}`;
   }
 
   // Second opinion gate: Manager re-evaluates NEEDS_CHANGES verdicts
-  let managerOverrode = false;
   if (verdict === "NEEDS_CHANGES" && reviewComment) {
     ui.info(`[${phase}] ${label}: NEEDS_CHANGES — requesting Manager second opinion...`);
     try {
@@ -239,6 +238,15 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
 
       if (managerResult.includes("OVERRIDE_APPROVE")) {
         ui.info(`[${phase}] ${label}: Manager overrides → APPROVE (Reviewer was too strict)`);
+        // Record as Playbook false positive — Reviewer's rules were too strict
+        ctx.eventEmitter?.infraError(ctx.agentName, ctx.task.id, {
+          category: "playbook_false_positive",
+          summary: "Manager overrode Reviewer rejection — deemed overly strict",
+        });
+        ctx.eventEmitter?.reviewCompleted(ctx.task.id, ctx.agentName, {
+          verdict: "APPROVE", classification: "infra", infra_category: "playbook_false_positive",
+          original_verdict: "NEEDS_CHANGES",
+        });
         verdict = "APPROVE";
         // Update the saved review with override note
         const overrideComment = JSON.stringify({
@@ -273,8 +281,10 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
 
   if (verdict === "NEEDS_CHANGES") {
     // Classify rejection: infrastructure issue vs code quality
+    // Note: Manager OVERRIDE_APPROVE is handled above (records infra event and flips to APPROVE)
+    // If we reach here, Manager confirmed NEEDS_CHANGES or second opinion was skipped
     const agentStderr = (ctx.agentStderr ?? []).join("\n");
-    const { classification, category, reason } = classifyRejection(reviewComment, agentStderr, managerOverrode);
+    const { classification, category, reason } = classifyRejection(reviewComment, agentStderr, false);
 
     // Enrich review event with classification
     ctx.eventEmitter?.reviewCompleted(ctx.task.id, ctx.agentName, {
