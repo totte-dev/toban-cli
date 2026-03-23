@@ -5,8 +5,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { TemplateAction, ActionContext } from "../agent-templates.js";
-import { createAuthHeaders, type AgentMemory } from "../api-client.js";
+import type { TemplateAction, ActionContext } from "../agents/agent-templates.js";
+import { createAuthHeaders, type AgentMemory } from "../services/api-client.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 

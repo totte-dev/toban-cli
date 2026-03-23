@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { executeActions, type ActionContext, type TemplateAction } from "../agent-templates.js";
-import type { ApiClient, Task } from "../api-client.js";
+import { executeActions, type ActionContext, type TemplateAction } from "../agents/agent-templates.js";
+import type { ApiClient, Task } from "../services/api-client.js";
 import { clearRetry } from "../utils/retry-tracker.js";
 
 // Mock execSync

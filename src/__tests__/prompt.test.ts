@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildAgentPrompt, type PromptContext } from "../prompt.js";
+import { buildAgentPrompt, type PromptContext } from "../agents/prompt.js";
 
 function makeCtx(overrides: Partial<PromptContext> = {}): PromptContext {
   return {

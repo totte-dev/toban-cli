@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { WS_MSG } from "../ws-types.js";
+import { WS_MSG } from "../channel/ws-types.js";
 
 describe("WS_MSG.REVIEW_UPDATE", () => {
   it("should be defined as 'review_update'", () => {
@@ -59,11 +59,11 @@ describe("REVIEW_UPDATE message format", () => {
 
 describe("WsChatServer review state tracking", () => {
   // Use dynamic import to allow mocking
-  let WsChatServer: typeof import("../ws-server.js").WsChatServer;
+  let WsChatServer: typeof import("../channel/ws-server.js").WsChatServer;
   let WebSocket: typeof import("ws").WebSocket;
 
   beforeEach(async () => {
-    const wsServerModule = await import("../ws-server.js");
+    const wsServerModule = await import("../channel/ws-server.js");
     WsChatServer = wsServerModule.WsChatServer;
     const wsModule = await import("ws");
     WebSocket = wsModule.WebSocket;

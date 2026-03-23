@@ -11,7 +11,7 @@
  *   4. On confirmation, create/update the task in backlog
  */
 
-import { createApiClient, type Task } from "../api-client.js";
+import { createApiClient, type Task } from "../services/api-client.js";
 import * as ui from "../ui.js";
 
 interface ReportFinding {

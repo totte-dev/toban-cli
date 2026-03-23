@@ -3,10 +3,10 @@
  * Extracted from run-loop.ts to reduce its responsibilities.
  */
 
-import { WS_MSG } from "../ws-types.js";
+import { WS_MSG } from "../channel/ws-types.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
-import type { WsChatServer } from "../ws-server.js";
+import type { WsChatServer } from "../channel/ws-server.js";
 
 // ---------------------------------------------------------------------------
 // Types

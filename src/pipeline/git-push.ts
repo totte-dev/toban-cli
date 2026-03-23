@@ -6,10 +6,10 @@
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { TemplateAction, ActionContext } from "../agent-templates.js";
+import type { TemplateAction, ActionContext } from "../agents/agent-templates.js";
 import * as ui from "../ui.js";
-import { logError, CLI_ERR } from "../error-logger.js";
-import { resolveRepoRoot, setupGitCredentialHelper, cleanRepoAuth } from "../git-ops.js";
+import { logError, CLI_ERR } from "../services/error-logger.js";
+import { resolveRepoRoot, setupGitCredentialHelper, cleanRepoAuth } from "../services/git-ops.js";
 
 export async function handleGitPush(
   action: TemplateAction,

@@ -6,8 +6,8 @@ import {
   sortByDependency,
   isBootstrapTask,
   type Dependency,
-} from "../task-dependency.js";
-import type { Task } from "../api-client.js";
+} from "../services/task-dependency.js";
+import type { Task } from "../services/api-client.js";
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {

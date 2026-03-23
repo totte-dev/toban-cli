@@ -6,9 +6,9 @@
  */
 
 import { execSync } from "node:child_process";
-import type { ActionContext, TemplateAction } from "../agent-templates.js";
+import type { ActionContext, TemplateAction } from "../agents/agent-templates.js";
 import { matchRulesLocally } from "../utils/rule-matcher.js";
-import { resolveRepoRoot } from "../git-ops.js";
+import { resolveRepoRoot } from "../services/git-ops.js";
 import * as ui from "../ui.js";
 
 export async function handleRuleMatch(

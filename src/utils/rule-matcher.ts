@@ -11,7 +11,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { ApiClient } from "../api-client.js";
+import type { ApiClient } from "../services/api-client.js";
 
 // ---------------------------------------------------------------------------
 // Types

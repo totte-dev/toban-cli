@@ -6,8 +6,8 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ActionContext, TemplateAction } from "../agent-templates.js";
-import { resolveRepoRoot } from "../git-ops.js";
+import type { ActionContext, TemplateAction } from "../agents/agent-templates.js";
+import { resolveRepoRoot } from "../services/git-ops.js";
 import { checkDiffViolations } from "../utils/guardrail.js";
 import { trackRetry } from "../utils/retry-tracker.js";
 import { getExecError } from "../utils/exec-error.js";

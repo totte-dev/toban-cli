@@ -9,7 +9,7 @@
  * compatibility with the legacy { review_comment, commits } format.
  */
 
-import type { TemplateAction } from "../agent-templates.js";
+import type { TemplateAction } from "../agents/agent-templates.js";
 import * as ui from "../ui.js";
 import { normalizeCompletion, toLegacyFormat, type AgentCompletion } from "./completion-schema.js";
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSprintStats, formatSprintStats } from "../sprint-stats.js";
+import { buildSprintStats, formatSprintStats } from "../manager/sprint-stats.js";
 
 describe("buildSprintStats", () => {
   it("returns zero stats for empty task list", () => {

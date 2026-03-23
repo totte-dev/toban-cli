@@ -7,13 +7,13 @@
 
 import { createAuthHeaders, fetchWithRetry } from "./api-client.js";
 import type { Task } from "./api-client.js";
-import * as ui from "./ui.js";
+import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fireRuleEvaluate } from "./rule-evaluate.js";
-import { getExecError } from "./utils/exec-error.js";
+import { getExecError } from "../utils/exec-error.js";
 import { evaluateRuleMatches, type RuleMatch } from "./rule-evaluator.js";
-import { readPendingCandidates, getMatchBufferPath, type RuleMatchResult } from "./utils/rule-matcher.js";
+import { readPendingCandidates, getMatchBufferPath, type RuleMatchResult } from "../utils/rule-matcher.js";
 
 /** QA scan configuration parsed from ops task description JSON */
 export interface QaScanConfig {

@@ -7,19 +7,19 @@
  */
 
 import { execSync } from "node:child_process";
-import type { ApiClient, Task } from "./api-client.js";
-import * as ui from "./ui.js";
-import { logError, CLI_ERR } from "./error-logger.js";
-import type { GuardrailConfig } from "./utils/guardrail.js";
-import { handleGitMerge } from "./handlers/git-merge.js";
-import { handleGitPush } from "./handlers/git-push.js";
-import { handleMergePipeline } from "./handlers/merge-pipeline.js";
-import { handleVerifyBuild } from "./handlers/verify-build.js";
-import { handleSpawnReviewer } from "./handlers/spawn-reviewer.js";
-import { handleReviewChanges } from "./handlers/review-changes.js";
-import { handleInjectMemory, handleCollectMemory } from "./handlers/memory.js";
-import { handleFetchRecentChanges, handleRecordChanges } from "./handlers/context-sharing.js";
-import { handleRuleMatch } from "./handlers/rule-match.js";
+import type { ApiClient, Task } from "../services/api-client.js";
+import * as ui from "../ui.js";
+import { logError, CLI_ERR } from "../services/error-logger.js";
+import type { GuardrailConfig } from "../utils/guardrail.js";
+import { handleGitMerge } from "../pipeline/git-merge.js";
+import { handleGitPush } from "../pipeline/git-push.js";
+import { handleMergePipeline } from "../pipeline/merge-pipeline.js";
+import { handleVerifyBuild } from "../pipeline/verify-build.js";
+import { handleSpawnReviewer } from "../pipeline/spawn-reviewer.js";
+import { handleReviewChanges } from "../pipeline/review-changes.js";
+import { handleInjectMemory, handleCollectMemory } from "../pipeline/memory.js";
+import { handleFetchRecentChanges, handleRecordChanges } from "../pipeline/context-sharing.js";
+import { handleRuleMatch } from "../pipeline/rule-match.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -391,7 +391,7 @@ export interface ActionContext {
   /** Broadcast review progress to connected WS clients */
   onReviewUpdate?: (taskId: string, phase: string, reviewComment?: string) => void;
   /** Event emitter for structured event recording */
-  eventEmitter?: import("./utils/event-emitter.js").EventEmitter;
+  eventEmitter?: import("../utils/event-emitter.js").EventEmitter;
   /** Agent's stderr lines (for infra error classification) */
   agentStderr?: string[];
 }

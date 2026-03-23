@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { AgentRunner } from "../runner.js";
+import { AgentRunner } from "../agents/runner.js";
 
 describe("AgentRunner tool stats", () => {
   it("recordTool accumulates counts per agent", () => {

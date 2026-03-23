@@ -2,7 +2,7 @@
  * Shared LLM client utilities — Claude CLI spawn and auth headers.
  */
 import { spawn } from "node:child_process";
-import * as ui from "./ui.js";
+import * as ui from "../ui.js";
 
 export interface ClaudeCliOptions {
   systemPrompt: string;

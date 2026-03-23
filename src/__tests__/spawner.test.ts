@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildBranchName } from "../spawner.js";
+import { buildBranchName } from "../agents/spawner.js";
 
 describe("buildBranchName", () => {
   it("builds branch name from agent name and task ID", () => {

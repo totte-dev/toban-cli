@@ -2,8 +2,8 @@
  * Graceful shutdown handler setup
  */
 
-import type { AgentRunner } from "../runner.js";
-import type { WsChatServer } from "../ws-server.js";
+import type { AgentRunner } from "../agents/runner.js";
+import type { WsChatServer } from "../channel/ws-server.js";
 import * as ui from "../ui.js";
 
 export interface ShutdownState {

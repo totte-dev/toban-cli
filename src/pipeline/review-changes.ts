@@ -6,16 +6,16 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
-import type { TemplateAction, ActionContext } from "../agent-templates.js";
-import { interpolate } from "../agent-templates.js";
-import type { Task } from "../api-client.js";
-import { createAuthHeaders, fetchWithRetry } from "../api-client.js";
+import type { TemplateAction, ActionContext } from "../agents/agent-templates.js";
+import { interpolate } from "../agents/agent-templates.js";
+import type { Task } from "../services/api-client.js";
+import { createAuthHeaders, fetchWithRetry } from "../services/api-client.js";
 import * as ui from "../ui.js";
-import { logError, CLI_ERR } from "../error-logger.js";
+import { logError, CLI_ERR } from "../services/error-logger.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
-import { fireRuleEvaluate } from "../rule-evaluate.js";
+import { fireRuleEvaluate } from "../services/rule-evaluate.js";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";
-import { resolveRepoRoot } from "../git-ops.js";
+import { resolveRepoRoot } from "../services/git-ops.js";
 import { TIMEOUTS } from "../constants.js";
 
 export async function handleReviewChanges(
@@ -91,7 +91,7 @@ export async function handleReviewChanges(
       const taskType = ctx.task.type as string || "implementation";
 
       // Build review prompt from templates (customizable via prompts/templates.ts)
-      const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
+      const { PROMPT_TEMPLATES } = await import("../manager/prompts/templates.js");
       const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
       const reviewSystem = interpolate(PROMPT_TEMPLATES["reviewer-system"] || "", {
         projectName: ctx.config.workingDir.split("/").pop() || "unknown",

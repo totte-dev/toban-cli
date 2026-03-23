@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { Mutex } from "async-mutex";
-import { SlotScheduler } from "../slot-scheduler.js";
+import { SlotScheduler } from "../services/slot-scheduler.js";
 import {
   detectDependencies,
   sortByDependency,
-} from "../task-dependency.js";
-import type { Task } from "../api-client.js";
+} from "../services/task-dependency.js";
+import type { Task } from "../services/api-client.js";
 
 function makeTask(overrides: Partial<Task> & { id: string; title: string }): Task {
   return {

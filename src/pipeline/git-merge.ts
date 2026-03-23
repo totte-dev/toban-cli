@@ -12,12 +12,12 @@ import { execSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Mutex } from "async-mutex";
-import type { TemplateAction, ActionContext } from "../agent-templates.js";
+import type { TemplateAction, ActionContext } from "../agents/agent-templates.js";
 import * as ui from "../ui.js";
-import { logError, CLI_ERR } from "../error-logger.js";
-import { resolveRepoRoot } from "../git-ops.js";
+import { logError, CLI_ERR } from "../services/error-logger.js";
+import { resolveRepoRoot } from "../services/git-ops.js";
 import { trackRetry } from "../utils/retry-tracker.js";
-import type { Task } from "../api-client.js";
+import type { Task } from "../services/api-client.js";
 
 /** Module-level mutex to serialize concurrent merge operations */
 const mergeLock = new Mutex();

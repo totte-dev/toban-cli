@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import * as p from "@clack/prompts";
-import { createApiClient } from "../api-client.js";
+import { createApiClient } from "../services/api-client.js";
 
 const TOBAN_HOME = join(homedir(), ".toban");
 const PROFILES_DIR = join(TOBAN_HOME, "profiles");

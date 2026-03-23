@@ -2,19 +2,19 @@
  * Main task execution loop — polls for tasks and spawns agents.
  */
 
-import type { AgentRunner } from "../runner.js";
-import { createAuthHeaders, type Task, type WorkspaceRepository, type ApiClient } from "../api-client.js";
-import { buildAgentPrompt } from "../prompt.js";
-import { getEngine, resolveModelForRole } from "../agent-engine.js";
-import { matchTemplate, executeActions, type ActionContext } from "../agent-templates.js";
-import { WS_MSG } from "../ws-types.js";
-import { resolveTaskWorkingDir } from "../git-ops.js";
-import { createTaskLogger } from "../task-logger.js";
-import { logError, CLI_ERR } from "../error-logger.js";
-import { ensureGitUser } from "../spawner.js";
+import type { AgentRunner } from "../agents/runner.js";
+import { createAuthHeaders, type Task, type WorkspaceRepository, type ApiClient } from "../services/api-client.js";
+import { buildAgentPrompt } from "../agents/prompt.js";
+import { getEngine, resolveModelForRole } from "../agents/agent-engine.js";
+import { matchTemplate, executeActions, type ActionContext } from "../agents/agent-templates.js";
+import { WS_MSG } from "../channel/ws-types.js";
+import { resolveTaskWorkingDir } from "../services/git-ops.js";
+import { createTaskLogger } from "../services/task-logger.js";
+import { logError, CLI_ERR } from "../services/error-logger.js";
+import { ensureGitUser } from "../agents/spawner.js";
 import { setup, type CliArgs } from "../setup.js";
 import * as ui from "../ui.js";
-import { fireRuleEvaluate } from "../rule-evaluate.js";
+import { fireRuleEvaluate } from "../services/rule-evaluate.js";
 import { SprintController } from "./sprint-controller.js";
 import { TaskScheduler } from "./task-scheduler.js";
 import type { ShutdownState } from "./shutdown.js";
@@ -24,7 +24,7 @@ import { buildGuardrailRules, checkDiffViolations, type GuardrailConfig } from "
 import { createEventEmitter, type EventEmitter } from "../utils/event-emitter.js";
 import { TIMEOUTS, INTERVALS } from "../constants.js";
 import { trackRetry } from "../utils/retry-tracker.js";
-import { OpsRunner } from "../ops-runner.js";
+import { OpsRunner } from "../services/ops-runner.js";
 import { extractJsonObject } from "../utils/extract-json.js";
 import { syncRuleTelemetry } from "../utils/telemetry-sync.js";
 
@@ -133,7 +133,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   const POLL_INTERVAL_MS = INTERVALS.POLL;
 
   // Parallel agent slots — start with defaults, then reconfigure from plan limits
-  const { SlotScheduler } = await import("../slot-scheduler.js");
+  const { SlotScheduler } = await import("../services/slot-scheduler.js");
   const scheduler = new SlotScheduler([
     { role: "builder", maxConcurrency: 2 },
     { role: "cloud-engineer", maxConcurrency: 1 },
@@ -182,7 +182,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   runner.startStallDetection();
 
   // Peer awareness: track active agents' working files for conflict avoidance
-  const { PeerTracker } = await import("../peer-tracker.js");
+  const { PeerTracker } = await import("../channel/peer-tracker.js");
   const peerTracker = new PeerTracker();
   peerTracker.onChannelMessage = (messages) => {
     if (wsServer) {

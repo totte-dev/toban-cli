@@ -11,8 +11,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { summarizeToolInput } from "./agent-engine.js";
-import * as ui from "./ui.js";
+import { summarizeToolInput } from "../agents/agent-engine.js";
+import * as ui from "../ui.js";
 
 // ---------------------------------------------------------------------------
 // Interface

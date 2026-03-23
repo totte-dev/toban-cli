@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createEventEmitter } from "../utils/event-emitter.js";
-import type { ApiClient, EventInput } from "../api-client.js";
+import type { ApiClient, EventInput } from "../services/api-client.js";
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";

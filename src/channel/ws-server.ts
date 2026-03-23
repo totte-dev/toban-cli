@@ -12,9 +12,9 @@
 
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { createAuthHeaders } from "./api-client.js";
+import { createAuthHeaders } from "../services/api-client.js";
 import { WS_MSG, type WsMsgType, wrapLegacyMessage, type WsTobanEvent } from "./ws-types.js";
-import * as ui from "./ui.js";
+import * as ui from "../ui.js";
 
 /** Message format over WebSocket */
 interface WsMessage {
@@ -570,7 +570,7 @@ export class WsChatServer {
         return;
       }
 
-      const { spawnClaudeOnce } = await import("./utils/spawn-claude.js");
+      const { spawnClaudeOnce } = await import("../utils/spawn-claude.js");
       const prompt = `You are a task decomposition agent. Given a task title and description memo, generate structured fields.
 
 Task: ${task.title}

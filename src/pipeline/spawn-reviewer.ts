@@ -4,15 +4,15 @@
  */
 
 import { execSync } from "node:child_process";
-import type { TemplateAction, ActionContext } from "../agent-templates.js";
-import type { Task } from "../api-client.js";
-import { createAuthHeaders, fetchWithRetry } from "../api-client.js";
-import { interpolate, getDefaultTemplates } from "../agent-templates.js";
+import type { TemplateAction, ActionContext } from "../agents/agent-templates.js";
+import type { Task } from "../services/api-client.js";
+import { createAuthHeaders, fetchWithRetry } from "../services/api-client.js";
+import { interpolate, getDefaultTemplates } from "../agents/agent-templates.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";
-import { resolveRepoRoot } from "../git-ops.js";
-import { resolveModelForRole } from "../agent-engine.js";
+import { resolveRepoRoot } from "../services/git-ops.js";
+import { resolveModelForRole } from "../agents/agent-engine.js";
 import { TIMEOUTS, LIMITS } from "../constants.js";
 import { classifyRejection } from "../utils/infra-classifier.js";
 
@@ -112,7 +112,7 @@ export async function handleSpawnReviewer(
 
   // Build reviewer prompt
   const taskType = ctx.task.type as string || "implementation";
-  const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
+  const { PROMPT_TEMPLATES } = await import("../manager/prompts/templates.js");
   const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 
   // Fetch playbook rules for reviewer, including skill rules matching task labels

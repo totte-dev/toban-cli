@@ -2,8 +2,8 @@
  * Sprint complete command
  */
 
-import { createApiClient, createAuthHeaders } from "../api-client.js";
-import { logError, CLI_ERR } from "../error-logger.js";
+import { createApiClient, createAuthHeaders } from "../services/api-client.js";
+import { logError, CLI_ERR } from "../services/error-logger.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";

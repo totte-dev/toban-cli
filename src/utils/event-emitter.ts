@@ -15,7 +15,7 @@
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { ApiClient, EventInput } from "../api-client.js";
+import type { ApiClient, EventInput } from "../services/api-client.js";
 
 export interface EventEmitter {
   agentSpawned(agentName: string, taskId: string, data?: Record<string, unknown>): void;

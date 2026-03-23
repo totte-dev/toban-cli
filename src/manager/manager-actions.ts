@@ -5,8 +5,8 @@
  * (update_task, create_task, spawn_agent, transition_sprint, etc.)
  */
 
-import { createAuthHeaders, type ApiClient, type Task } from "./api-client.js";
-import * as ui from "./ui.js";
+import { createAuthHeaders, type ApiClient, type Task } from "../services/api-client.js";
+import * as ui from "../ui.js";
 import type { PendingApproval } from "./manager.js";
 
 // ---------------------------------------------------------------------------

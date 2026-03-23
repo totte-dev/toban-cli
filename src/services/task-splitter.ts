@@ -6,11 +6,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { resolveModel } from "./agent-engine.js";
+import { resolveModel } from "../agents/agent-engine.js";
 import { createAuthHeaders, type Task } from "./api-client.js";
-import { parseTaskLabels } from "./utils/parse-labels.js";
-import { TIMEOUTS } from "./constants.js";
-import * as ui from "./ui.js";
+import { parseTaskLabels } from "../utils/parse-labels.js";
+import { TIMEOUTS } from "../constants.js";
+import * as ui from "../ui.js";
 
 // ---------------------------------------------------------------------------
 // Types

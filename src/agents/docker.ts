@@ -3,10 +3,10 @@ import { homedir } from "node:os";
 import { existsSync, mkdirSync, cpSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AgentConfig, RunningAgent } from "./types.js";
+import type { AgentConfig, RunningAgent } from "../types.js";
 import { buildBranchName } from "./spawner.js";
 import { buildCommand } from "./agent-engine.js";
-import * as ui from "./ui.js";
+import * as ui from "../ui.js";
 
 /** Docker image name for the agent container */
 const AGENT_IMAGE = "toban/agent:latest";

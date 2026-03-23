@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { OpsRunner } from "../ops-runner.js";
+import { OpsRunner } from "../services/ops-runner.js";
 
 const API_URL = "https://api.example.com";
 const API_KEY = "test-key";

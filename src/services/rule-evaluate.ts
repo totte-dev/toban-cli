@@ -4,7 +4,7 @@
  */
 
 import { createAuthHeaders } from "./api-client.js";
-import * as ui from "./ui.js";
+import * as ui from "../ui.js";
 
 interface EvaluateInput {
   apiUrl: string;

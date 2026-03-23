@@ -16,11 +16,11 @@
  */
 
 import { execSync } from "node:child_process";
-import { createAuthHeaders, type ApiClient } from "./api-client.js";
-import type { AgentRunner } from "./runner.js";
-import { createLlmProvider, type LlmProvider } from "./llm-provider.js";
-import { PollLoop } from "./poll-loop.js";
-import * as ui from "./ui.js";
+import { createAuthHeaders, type ApiClient } from "../services/api-client.js";
+import type { AgentRunner } from "../agents/runner.js";
+import { createLlmProvider, type LlmProvider } from "../services/llm-provider.js";
+import { PollLoop } from "../poll-loop.js";
+import * as ui from "../ui.js";
 import {
   parseResponse,
   executeActions as executeManagerActions,

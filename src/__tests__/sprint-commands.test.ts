@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { execSync } from "node:child_process";
-import { createApiClient } from "../api-client.js";
+import { createApiClient } from "../services/api-client.js";
 
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(),

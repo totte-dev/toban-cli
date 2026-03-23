@@ -5,7 +5,7 @@
  * 2. `toban plan` (no goal) — Select from existing backlog for active sprint
  */
 
-import { createApiClient, createAuthHeaders, type Task } from "../api-client.js";
+import { createApiClient, createAuthHeaders, type Task } from "../services/api-client.js";
 import * as ui from "../ui.js";
 import { spawn } from "node:child_process";
 

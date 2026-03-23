@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SlotScheduler } from "../slot-scheduler.js";
+import { SlotScheduler } from "../services/slot-scheduler.js";
 
 describe("SlotScheduler.reconfigure", () => {
   it("increases concurrency by adding new slots", () => {

@@ -4,8 +4,8 @@
  * by asking Claude for structured judgment via COMPLETION_JSON.
  */
 
-import { spawnClaudeOnce } from "./utils/spawn-claude.js";
-import * as ui from "./ui.js";
+import { spawnClaudeOnce } from "../utils/spawn-claude.js";
+import * as ui from "../ui.js";
 
 export interface RuleMatch {
   id: string;

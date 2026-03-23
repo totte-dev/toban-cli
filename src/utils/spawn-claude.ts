@@ -4,7 +4,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { resolveModelForRole } from "../agent-engine.js";
+import { resolveModelForRole } from "../agents/agent-engine.js";
 
 export interface SpawnClaudeOptions {
   model?: string;

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { rebaseOntoBase, escalateConflict } from "../handlers/git-merge.js";
-import type { ActionContext } from "../agent-templates.js";
+import { rebaseOntoBase, escalateConflict } from "../pipeline/git-merge.js";
+import type { ActionContext } from "../agents/agent-templates.js";
 
 describe("rebaseOntoBase", () => {
   it("returns success when rebase completes without conflict", () => {

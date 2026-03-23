@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createApiClient } from "../api-client.js";
+import { createApiClient } from "../services/api-client.js";
 
 const API_URL = "https://api.example.com";
 const API_KEY = "test-key";

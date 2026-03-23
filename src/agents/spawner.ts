@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { execSync } from "node:child_process";
 import { rmSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import type { AgentConfig, RunningAgent } from "./types.js";
+import type { AgentConfig, RunningAgent } from "../types.js";
 import { getTerminal, buildShellCommand, type TerminalInfo } from "./terminal.js";
 import { buildCommand, getEngine } from "./agent-engine.js";
 

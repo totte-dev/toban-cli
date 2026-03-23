@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { shouldSplit, autoSplitTasks, type SubtaskDef } from "../task-splitter.js";
-import type { Task } from "../api-client.js";
+import { shouldSplit, autoSplitTasks, type SubtaskDef } from "../services/task-splitter.js";
+import type { Task } from "../services/api-client.js";
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {

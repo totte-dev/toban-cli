@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { OpsRunner, type OpsTask, type QaScanConfig } from "../ops-runner.js";
+import { OpsRunner, type OpsTask, type QaScanConfig } from "../services/ops-runner.js";
 
 const API_URL = "https://api.example.com";
 const API_KEY = "test-key";

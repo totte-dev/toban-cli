@@ -6,7 +6,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkspaceRepository } from "./api-client.js";
-import * as ui from "./ui.js";
+import * as ui from "../ui.js";
 
 /**
  * Resolve the git repo root from a working directory (handles worktrees).

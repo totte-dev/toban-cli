@@ -3,7 +3,7 @@
  * Designed to be called by user's AI agent via Bash.
  */
 
-import { createApiClient } from "../api-client.js";
+import { createApiClient } from "../services/api-client.js";
 import { getRunnerPid } from "./daemon.js";
 
 export async function handleStatus(apiUrl: string, apiKey: string): Promise<void> {

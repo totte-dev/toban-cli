@@ -11,10 +11,10 @@
  * Engine-agnostic: uses AgentConfig.readOnly to restrict tools per engine.
  */
 
-import { createApiClient, createAuthHeaders, type Task } from "../api-client.js";
-import { spawnAgent } from "../spawner.js";
-import { getEngine, extractTextFromStreamJson } from "../agent-engine.js";
-import { resolveModelForRole } from "../agent-engine.js";
+import { createApiClient, createAuthHeaders, type Task } from "../services/api-client.js";
+import { spawnAgent } from "../agents/spawner.js";
+import { getEngine, extractTextFromStreamJson } from "../agents/agent-engine.js";
+import { resolveModelForRole } from "../agents/agent-engine.js";
 import * as ui from "../ui.js";
 import { parseTaskLabels } from "../utils/parse-labels.js";
 import { TIMEOUTS } from "../constants.js";
@@ -141,8 +141,8 @@ export async function handleReview(
   }
 
   // Build reviewer prompt
-  const { PROMPT_TEMPLATES } = await import("../prompts/templates.js");
-  const { interpolate } = await import("../agent-templates.js");
+  const { PROMPT_TEMPLATES } = await import("../manager/prompts/templates.js");
+  const { interpolate } = await import("../agents/agent-templates.js");
   const taskType = (task?.type as string) || "implementation";
   const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 

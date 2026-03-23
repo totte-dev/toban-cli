@@ -5,8 +5,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { handleFetchRecentChanges, handleRecordChanges } from "../handlers/context-sharing.js";
-import type { ActionContext, TemplateAction } from "../agent-templates.js";
+import { handleFetchRecentChanges, handleRecordChanges } from "../pipeline/context-sharing.js";
+import type { ActionContext, TemplateAction } from "../agents/agent-templates.js";
 
 // Mock fetch globally
 const mockFetch = vi.fn();

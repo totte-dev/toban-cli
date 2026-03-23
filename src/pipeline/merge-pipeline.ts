@@ -7,7 +7,7 @@
  * - full success → clears state
  */
 
-import type { ActionContext, TemplateAction } from "../agent-templates.js";
+import type { ActionContext, TemplateAction } from "../agents/agent-templates.js";
 import { handleGitMerge } from "./git-merge.js";
 import { handleGitPush } from "./git-push.js";
 import { handleVerifyBuild } from "./verify-build.js";

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { executeActions, type ActionContext, type TemplateAction } from "../agent-templates.js";
-import type { ApiClient, Task } from "../api-client.js";
+import { executeActions, type ActionContext, type TemplateAction } from "../agents/agent-templates.js";
+import type { ApiClient, Task } from "../services/api-client.js";
 
 // Mock global fetch
 const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => ({}) });

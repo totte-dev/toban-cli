@@ -1,5 +1,5 @@
 import { execSync, type ChildProcess } from "node:child_process";
-import type { AgentConfig, AgentStatusReport, RunningAgent } from "./types.js";
+import type { AgentConfig, AgentStatusReport, RunningAgent } from "../types.js";
 import {
   buildBranchName,
   createWorktree,
@@ -9,7 +9,7 @@ import {
   tryMerge,
 } from "./spawner.js";
 import { getEngine, extractTextFromStreamJson } from "./agent-engine.js";
-import { extractJsonObject } from "./utils/extract-json.js";
+import { extractJsonObject } from "../utils/extract-json.js";
 import {
   isDockerAvailable,
   isImageAvailable,
@@ -17,11 +17,11 @@ import {
   spawnAgentInDocker,
   stopDockerAgent,
 } from "./docker.js";
-import type { RetroCommentInput } from "./api-client.js";
-import * as ui from "./ui.js";
-import { TIMEOUTS } from "./constants.js";
+import type { RetroCommentInput } from "../services/api-client.js";
+import * as ui from "../ui.js";
+import { TIMEOUTS } from "../constants.js";
 
-export type { AgentConfig, AgentStatusReport, RunningAgent } from "./types.js";
+export type { AgentConfig, AgentStatusReport, RunningAgent } from "../types.js";
 
 interface ManagedAgent {
   agent: RunningAgent;
@@ -37,8 +37,8 @@ interface ManagedAgent {
 export type StdoutCallback = (agentName: string, lines: string[], stream: "stdout" | "stderr") => void;
 
 // Re-export AgentActivity from types for backward compat
-export type { AgentActivity } from "./types.js";
-import type { AgentActivity } from "./types.js";
+export type { AgentActivity } from "../types.js";
+import type { AgentActivity } from "../types.js";
 
 /** Callback for structured agent activity events */
 export type ActivityCallback = (agentName: string, activity: AgentActivity) => void;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { evaluateRuleMatch, evaluateRuleMatches, type RuleMatch } from "../rule-evaluator.js";
+import { evaluateRuleMatch, evaluateRuleMatches, type RuleMatch } from "../services/rule-evaluator.js";
 
 // Mock spawnClaudeOnce
 const spawnClaudeMock = vi.fn();

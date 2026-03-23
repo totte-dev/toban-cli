@@ -3,17 +3,17 @@
  * Extracted from run-loop.ts to reduce its responsibilities.
  */
 
-import type { Task } from "../api-client.js";
-import type { ApiClient } from "../api-client.js";
-import type { SlotScheduler } from "../slot-scheduler.js";
-import { WS_MSG } from "../ws-types.js";
-import { shouldSplit, autoSplitTasks } from "../task-splitter.js";
-import { detectDependencies, sortByDependency } from "../task-dependency.js";
+import type { Task } from "../services/api-client.js";
+import type { ApiClient } from "../services/api-client.js";
+import type { SlotScheduler } from "../services/slot-scheduler.js";
+import { WS_MSG } from "../channel/ws-types.js";
+import { shouldSplit, autoSplitTasks } from "../services/task-splitter.js";
+import { detectDependencies, sortByDependency } from "../services/task-dependency.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import type { WsChatServer } from "../ws-server.js";
+import type { WsChatServer } from "../channel/ws-server.js";
 
 /** Check if a task has structured details (steps or acceptance_criteria). */
 function hasStructuredDetails(t: Task): boolean {

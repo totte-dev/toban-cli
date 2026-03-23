@@ -7,24 +7,24 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { AgentRunner } from "./runner.js";
+import type { AgentRunner } from "./agents/runner.js";
 import type { AgentType } from "./types.js";
 import {
   createApiClient,
   type ApiClient,
   type SprintStartResult,
   type WorkspaceRepository,
-} from "./api-client.js";
-import { Manager } from "./manager.js";
-import { WsChatServer } from "./ws-server.js";
-import { WS_MSG } from "./ws-types.js";
+} from "./services/api-client.js";
+import { Manager } from "./manager/manager.js";
+import { WsChatServer } from "./channel/ws-server.js";
+import { WS_MSG } from "./channel/ws-types.js";
 import {
   setupGitCredentialHelper,
   ensureAgentRepo,
   cleanRepoAuth,
   fetchAndResetToRemote,
   executeRevert,
-} from "./git-ops.js";
+} from "./services/git-ops.js";
 import * as ui from "./ui.js";
 
 export interface CliArgs {

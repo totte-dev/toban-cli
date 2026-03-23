@@ -12,7 +12,7 @@ import * as p from "@clack/prompts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
-import { createApiClient, type WorkspaceInfo } from "../api-client.js";
+import { createApiClient, type WorkspaceInfo } from "../services/api-client.js";
 import { analyzeProjectAndSuggestRules } from "../utils/rule-suggestions.js";
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
  * Designed to be called by user's AI agent via Bash.
  */
 
-import { createApiClient } from "../api-client.js";
+import { createApiClient } from "../services/api-client.js";
 
 export async function handleBacklog(apiUrl: string, apiKey: string): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);

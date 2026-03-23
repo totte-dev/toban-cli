@@ -9,13 +9,13 @@
  */
 
 import type { AgentType } from "./types.js";
-import { resolveModelForRole } from "./agent-engine.js";
-import { WS_MSG } from "./ws-types.js";
+import { resolveModelForRole } from "./agents/agent-engine.js";
+import { WS_MSG } from "./channel/ws-types.js";
 import type { CliArgs } from "./setup.js";
 import * as ui from "./ui.js";
 import { execSync } from "node:child_process";
 
-import { AgentRunner } from "./runner.js";
+import { AgentRunner } from "./agents/runner.js";
 import { handleSprintPlan } from "./commands/plan.js";
 import { handleReview } from "./commands/review.js";
 import { handleSprintComplete } from "./commands/sprint-complete.js";
