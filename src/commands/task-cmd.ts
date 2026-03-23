@@ -227,7 +227,7 @@ Rules:
         });
 
         console.log(`\nEnriched ${(target.id as string).slice(0, 8)}:`);
-        if (parsed.target_repo) console.log(`  Target repo: ${parsed.target_repo}`);
+        if (update.target_repo) console.log(`  Target repo: ${update.target_repo}`);
         if (parsed.steps) console.log(`  Steps: ${parsed.steps.length}`);
         if (parsed.acceptance_criteria) console.log(`  Acceptance criteria: ${parsed.acceptance_criteria.length}`);
         if (parsed.files_hint) console.log(`  Files hint: ${parsed.files_hint.join(", ")}`);
