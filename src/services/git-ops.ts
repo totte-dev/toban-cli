@@ -96,6 +96,8 @@ export function cleanRepoAuth(repoDir: string, credentialHelperPath?: string): v
       execSync(`git config --add credential.helper ""`, { cwd: repoDir, stdio: "pipe" });
       execSync(`git config --add credential.helper "${credentialHelperPath}"`, { cwd: repoDir, stdio: "pipe" });
     } catch { /* non-fatal */ }
+    // Ensure git sends repo path to credential helper (required for multi-org token resolution)
+    try { execSync("git config credential.useHttpPath true", { cwd: repoDir, stdio: "pipe" }); } catch { /* non-fatal */ }
   }
 }
 
