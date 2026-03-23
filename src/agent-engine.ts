@@ -81,7 +81,7 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
 
 /** Default model per agent role (can be overridden by DB engine setting) */
 const ROLE_DEFAULT_MODEL: Record<string, string> = {
-  builder: "claude-opus-4-6",
+  builder: "claude-sonnet-4-6",
   reviewer: "claude-sonnet-4-6",
   strategist: "claude-sonnet-4-6",
   manager: "claude-sonnet-4-6",
