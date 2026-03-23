@@ -111,7 +111,7 @@ export async function handleMergePipeline(
       } as any);
       ctx.onDataUpdate?.("task", taskId, { status: "review", review_verdict: "ERROR" });
     } catch { /* non-fatal */ }
-    clearPipelineState(taskId);
+    // Keep pipeline state so next retry skips merge+verify and only retries push
     // Override exitCode so the template's failure handler doesn't reset to todo
     ctx.exitCode = 0;
     ctx.mergeSkipped = true;
