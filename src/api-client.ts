@@ -16,6 +16,7 @@ export interface Task {
   story_points?: number | null;
   labels?: string[] | string;
   review_comment?: string | null;
+  review_verdict?: string | null;
   context_notes?: string | null;
   sprint?: number | null;
   parent_task?: string | null;

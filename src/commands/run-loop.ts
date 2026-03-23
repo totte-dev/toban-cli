@@ -481,6 +481,9 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
             eventEmitter.agentCompleted(agentName, task.id, { role: agentRole, exit_code: exitCode, duration_seconds: durationSeconds, tool_stats: toolStats });
           } else {
             eventEmitter.agentFailed(agentName, task.id, { role: agentRole, exit_code: exitCode, stalled: wasStalled, duration_seconds: durationSeconds, tool_stats: toolStats });
+            // Mark task with ERROR verdict so it won't be re-picked automatically
+            const errorDetail = JSON.stringify({ verdict: "ERROR", reason: wasStalled ? "Agent stalled" : `exit code ${exitCode}`, exit_code: exitCode, agent: agentName, timestamp: new Date().toISOString() });
+            api.updateTask(task.id, { status: "todo", review_verdict: "ERROR", review_comment: errorDetail } as Partial<Task>).catch(() => { /* best-effort */ });
           }
 
           // Record stall kills to Failure DB for visibility
