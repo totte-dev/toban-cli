@@ -153,16 +153,26 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
       console.log(`Enriching task: ${title}`);
       console.log(`Description: ${desc.slice(0, 200)}${desc.length > 200 ? "..." : ""}`);
 
+      // Fetch workspace repositories for target_repo inference
+      let repoList = "";
+      try {
+        const repos = (await apiFetch(`${apiUrl}/api/v1/repos`, apiKey)) as Array<{ repo_name?: string }>;
+        if (repos.length > 0) {
+          repoList = `\nAvailable repositories: ${repos.map((r) => r.repo_name).join(", ")}`;
+        }
+      } catch { /* ignore — repos endpoint may not exist */ }
+
       const { spawnClaudeOnce } = await import("../utils/spawn-claude.js");
       const prompt = `You are a task decomposition agent. Given a task title and description memo, generate structured fields.
 
 Task: ${title}
 Type: ${taskType}
 Description memo:
-${desc}
+${desc}${repoList}
 
 Output ONLY a JSON object with these fields (no markdown, no explanation):
 {
+  "target_repo": "owner/repo-name",
   "steps": ["step 1", "step 2", ...],
   "acceptance_criteria": ["criterion 1", "criterion 2", ...],
   "files_hint": ["path/to/likely/file.ts", ...],
@@ -171,6 +181,7 @@ Output ONLY a JSON object with these fields (no markdown, no explanation):
 }
 
 Rules:
+- target_repo: which repository this task targets (pick from available repos, or best guess from context)
 - steps: 3-8 concrete implementation steps
 - acceptance_criteria: 2-5 testable conditions for "done"
 - files_hint: likely files to modify (best guess from description)
@@ -185,6 +196,7 @@ Rules:
 
       try {
         const parsed = JSON.parse(jsonMatch[0]) as {
+          target_repo?: string;
           steps?: string[];
           acceptance_criteria?: string[];
           files_hint?: string[];
@@ -193,6 +205,7 @@ Rules:
         };
 
         const update: Record<string, unknown> = {};
+        if (parsed.target_repo) update.target_repo = parsed.target_repo;
         if (parsed.steps?.length) update.steps = parsed.steps;
         if (parsed.acceptance_criteria?.length) update.acceptance_criteria = parsed.acceptance_criteria;
         if (parsed.files_hint?.length) update.files_hint = parsed.files_hint;
@@ -205,6 +218,7 @@ Rules:
         });
 
         console.log(`\nEnriched ${(target.id as string).slice(0, 8)}:`);
+        if (parsed.target_repo) console.log(`  Target repo: ${parsed.target_repo}`);
         if (parsed.steps) console.log(`  Steps: ${parsed.steps.length}`);
         if (parsed.acceptance_criteria) console.log(`  Acceptance criteria: ${parsed.acceptance_criteria.length}`);
         if (parsed.files_hint) console.log(`  Files hint: ${parsed.files_hint.join(", ")}`);
