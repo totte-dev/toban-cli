@@ -13,51 +13,92 @@ import { trackRetry } from "../utils/retry-tracker.js";
 import { getExecError } from "../utils/exec-error.js";
 import * as ui from "../ui.js";
 
+/** Test file patterns by ecosystem */
+const TEST_FILE_PATTERNS = [
+  /\.test\.(ts|tsx|js|jsx|mjs)$/,  // JS/TS: *.test.ts
+  /\.spec\.(ts|tsx|js|jsx|mjs)$/,  // JS/TS: *.spec.ts
+  /^test_.*\.py$/,                  // Python: test_*.py
+  /_test\.py$/,                     // Python: *_test.py
+  /_test\.go$/,                     // Go: *_test.go
+  /_test\.rs$/,                     // Rust: *_test.rs (integration tests)
+];
+
+const SOURCE_EXTENSIONS = /\.(ts|tsx|js|jsx|mjs|py|go|rs|rb|java|kt|swift)$/;
+
+function isTestFile(filename: string): boolean {
+  const base = filename.split("/").pop() || "";
+  return TEST_FILE_PATTERNS.some((p) => p.test(base)) || filename.includes("__tests__/");
+}
+
+/** Detect test runner from defaultCmd or project files */
+function detectTestRunner(repoDir: string, defaultCmd: string): string | null {
+  if (defaultCmd.includes("vitest")) return "vitest";
+  if (defaultCmd.includes("jest")) return "jest";
+  if (defaultCmd.includes("pytest")) return "pytest";
+  if (defaultCmd.includes("cargo test")) return "cargo";
+  if (defaultCmd.includes("go test")) return "go";
+  // Auto-detect from package.json or files
+  if (existsSync(join(repoDir, "vitest.config.ts")) || existsSync(join(repoDir, "vitest.config.mts"))) return "vitest";
+  if (existsSync(join(repoDir, "jest.config.ts")) || existsSync(join(repoDir, "jest.config.js"))) return "jest";
+  if (existsSync(join(repoDir, "pytest.ini")) || existsSync(join(repoDir, "pyproject.toml"))) return "pytest";
+  if (existsSync(join(repoDir, "Cargo.toml"))) return "cargo";
+  if (existsSync(join(repoDir, "go.mod"))) return "go";
+  return null;
+}
+
+/** Build a scoped test command for specific test files */
+function buildRunnerCommand(runner: string, testFiles: string[]): string | null {
+  switch (runner) {
+    case "vitest": return `npx vitest run ${testFiles.join(" ")}`;
+    case "jest": return `npx jest ${testFiles.join(" ")}`;
+    case "pytest": return `python -m pytest ${testFiles.join(" ")}`;
+    case "cargo": return null; // cargo test doesn't easily scope to files
+    case "go": return null; // go test scopes by package, not file
+    default: return null;
+  }
+}
+
 /**
  * Build a test command scoped to files changed in the last commit.
- * Falls back to full test suite if no related tests are found.
+ * Supports JS/TS (vitest, jest), Python (pytest), and falls back to full suite.
  */
 function buildScopedTestCommand(repoDir: string, defaultCmd: string): string {
   try {
-    // Get files changed in the merge commit
     const changedFiles = execSync("git diff HEAD~1..HEAD --name-only", {
       cwd: repoDir, stdio: "pipe", timeout: 10_000,
     }).toString().trim().split("\n").filter(Boolean);
 
     if (changedFiles.length === 0) return defaultCmd;
 
-    // Find related test files: look for __tests__/*<basename>* or *.test.ts patterns
-    const testPatterns: string[] = [];
+    const testFiles: string[] = [];
     for (const file of changedFiles) {
-      // Skip test files themselves, config, and non-source files
-      if (file.includes("__tests__") || file.endsWith(".test.ts") || file.endsWith(".test.tsx")) {
-        testPatterns.push(file);
+      if (isTestFile(file)) {
+        testFiles.push(file);
         continue;
       }
-      if (!file.match(/\.(ts|tsx|js|jsx)$/)) continue;
+      if (!SOURCE_EXTENSIONS.test(file)) continue;
 
-      // Extract base name without extension (e.g. "components/sprint/plan-view.tsx" → "plan-view")
-      const base = file.split("/").pop()?.replace(/\.(ts|tsx|js|jsx)$/, "");
+      const base = file.split("/").pop()?.replace(SOURCE_EXTENSIONS, "");
       if (!base) continue;
 
-      // Look for matching test files
-      const testGlob = `**/__tests__/**/*${base}*`;
+      // Search for related test files
       try {
-        const matches = execSync(`find . -path "${testGlob}" -name "*.test.*" 2>/dev/null`, {
-          cwd: repoDir, stdio: "pipe", timeout: 5_000,
-        }).toString().trim().split("\n").filter(Boolean);
-        testPatterns.push(...matches);
+        const matches = execSync(
+          `find . \\( -name "*${base}*.test.*" -o -name "*${base}*.spec.*" -o -name "test_${base}.*" -o -name "${base}_test.*" \\) -not -path "*/node_modules/*" 2>/dev/null`,
+          { cwd: repoDir, stdio: "pipe", timeout: 5_000 },
+        ).toString().trim().split("\n").filter(Boolean);
+        testFiles.push(...matches);
       } catch { /* no matches */ }
     }
 
-    if (testPatterns.length === 0) {
-      // No related tests found — run full suite
-      return defaultCmd;
-    }
+    if (testFiles.length === 0) return defaultCmd;
 
-    // Use vitest --run with specific files
-    const uniqueTests = [...new Set(testPatterns)].slice(0, 10); // limit to 10 files
-    return `npx vitest run ${uniqueTests.join(" ")}`;
+    const uniqueTests = [...new Set(testFiles)].slice(0, 10);
+    const runner = detectTestRunner(repoDir, defaultCmd);
+    if (!runner) return defaultCmd;
+
+    const cmd = buildRunnerCommand(runner, uniqueTests);
+    return cmd ?? defaultCmd;
   } catch {
     return defaultCmd;
   }
