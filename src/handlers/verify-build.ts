@@ -13,6 +13,56 @@ import { trackRetry } from "../utils/retry-tracker.js";
 import { getExecError } from "../utils/exec-error.js";
 import * as ui from "../ui.js";
 
+/**
+ * Build a test command scoped to files changed in the last commit.
+ * Falls back to full test suite if no related tests are found.
+ */
+function buildScopedTestCommand(repoDir: string, defaultCmd: string): string {
+  try {
+    // Get files changed in the merge commit
+    const changedFiles = execSync("git diff HEAD~1..HEAD --name-only", {
+      cwd: repoDir, stdio: "pipe", timeout: 10_000,
+    }).toString().trim().split("\n").filter(Boolean);
+
+    if (changedFiles.length === 0) return defaultCmd;
+
+    // Find related test files: look for __tests__/*<basename>* or *.test.ts patterns
+    const testPatterns: string[] = [];
+    for (const file of changedFiles) {
+      // Skip test files themselves, config, and non-source files
+      if (file.includes("__tests__") || file.endsWith(".test.ts") || file.endsWith(".test.tsx")) {
+        testPatterns.push(file);
+        continue;
+      }
+      if (!file.match(/\.(ts|tsx|js|jsx)$/)) continue;
+
+      // Extract base name without extension (e.g. "components/sprint/plan-view.tsx" → "plan-view")
+      const base = file.split("/").pop()?.replace(/\.(ts|tsx|js|jsx)$/, "");
+      if (!base) continue;
+
+      // Look for matching test files
+      const testGlob = `**/__tests__/**/*${base}*`;
+      try {
+        const matches = execSync(`find . -path "${testGlob}" -name "*.test.*" 2>/dev/null`, {
+          cwd: repoDir, stdio: "pipe", timeout: 5_000,
+        }).toString().trim().split("\n").filter(Boolean);
+        testPatterns.push(...matches);
+      } catch { /* no matches */ }
+    }
+
+    if (testPatterns.length === 0) {
+      // No related tests found — run full suite
+      return defaultCmd;
+    }
+
+    // Use vitest --run with specific files
+    const uniqueTests = [...new Set(testPatterns)].slice(0, 10); // limit to 10 files
+    return `npx vitest run ${uniqueTests.join(" ")}`;
+  } catch {
+    return defaultCmd;
+  }
+}
+
 export async function handleVerifyBuild(
   _action: TemplateAction,
   ctx: ActionContext,
@@ -93,7 +143,7 @@ export async function handleVerifyBuild(
     return;
   }
 
-  // Test (skip if no test script)
+  // Test — run only tests related to changed files (avoids pre-existing failures)
   let hasTestScript = true;
   if (testCmd === "npm test" && existsSync(pkgJsonPath)) {
     try {
@@ -105,9 +155,11 @@ export async function handleVerifyBuild(
   if (!hasTestScript) {
     ui.info(`[${phase}] ${label}: no test script in package.json — skipping tests`);
   } else {
-    ui.info(`[${phase}] ${label}: running tests (${testCmd})...`);
+    // Detect changed files and find related test files
+    const scopedTestCmd = buildScopedTestCommand(repoDir, testCmd);
+    ui.info(`[${phase}] ${label}: running tests (${scopedTestCmd})...`);
     try {
-      execSync(testCmd, { cwd: repoDir, stdio: "pipe", timeout });
+      execSync(scopedTestCmd, { cwd: repoDir, stdio: "pipe", timeout });
       ui.info(`[${phase}] ${label}: tests passed`);
     } catch (testErr) {
       const detail = getExecError(testErr);

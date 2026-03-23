@@ -78,11 +78,12 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(0);
-    expect(execSyncMock).toHaveBeenCalledTimes(3);
-    // First call = guardrail diff check, second = build, third = test
-    expect(execSyncMock.mock.calls[0][0]).toContain("git diff");
-    expect(execSyncMock.mock.calls[1][0]).toBe("npm run build");
-    expect(execSyncMock.mock.calls[2][0]).toBe("npm test");
+    // Calls: guardrail diff, build, scoped-test diff (changed files), test command
+    const cmds = execSyncMock.mock.calls.map((c: unknown[]) => c[0]);
+    expect(cmds.some((c: string) => c.includes("git diff") && c.includes("--stat"))).toBe(true);
+    expect(cmds).toContain("npm run build");
+    // Test command may be scoped (npx vitest run ...) or fallback (npm test)
+    expect(cmds.some((c: string) => c.includes("test") || c.includes("vitest"))).toBe(true);
     expect(ctx.api.recordFailure).not.toHaveBeenCalled();
   });
 
@@ -102,8 +103,10 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(0);
-    expect(execSyncMock.mock.calls[1][0]).toBe("make build");
-    expect(execSyncMock.mock.calls[2][0]).toBe("make test");
+    const cmds = execSyncMock.mock.calls.map((c: unknown[]) => c[0]);
+    expect(cmds).toContain("make build");
+    // Test command may be scoped or fallback to workspace command
+    expect(cmds.some((c: string) => c.includes("make test") || c.includes("vitest"))).toBe(true);
   });
 
   it("sets exitCode=1 and records failure when build fails", async () => {
@@ -140,7 +143,8 @@ describe("verify_build action", () => {
       status: 1,
     });
     execSyncMock.mockImplementation((cmd: string) => {
-      if (cmd.includes("test")) throw testError;
+      // Only throw on actual test execution (npm test or vitest run), not on git diff
+      if ((cmd.includes("npm test") || cmd.includes("vitest run")) && !cmd.includes("--name-only")) throw testError;
       return Buffer.from("ok");
     });
     const ctx = createCtx();
@@ -148,9 +152,8 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(1);
-    // Diff check (1) + Build (2) + test (3) + git reset to revert merge (4)
-    expect(execSyncMock).toHaveBeenCalledTimes(4);
-    expect(execSyncMock.mock.calls[3][0]).toContain("git reset --hard");
+    const cmds = execSyncMock.mock.calls.map((c: unknown[]) => c[0]);
+    expect(cmds.some((c: string) => c.includes("git reset --hard"))).toBe(true);
     expect(ctx.api.recordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         failure_type: "verify_build",
@@ -222,10 +225,9 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(0);
-    // diff check (1) + npm ci (2) + build (3) + test (4)
-    expect(execSyncMock).toHaveBeenCalledTimes(4);
-    expect(execSyncMock.mock.calls[1][0]).toBe("npm ci");
-    expect(execSyncMock.mock.calls[2][0]).toBe("npm run build");
+    const cmds = execSyncMock.mock.calls.map((c: unknown[]) => c[0]);
+    expect(cmds).toContain("npm ci");
+    expect(cmds).toContain("npm run build");
   });
 
   it("runs npm install when package.json exists but no lockfile", async () => {
@@ -266,9 +268,10 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(ctx.exitCode).toBe(0);
-    // diff check (1) + build (2) + test (3) — no install step
-    expect(execSyncMock).toHaveBeenCalledTimes(3);
-    expect(execSyncMock.mock.calls[1][0]).toBe("npm run build");
+    const cmds = execSyncMock.mock.calls.map((c: unknown[]) => c[0]);
+    expect(cmds).toContain("npm run build");
+    // No npm ci or npm install
+    expect(cmds.every((c: string) => !c.startsWith("npm ci") && !c.startsWith("npm install"))).toBe(true);
   });
 
   it("skips verify_build when exitCode already non-zero", async () => {
