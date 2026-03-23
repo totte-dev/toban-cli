@@ -6,6 +6,7 @@ import { createApiClient, createAuthHeaders } from "../api-client.js";
 import { logError, CLI_ERR } from "../error-logger.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
+import { spawnClaudeOnce } from "../utils/spawn-claude.js";
 
 interface WorktreeEntry {
   path: string;
@@ -50,6 +51,62 @@ export async function handleSprintComplete(apiUrl: string, apiKey: string, push:
       process.exit(1);
     }
   } else { ui.info(`Sprint #${sprint.number} already completed`); }
+
+  // Generate Sprint Report via LLM
+  s.start("Generating Sprint Report...");
+  try {
+    const reviewData = await fetch(`${apiUrl}/api/v1/sprints/${sprint.number}/review`, {
+      headers: createAuthHeaders(apiKey),
+    }).then((r) => r.json()) as {
+      sprint: { goal?: string; number: number };
+      summary: { total: number; done: number; completion_rate: number };
+      retro_comments: Array<{ agent_name: string; went_well?: string; to_improve?: string }>;
+      tasks: Array<{ title: string; status: string; owner?: string; type?: string; story_points?: number }>;
+    };
+
+    const retros = reviewData.retro_comments
+      .map((r) => [r.went_well ? `[${r.agent_name}] Went well: ${r.went_well}` : "", r.to_improve ? `[${r.agent_name}] To improve: ${r.to_improve}` : ""].filter(Boolean).join("\n"))
+      .filter(Boolean).join("\n");
+
+    const taskList = reviewData.tasks
+      .map((t) => `- [${t.status}] ${t.title} (${t.type || "task"}, ${t.story_points || "?"}SP, @${t.owner || "unassigned"})`)
+      .join("\n");
+
+    const prompt = `You are a Sprint Retrospective analyst. Generate a concise Sprint Report for Sprint #${sprint.number}.
+
+Goal: ${reviewData.sprint.goal || "(no goal)"}
+Completion: ${reviewData.summary.done}/${reviewData.summary.total} tasks (${reviewData.summary.completion_rate}%)
+
+Tasks:
+${taskList}
+
+Retro Comments:
+${retros || "(none)"}
+
+Generate a report with these 4 sections (keep each section 2-4 bullet points, plain text, no markdown headers):
+
+1. SUMMARY: What was accomplished, key outcomes, any notable issues
+2. NEXT SPRINT RECOMMENDATIONS: What should be prioritized next based on results
+3. BACKLOG HEALTH: Any concerns about task quality, stale items, or prioritization
+4. PROJECT HEALTH: Quality trends, velocity, areas of improvement or concern
+
+Output the report as plain text, concise and actionable. No JSON wrapping.`;
+
+    const report = await spawnClaudeOnce(prompt, { role: "strategist", maxTurns: 1, timeout: 120_000 });
+    if (report.trim()) {
+      await fetch(`${apiUrl}/api/v1/sprints/${sprint.number}`, {
+        method: "PATCH",
+        headers: createAuthHeaders(apiKey),
+        body: JSON.stringify({ retro_summary: report.trim() }),
+      });
+      s.stop("Sprint Report generated and saved");
+    } else {
+      s.stop("Sprint Report: empty response from LLM");
+    }
+  } catch (err) {
+    s.stop(`Sprint Report generation failed: ${err instanceof Error ? err.message : err}`);
+    // Non-fatal — continue with tag + cleanup
+  }
 
   const tagName = `sprint-${sprint.number}`;
   try {
