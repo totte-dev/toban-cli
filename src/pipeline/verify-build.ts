@@ -185,11 +185,38 @@ export async function handleVerifyBuild(
     return;
   }
 
-  // Test — run only tests related to changed files (avoids pre-existing failures)
-  let hasTestScript = true;
-  if (testCmd === "npm test" && existsSync(pkgJsonPath)) {
+  // Test — detect subdirectory from changed files and run tests in correct location
+  // For monorepos: if all changes are in a subdirectory (e.g. api/), run tests there
+  let effectiveTestCmd = testCmd;
+  let effectiveTestDir = repoDir;
+  if (!ctx.completionJson?.test_command) {
     try {
-      const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+      const changedFiles = execSync("git diff HEAD~1..HEAD --name-only", { cwd: repoDir, stdio: "pipe", timeout: 10_000 })
+        .toString().trim().split("\n").filter(Boolean);
+      // Detect if all changes are in a subdirectory with its own package.json
+      const subdirs = new Set(changedFiles.map(f => f.split("/")[0]).filter(Boolean));
+      for (const sub of subdirs) {
+        const subPkg = join(repoDir, sub, "package.json");
+        if (existsSync(subPkg)) {
+          try {
+            const pkg = JSON.parse(readFileSync(subPkg, "utf-8"));
+            if (pkg.scripts?.test) {
+              effectiveTestDir = join(repoDir, sub);
+              effectiveTestCmd = "npm test";
+              ui.info(`[${phase}] ${label}: detected subdirectory "${sub}" with test script`);
+              break;
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    } catch { /* diff check failed, use defaults */ }
+  }
+
+  let hasTestScript = true;
+  const testPkgPath = join(effectiveTestDir, "package.json");
+  if (effectiveTestCmd === "npm test" && existsSync(testPkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(testPkgPath, "utf-8"));
       hasTestScript = !!(pkg.scripts?.test);
     } catch { /* parse error, try running anyway */ }
   }
@@ -198,10 +225,10 @@ export async function handleVerifyBuild(
     ui.info(`[${phase}] ${label}: no test script in package.json — skipping tests`);
   } else {
     // Detect changed files and find related test files
-    const scopedTestCmd = buildScopedTestCommand(repoDir, testCmd);
-    ui.info(`[${phase}] ${label}: running tests (${scopedTestCmd})...`);
+    const scopedTestCmd = effectiveTestDir !== repoDir ? effectiveTestCmd : buildScopedTestCommand(repoDir, effectiveTestCmd);
+    ui.info(`[${phase}] ${label}: running tests (${scopedTestCmd}) in ${effectiveTestDir === repoDir ? "root" : effectiveTestDir.split("/").pop()}...`);
     try {
-      execSync(scopedTestCmd, { cwd: repoDir, stdio: "pipe", timeout });
+      execSync(scopedTestCmd, { cwd: effectiveTestDir, stdio: "pipe", timeout });
       ui.info(`[${phase}] ${label}: tests passed`);
     } catch (testErr) {
       const detail = getExecError(testErr);
