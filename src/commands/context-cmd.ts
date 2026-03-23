@@ -2,10 +2,12 @@
  * `toban context` — Get project context on demand.
  *
  * Usage:
- *   toban context              # Full project context (spec + rules + failures)
+ *   toban context              # Full context (spec + rules + failures + sprint + knowledge)
  *   toban context spec         # Project spec only
  *   toban context rules        # Playbook rules only
  *   toban context failures     # Past failures only
+ *   toban context sprint       # Current sprint tasks
+ *   toban context knowledge    # Shared team knowledge
  *
  * Uses TOBAN_API_KEY, TOBAN_API_URL from env.
  */
@@ -65,6 +67,37 @@ export async function handleContext(args: string[]): Promise<void> {
         console.log(`- [${f.failure_type}] ${(f.summary as string || "").slice(0, 200)}`);
       }
       console.log("");
+    }
+  }
+
+  if (sub === "all" || sub === "sprint") {
+    const sprints = (await apiFetch(`${apiUrl}/api/v1/sprints`, apiKey)) as Array<Record<string, unknown>> | null;
+    const active = sprints?.find((s) => s.status === "active");
+    if (active) {
+      const sprintNum = active.number as number;
+      console.log(`# Current Sprint (#${sprintNum})\n`);
+      const tasks = (await apiFetch(`${apiUrl}/api/v1/tasks?sprint=${sprintNum}`, apiKey)) as Array<Record<string, unknown>> | null;
+      if (tasks && tasks.length > 0) {
+        for (const t of tasks) {
+          console.log(`- [${t.status}] ${t.title} (${t.priority}, ${t.owner || "unassigned"})`);
+        }
+      } else {
+        console.log("No tasks in this sprint.");
+      }
+      console.log("");
+    }
+  }
+
+  if (sub === "all" || sub === "knowledge") {
+    const data = (await apiFetch(`${apiUrl}/api/v1/agents/memories/shared`, apiKey)) as { memories?: Array<{ key: string; content: string }> } | null;
+    const memories = data?.memories || [];
+    if (memories.length > 0) {
+      console.log("# Shared Knowledge\n");
+      for (const m of memories.slice(0, 20)) {
+        if (m.key.startsWith("agent-change-")) continue; // skip change logs
+        console.log(`## ${m.key}`);
+        console.log(`${m.content.slice(0, 300)}\n`);
+      }
     }
   }
 }

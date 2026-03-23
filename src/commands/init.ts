@@ -398,5 +398,47 @@ export async function handleInit(): Promise<void> {
     }
   }
 
+  // 10. Generate minimal CLAUDE.md
+  const claudeMdPath = join(cwd, "CLAUDE.md");
+  const hasClaudeMd = existsSync(claudeMdPath);
+  const generateClaudeMd = await p.confirm({
+    message: hasClaudeMd ? "Regenerate CLAUDE.md? (existing file will be overwritten)" : "Generate CLAUDE.md for AI agents?",
+    initialValue: !hasClaudeMd,
+  });
+  if (!isCancel(generateClaudeMd) && generateClaudeMd) {
+    const claudeContent = [
+      `# ${projectName}`,
+      ``,
+      `## Setup`,
+      ``,
+      `\`\`\`bash`,
+      `# Get project context (spec, rules, sprint, knowledge)`,
+      `toban context`,
+      ``,
+      `# Get specific sections`,
+      `toban context spec       # Project spec`,
+      `toban context rules      # Playbook rules`,
+      `toban context sprint     # Current sprint tasks`,
+      `toban context knowledge  # Shared team knowledge`,
+      `toban context failures   # Past failures`,
+      `\`\`\``,
+      ``,
+      `## API`,
+      ``,
+      `- URL: \`${apiUrl}\``,
+      `- Auth: \`TOBAN_API_KEY\` env var`,
+      ``,
+      `## Commands`,
+      ``,
+      `- \`toban start\` — Start agent runner`,
+      `- \`toban report "issue"\` — Report and triage an issue`,
+      `- \`toban review --diff HEAD~1..HEAD\` — Review code changes`,
+      `- \`toban task enrich <id>\` — Auto-detail a task`,
+      ``,
+    ].join("\n");
+    writeFileSync(claudeMdPath, claudeContent);
+    p.log.success("CLAUDE.md generated (slim — use `toban context` for dynamic data)");
+  }
+
   p.outro("Done! Run `toban start` to begin.");
 }
