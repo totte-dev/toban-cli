@@ -77,3 +77,34 @@ export interface AgentActivity {
   summary: string;
   timestamp: string;
 }
+
+// --- Unified Job Queue ---
+
+export type JobType = "enrich" | "review";
+
+export type JobStatus = "pending" | "running" | "done" | "failed";
+
+export interface JobBase {
+  id: string;
+  type: JobType;
+  status: JobStatus;
+  taskId: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+}
+
+export interface EnrichJob extends JobBase {
+  type: "enrich";
+}
+
+export interface ReviewJob extends JobBase {
+  type: "review";
+  /** Diff range for the review */
+  diffRange?: string;
+  /** Builder's self-assessment (RETRO_JSON) */
+  retroJson?: string;
+  /** Pre-merge commit hash */
+  preMergeHash?: string;
+}

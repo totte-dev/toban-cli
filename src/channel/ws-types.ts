@@ -29,6 +29,7 @@ export const WS_MSG = {
   CHANNEL_MESSAGE: "channel_message",
   ENRICH_TASK: "enrich_task",
   ENRICH_RESULT: "enrich_result",
+  JOB_QUEUE_UPDATE: "job_queue_update",
 } as const;
 
 export type WsMsgType = typeof WS_MSG[keyof typeof WS_MSG];

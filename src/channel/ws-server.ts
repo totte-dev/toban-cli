@@ -14,6 +14,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { createAuthHeaders } from "../services/api-client.js";
 import { WS_MSG, type WsMsgType, wrapLegacyMessage, type WsTobanEvent } from "./ws-types.js";
+import type { JobQueue } from "../services/job-queue.js";
 import * as ui from "../ui.js";
 
 /** Message format over WebSocket */
@@ -106,6 +107,8 @@ export class WsChatServer {
   private reviewStates = new Map<string, ReviewState>();
   /** Current sprint number for event context */
   currentSprint?: number;
+  /** Job queue for enrich/review jobs */
+  jobQueue?: JobQueue;
 
   /** Whether any browser clients are connected */
   get hasClients(): boolean {
@@ -529,10 +532,21 @@ export class WsChatServer {
           return;
         }
         ui.info(`[ws] Enrich requested for task ${msg.task_id}`);
-        // Fire async — don't block WS handler
-        this.handleEnrichTask(msg.task_id).catch((err) => {
-          ui.warn(`[ws] Enrich failed: ${err}`);
-        });
+        if (this.jobQueue) {
+          const { createJobId } = await import("../services/job-queue.js");
+          this.jobQueue.enqueue({
+            id: createJobId(),
+            type: "enrich",
+            status: "pending",
+            taskId: msg.task_id,
+            createdAt: new Date().toISOString(),
+          });
+        } else {
+          // Fallback: direct handling if no queue configured
+          this.handleEnrichTask(msg.task_id).catch((err) => {
+            ui.warn(`[ws] Enrich failed: ${err}`);
+          });
+        }
         break;
       }
 
@@ -542,7 +556,7 @@ export class WsChatServer {
     }
   }
 
-  private async handleEnrichTask(taskId: string): Promise<void> {
+  async handleEnrichTask(taskId: string): Promise<void> {
     // Broadcast enriching status
     this.broadcast({
       type: WS_MSG.ENRICH_RESULT,

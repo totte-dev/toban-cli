@@ -127,6 +127,33 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   const { api, wsServer, tobanHome, repos, gitToken, gitUserInfo, credentialHelperPath } = ctx;
   let { sprintData } = ctx;
 
+  // --- Job Queue: unified processing for enrich/review jobs ---
+  const { JobQueue } = await import("../services/job-queue.js");
+  const jobQueue = new JobQueue();
+  jobQueue.setHandler(async (job) => {
+    if (job.type === "enrich") {
+      await wsServer.handleEnrichTask(job.taskId);
+    } else if (job.type === "review") {
+      const { handleSpawnReviewer } = await import("../pipeline/spawn-reviewer.js");
+      // Build minimal ActionContext for the reviewer
+      const reviewCtx = {
+        api,
+        task: sprintData.tasks.find((t) => t.id === job.taskId) || { id: job.taskId, title: "Review", status: "review" } as any,
+        agentName: "reviewer",
+        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: repos[0]?.path || process.cwd(), baseBranch: "main" },
+        exitCode: 0,
+        preMergeHash: (job as any).preMergeHash,
+        retroJson: (job as any).retroJson ? JSON.parse((job as any).retroJson) : undefined,
+      };
+      await handleSpawnReviewer({ type: "spawn_reviewer", when: "success", label: "Review" }, reviewCtx as any, "post", []);
+    }
+  });
+  jobQueue.setOnUpdate((jobs) => {
+    const counts = jobQueue.getCounts();
+    wsServer.broadcast({ type: WS_MSG.JOB_QUEUE_UPDATE, counts, jobs: jobs.map((j) => ({ id: j.id, type: j.type, status: j.status, taskId: j.taskId })), timestamp: new Date().toISOString() });
+  });
+  wsServer.jobQueue = jobQueue;
+
   // --- Startup cleanup: ensure clean state before polling ---
   await startupCleanup(tobanHome, repos, api, sprintData);
 
@@ -332,7 +359,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       taskLog.event("pickup", { agent: agentName, template: agentTemplate.id, title: task.title, taskType, hasReviewComment: !!task.review_comment });
 
       const actionCtx: ActionContext = {
-        api, task, agentName, template: agentTemplate, taskLog,
+        api, task, agentName, template: agentTemplate, taskLog, jobQueue,
         config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine, agentEngine: agentInfo?.engine, buildCommand: workspaceBuildCommand, testCommand: workspaceTestCommand, guardrailConfig, autoMode: cliArgs.autoMode },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({

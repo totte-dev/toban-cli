@@ -394,6 +394,8 @@ export interface ActionContext {
   eventEmitter?: import("../utils/event-emitter.js").EventEmitter;
   /** Agent's stderr lines (for infra error classification) */
   agentStderr?: string[];
+  /** Job queue for enrich/review jobs (if available) */
+  jobQueue?: import("../services/job-queue.js").JobQueue;
 }
 
 /**
@@ -483,10 +485,26 @@ export async function executeActions(
           break;
         }
         case "spawn_reviewer": {
-          // Fire-and-forget: Reviewer runs async, doesn't block slot release
-          handleSpawnReviewer(action, ctx, phase, actions)
-            .catch((err) => ui.warn(`[${phase}] spawn_reviewer error: ${err}`));
-          ui.info(`[${phase}] ${label}: spawned async (slot already released)`);
+          if (ctx.jobQueue) {
+            // Enqueue review job for serial processing
+            const { createJobId } = await import("../services/job-queue.js");
+            ctx.jobQueue.enqueue({
+              id: createJobId(),
+              type: "review",
+              status: "pending",
+              taskId: ctx.task.id,
+              createdAt: new Date().toISOString(),
+              diffRange: ctx.preMergeHash ? `${ctx.preMergeHash}..HEAD` : undefined,
+              retroJson: ctx.retroJson ? JSON.stringify(ctx.retroJson) : undefined,
+              preMergeHash: ctx.preMergeHash,
+            });
+            ui.info(`[${phase}] ${label}: enqueued review job`);
+          } else {
+            // Fallback: fire-and-forget
+            handleSpawnReviewer(action, ctx, phase, actions)
+              .catch((err) => ui.warn(`[${phase}] spawn_reviewer error: ${err}`));
+            ui.info(`[${phase}] ${label}: spawned async (slot already released)`);
+          }
           break;
         }
         case "review_changes": {
