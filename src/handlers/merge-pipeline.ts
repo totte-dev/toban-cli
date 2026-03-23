@@ -1,18 +1,17 @@
 /**
  * Merge Pipeline — orchestrates git_merge → verify_build → git_push as a single unit.
  *
- * These three actions have strong sequential dependencies:
- * - verify_build must run after merge (builds from merged main)
- * - git_push must NOT run if verify_build fails (revert already happened)
- * - All three share ActionContext state (exitCode, preMergeHash, mergeSkipped)
- *
- * This pipeline replaces three separate post_actions with one atomic operation.
+ * Idempotent: persists step state per task so retries skip completed steps.
+ * - push failure → retry skips merge+verify, runs push only
+ * - verify failure → reverts merge, clears state (Builder must redo)
+ * - full success → clears state
  */
 
 import type { ActionContext, TemplateAction } from "../agent-templates.js";
 import { handleGitMerge } from "./git-merge.js";
 import { handleGitPush } from "./git-push.js";
 import { handleVerifyBuild } from "./verify-build.js";
+import { loadPipelineState, savePipelineState, clearPipelineState } from "../utils/pipeline-state.js";
 import * as ui from "../ui.js";
 
 export async function handleMergePipeline(
@@ -20,35 +19,63 @@ export async function handleMergePipeline(
   ctx: ActionContext,
   phase: string,
 ): Promise<void> {
+  const taskId = ctx.task.id;
   const pipelineStart = Date.now();
+  const saved = loadPipelineState(taskId);
 
   // Step 1: Merge agent branch to base
-  const mergeAction: TemplateAction = { type: "git_merge", label: "Merge branch to base" };
-  await handleGitMerge(mergeAction, ctx, phase);
+  if (saved?.merge_done && saved?.verify_done) {
+    ui.info(`[${phase}] merge-pipeline: merge+verify already done — skipping to push`);
+  } else if (saved?.merge_done) {
+    ui.info(`[${phase}] merge-pipeline: merge already done — skipping to verify`);
+  } else {
+    const mergeAction: TemplateAction = { type: "git_merge", label: "Merge branch to base" };
+    await handleGitMerge(mergeAction, ctx, phase);
 
-  // If merge was skipped (no meaningful commits) or failed, stop pipeline
-  if (ctx.mergeSkipped) {
-    ui.info(`[${phase}] merge-pipeline: merge skipped (no commits) — skipping build/push`);
-    ctx.taskLog?.event("merge_pipeline_done", { skipped: true, duration_seconds: 0 });
-    return;
-  }
-  if (ctx.exitCode != null && ctx.exitCode !== 0) {
-    ui.warn(`[${phase}] merge-pipeline: merge failed — skipping build/push`);
-    ctx.taskLog?.event("merge_pipeline_done", { result: "merge_failed", duration_seconds: Math.round((Date.now() - pipelineStart) / 1000) });
-    return;
+    if (ctx.mergeSkipped) {
+      ui.info(`[${phase}] merge-pipeline: merge skipped (no commits) — skipping build/push`);
+      ctx.taskLog?.event("merge_pipeline_done", { skipped: true, duration_seconds: 0 });
+      clearPipelineState(taskId);
+      return;
+    }
+    if (ctx.exitCode != null && ctx.exitCode !== 0) {
+      ui.warn(`[${phase}] merge-pipeline: merge failed — skipping build/push`);
+      ctx.taskLog?.event("merge_pipeline_done", { result: "merge_failed", duration_seconds: Math.round((Date.now() - pipelineStart) / 1000) });
+      clearPipelineState(taskId);
+      return;
+    }
+
+    savePipelineState(taskId, {
+      merge_done: true,
+      merge_commit: ctx.preMergeHash,
+      verify_done: false,
+      push_done: false,
+      updated_at: "",
+    });
   }
 
   const mergeMs = Date.now() - pipelineStart;
 
   // Step 2: Verify build and tests
-  const verifyAction: TemplateAction = { type: "verify_build", label: "Verify build and tests pass" };
-  await handleVerifyBuild(verifyAction, ctx, phase);
+  if (saved?.merge_done && saved?.verify_done) {
+    // Already verified — skip
+  } else {
+    const verifyAction: TemplateAction = { type: "verify_build", label: "Verify build and tests pass" };
+    await handleVerifyBuild(verifyAction, ctx, phase);
 
-  // If verify failed (exitCode set, merge already reverted), stop pipeline
-  if (ctx.exitCode != null && ctx.exitCode !== 0) {
-    ui.warn(`[${phase}] merge-pipeline: verify_build failed — skipping push`);
-    ctx.taskLog?.event("merge_pipeline_done", { result: "build_failed", duration_seconds: Math.round((Date.now() - pipelineStart) / 1000) });
-    return;
+    if (ctx.exitCode != null && ctx.exitCode !== 0) {
+      ui.warn(`[${phase}] merge-pipeline: verify_build failed — skipping push`);
+      ctx.taskLog?.event("merge_pipeline_done", { result: "build_failed", duration_seconds: Math.round((Date.now() - pipelineStart) / 1000) });
+      // verify failure reverts the merge, so clear all state
+      clearPipelineState(taskId);
+      return;
+    }
+
+    const state = loadPipelineState(taskId);
+    if (state) {
+      state.verify_done = true;
+      savePipelineState(taskId, state);
+    }
   }
 
   const verifyMs = Date.now() - pipelineStart - mergeMs;
@@ -59,14 +86,21 @@ export async function handleMergePipeline(
 
   const totalSeconds = Math.round((Date.now() - pipelineStart) / 1000);
   const pushFailed = ctx.exitCode != null && ctx.exitCode !== 0;
+
   ctx.taskLog?.event("merge_pipeline_done", {
     result: pushFailed ? "push_failed" : "success",
     duration_seconds: totalSeconds,
     merge_seconds: Math.round(mergeMs / 1000),
     verify_seconds: Math.round(verifyMs / 1000),
     push_seconds: totalSeconds - Math.round(mergeMs / 1000) - Math.round(verifyMs / 1000),
+    resumed: !!saved,
   });
+
   if (pushFailed) {
-    ui.warn(`[${phase}] merge-pipeline: push failed — merge is local only`);
+    // Keep state so next retry skips merge+verify
+    ui.warn(`[${phase}] merge-pipeline: push failed — state saved for retry`);
+  } else {
+    // Full success — clean up
+    clearPipelineState(taskId);
   }
 }
