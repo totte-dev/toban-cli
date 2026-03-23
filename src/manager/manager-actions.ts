@@ -238,16 +238,19 @@ export async function executeActions(
           break;
         }
         case "create_task": {
-          const { title, description, priority, owner, story_points } = action.params as {
-            title: string; description?: string; priority?: string; owner?: string; story_points?: number;
+          const { title, description, priority, owner, story_points, category } = action.params as {
+            title: string; description?: string; priority?: string; owner?: string; story_points?: number; category?: string;
           };
           const safeOwner = owner && VALID_OWNERS.includes(owner) ? owner : (owner?.split("-")[0] && VALID_OWNERS.includes(owner?.split("-")[0]) ? owner.split("-")[0] : "builder");
           const safePriority = priority && VALID_PRIORITY.includes(priority) ? priority : "p1";
           if (safePriority !== priority) ui.warn(`[manager] create_task: invalid priority "${priority}" → defaulted to "${safePriority}"`);
           const safeSp = story_points && VALID_SP.includes(story_points) ? story_points : undefined;
           if (story_points && !safeSp) ui.warn(`[manager] create_task: invalid story_points "${story_points}"`);
+          const validCategories = ["read_only", "mutating", "destructive"];
+          const safeCategory = category && validCategories.includes(category) ? category : "mutating";
+          if (!category) ui.warn(`[manager] create_task: missing category → defaulted to "mutating"`);
           if (title) {
-            await createTask(deps.apiUrl, deps.apiKey, title, description, safePriority, safeOwner, context, deps.lastUserMessage);
+            await createTask(deps.apiUrl, deps.apiKey, title, description, safePriority, safeOwner, context, deps.lastUserMessage, safeCategory);
             ui.info(`[manager] Created task: ${title}`);
           }
           break;
@@ -348,7 +351,8 @@ async function createTask(
   priority?: string,
   owner?: string,
   ctx?: ManagerContext,
-  userMessage?: string
+  userMessage?: string,
+  category?: string
 ): Promise<void> {
   const body: Record<string, unknown> = { title };
   if (description) body.description = description;
@@ -356,6 +360,7 @@ async function createTask(
   if (owner) body.owner = owner;
   if (ctx?.sprint) body.sprint = ctx.sprint.number;
   body.labels = ["ai-generated"];
+  body.category = category || "mutating";
   if (userMessage) body.context_notes = `User request: ${userMessage}`;
 
   await fetch(`${apiUrl}/api/v1/tasks`, {

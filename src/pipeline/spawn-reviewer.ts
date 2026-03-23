@@ -351,6 +351,7 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
             priority: "p1",
             owner: "user",
             sprint: -1,
+            category: "mutating",
           }),
         });
       } catch { /* best-effort */ }

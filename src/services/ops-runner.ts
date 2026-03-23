@@ -548,6 +548,7 @@ export class OpsRunner {
               priority: issue.check === "build" ? "p0" : "p1",
               owner: "user",
               sprint: -1,
+              category: "mutating",
             }),
           },
         );
