@@ -6,6 +6,7 @@
  *   toban review --task <id>              # review a specific task
  *   toban review --diff <range>           # custom diff range (e.g. HEAD~5..HEAD)
  *   toban review --skill react,security   # match playbook rules by skill tags
+ *   toban review --repo ../other-repo     # review diff in a different repo
  *
  * Engine-agnostic: uses AgentConfig.readOnly to restrict tools per engine.
  */
@@ -27,10 +28,12 @@ export async function handleReview(
   diffRange?: string,
   engine: AgentType = "claude",
   usePr = false,
+  repoDir?: string,
 ): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
   const { execSync: revExec } = await import("node:child_process");
-  const cwd = process.cwd();
+  const { resolve } = await import("node:path");
+  const cwd = repoDir ? resolve(repoDir) : process.cwd();
 
   ui.intro();
   const s = ui.createSpinner();
