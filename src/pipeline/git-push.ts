@@ -42,6 +42,8 @@ export async function handleGitPush(
     // Push rejected (remote ahead) — pull rebase and retry
     try {
       pushExec(`git pull --rebase origin ${ctx.config.baseBranch}`, { cwd: pushRepoDir, stdio: "pipe" });
+      // Update mergeCommit after rebase (hash changes)
+      try { ctx.mergeCommit = pushExec("git rev-parse HEAD", { cwd: pushRepoDir, stdio: "pipe" }).toString().trim(); } catch { /* non-fatal */ }
       pushExec(`git push origin ${ctx.config.baseBranch}`, { cwd: pushRepoDir, stdio: "pipe" });
       ui.info( `[${phase}] ${label}: pushed ${ctx.config.baseBranch} (after rebase)`);
     } catch (retryErr) {

@@ -97,8 +97,16 @@ export async function handleMergePipeline(
   });
 
   if (pushFailed) {
-    // Keep state so next retry skips merge+verify
-    ui.warn(`[${phase}] merge-pipeline: push failed — state saved for retry`);
+    // Push failure is an infra issue — block the task instead of retrying
+    ui.warn(`[${phase}] merge-pipeline: push failed — blocking task (infra issue, not retrying)`);
+    try {
+      await ctx.api.updateTask(taskId, { status: "blocked", context_notes: "Push failed — check branch protection or Git credentials" } as any);
+      ctx.onDataUpdate?.("task", taskId, { status: "blocked" });
+    } catch { /* non-fatal */ }
+    clearPipelineState(taskId);
+    // Override exitCode so the template's failure handler doesn't reset to todo
+    ctx.exitCode = 0;
+    ctx.mergeSkipped = true;
   } else {
     // Full success — clean up
     clearPipelineState(taskId);
