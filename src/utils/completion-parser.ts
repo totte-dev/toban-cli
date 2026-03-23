@@ -11,7 +11,7 @@
 
 import type { TemplateAction } from "../agents/agent-templates.js";
 import * as ui from "../ui.js";
-import { normalizeCompletion, toLegacyFormat, type AgentCompletion } from "./completion-schema.js";
+import { normalizeCompletion, toLegacyFormat, type AgentCompletion, type BuilderRecord } from "./completion-schema.js";
 
 /** Legacy format — kept for backwards compatibility */
 export interface CompletionResult {
@@ -32,12 +32,27 @@ function injectIntoPostActions(actions: TemplateAction[], review_comment: string
 }
 
 /**
+ * Extract builder_record from raw COMPLETION_JSON if present.
+ */
+function extractBuilderRecord(json: Record<string, unknown>): BuilderRecord | undefined {
+  const raw = json.builder_record;
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  return {
+    intent: typeof r.intent === "string" ? r.intent : "",
+    changes_summary: Array.isArray(r.changes_summary) ? r.changes_summary.map(String) : [],
+    risks: Array.isArray(r.risks) ? r.risks.map(String) : [],
+  };
+}
+
+/**
  * Parse raw JSON into normalized AgentCompletion + legacy CompletionResult.
  */
-function parseCompletionJson(json: Record<string, unknown>): { completion: AgentCompletion; legacy: CompletionResult } {
+function parseCompletionJson(json: Record<string, unknown>): { completion: AgentCompletion; legacy: CompletionResult; builderRecord?: BuilderRecord } {
   const completion = normalizeCompletion(json);
   const legacy = toLegacyFormat(completion);
-  return { completion, legacy };
+  const builderRecord = extractBuilderRecord(json);
+  return { completion, legacy, builderRecord };
 }
 
 /**
@@ -55,6 +70,8 @@ export function extractCompletionJson(
     taskLog?: { event: (name: string, data: Record<string, unknown>) => void };
     /** New: receive the normalized completion */
     onCompletion?: (completion: AgentCompletion) => void;
+    /** Receive extracted builder_record for review_record */
+    onBuilderRecord?: (record: BuilderRecord) => void;
   }
 ): CompletionResult | null {
   // Pass 1: stream-json result events (fallback for when no direct COMPLETION_JSON line exists)
@@ -71,6 +88,7 @@ export function extractCompletionJson(
             const parsed = parseCompletionJson(cj);
             completion = parsed.completion;
             result = parsed.legacy;
+            if (parsed.builderRecord) callbacks?.onBuilderRecord?.(parsed.builderRecord);
           } catch {
             const resultText = ev.result.slice(0, 2000);
             completion = { summary: resultText };
@@ -96,7 +114,8 @@ export function extractCompletionJson(
     if (line.startsWith("COMPLETION_JSON:")) {
       try {
         const json = JSON.parse(line.slice("COMPLETION_JSON:".length));
-        const { completion, legacy } = parseCompletionJson(json);
+        const { completion, legacy, builderRecord } = parseCompletionJson(json);
+        if (builderRecord) callbacks?.onBuilderRecord?.(builderRecord);
         injectIntoPostActions(postActions, legacy.review_comment, legacy.commits);
         ui.info(`[completion] Parsed COMPLETION_JSON: ${completion.summary.slice(0, 80)}...`);
         callbacks?.taskLog?.event("completion_parse", {
@@ -120,7 +139,8 @@ export function extractCompletionJson(
         const match = event.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
         if (match) {
           const json = JSON.parse(match[1]);
-          const { completion, legacy } = parseCompletionJson(json);
+          const { completion, legacy, builderRecord } = parseCompletionJson(json);
+          if (builderRecord) callbacks?.onBuilderRecord?.(builderRecord);
           injectIntoPostActions(postActions, legacy.review_comment, legacy.commits);
           ui.info(`[completion] Parsed COMPLETION_JSON from stream: ${completion.summary.slice(0, 80)}...`);
           if (completion.summary && callbacks?.onReviewUpdate && callbacks?.taskId) {

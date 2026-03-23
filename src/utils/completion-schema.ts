@@ -59,6 +59,39 @@ export interface ContentCompletion extends AgentCompletion {
   docs_updated?: string[];
 }
 
+// ── Review Record (structured review lifecycle) ─────────
+
+export interface ReviewFinding {
+  severity: "error" | "warn" | "info";
+  message: string;
+  file?: string;
+}
+
+export interface BuilderRecord {
+  intent: string;
+  changes_summary: string[];
+  risks: string[];
+}
+
+export interface ReviewerRecord {
+  verdict: "APPROVE" | "NEEDS_CHANGES";
+  findings: ReviewFinding[];
+  reasoning: string;
+  score?: number;
+}
+
+export interface ManagerRecord {
+  action: "override" | "accept";
+  original_verdict: "APPROVE" | "NEEDS_CHANGES";
+  reasoning: string;
+}
+
+export interface ReviewRecord {
+  builder?: BuilderRecord;
+  reviewer?: ReviewerRecord;
+  manager?: ManagerRecord;
+}
+
 // ── Parsing & Normalization ──────────────────────────────
 
 /**

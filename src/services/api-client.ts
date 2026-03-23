@@ -17,6 +17,7 @@ export interface Task {
   labels?: string[] | string;
   review_comment?: string | null;
   review_verdict?: string | null;
+  review_record?: string | null;
   category?: "read_only" | "mutating" | "destructive" | null;
   steps?: string | string[] | null;
   acceptance_criteria?: string | string[] | null;

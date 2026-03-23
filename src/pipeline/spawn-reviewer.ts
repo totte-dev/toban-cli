@@ -15,6 +15,7 @@ import { resolveRepoRoot } from "../services/git-ops.js";
 import { resolveModelForRole } from "../agents/agent-engine.js";
 import { TIMEOUTS, LIMITS } from "../constants.js";
 import { classifyRejection } from "../utils/infra-classifier.js";
+import type { ReviewerRecord, ReviewFinding, ManagerRecord, ReviewRecord } from "../utils/completion-schema.js";
 
 export async function handleSpawnReviewer(
   action: TemplateAction,
@@ -181,6 +182,7 @@ Output format: ${outputFormat}`;
   // Parse COMPLETION_JSON from reviewer output (supports COMPLETION_JSON: prefix and ```json blocks)
   let verdict: "APPROVE" | "NEEDS_CHANGES" = "NEEDS_CHANGES";
   let reviewComment = "";
+  let reviewerRecord: ReviewerRecord | undefined;
   const completionMatch = reviewResult.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m)
     || reviewResult.match(/```json\s*(\{[\s\S]*?"verdict"[\s\S]*?\})\s*```/m)
     || reviewResult.match(/(\{[\s\S]*?"verdict"\s*:\s*"(?:APPROVE|NEEDS_CHANGES)"[\s\S]*?\})\s*$/m);
@@ -192,6 +194,19 @@ Output format: ${outputFormat}`;
       verdict = (v.includes("APPROVE") && !v.includes("NEEDS")) ? "APPROVE" : "NEEDS_CHANGES";
       report.verdict = verdict;
       reviewComment = JSON.stringify(report);
+
+      // Build ReviewerRecord from report fields
+      const findings: ReviewFinding[] = [];
+      if (report.requirement_match) findings.push({ severity: verdict === "APPROVE" ? "info" : "error", message: String(report.requirement_match), file: undefined });
+      if (report.code_quality) findings.push({ severity: "info", message: String(report.code_quality) });
+      if (report.test_coverage) findings.push({ severity: "info", message: String(report.test_coverage) });
+      if (report.risks && String(report.risks).toLowerCase() !== "none") findings.push({ severity: "warn", message: String(report.risks) });
+      reviewerRecord = {
+        verdict,
+        findings,
+        reasoning: String(report.requirement_match || report.code_quality || ""),
+        score: typeof report.score === "number" ? report.score : undefined,
+      };
 
       // Save structured review
       try {
@@ -236,6 +251,9 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
         role: "manager", maxTurns: 1, timeout: 60_000, cwd: resolveRepoRoot(ctx.config.workingDir),
       });
 
+      // Extract Manager reasoning from output (first line or full text)
+      const managerReasoning = managerResult.replace(/^(OVERRIDE_APPROVE|CONFIRM_REJECT)\s*/i, "").trim().slice(0, 500) || "No detailed reasoning provided";
+
       if (managerResult.includes("OVERRIDE_APPROVE")) {
         ui.info(`[${phase}] ${label}: Manager overrides → APPROVE (Reviewer was too strict)`);
         // Record as Playbook false positive — Reviewer's rules were too strict
@@ -248,6 +266,12 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
           original_verdict: "NEEDS_CHANGES",
         });
         verdict = "APPROVE";
+        // Build ManagerRecord
+        const managerRecord: ManagerRecord = {
+          action: "override",
+          original_verdict: "NEEDS_CHANGES",
+          reasoning: managerReasoning,
+        };
         // Update the saved review with override note
         const overrideComment = JSON.stringify({
           ...(completionMatch ? JSON.parse(completionMatch[1]) : {}),
@@ -256,8 +280,28 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
         });
         reviewComment = overrideComment;
         await ctx.api.updateTask(ctx.task.id, { review_comment: overrideComment } as Partial<Task>);
+
+        // Assemble review_record with manager override
+        const reviewRecord: ReviewRecord = {
+          ...ctx.reviewRecord,
+          reviewer: reviewerRecord,
+          manager: managerRecord,
+        };
+        ctx.reviewRecord = reviewRecord;
       } else {
         ui.info(`[${phase}] ${label}: Manager confirms NEEDS_CHANGES`);
+        // Build ManagerRecord for confirmed rejection
+        const managerRecord: ManagerRecord = {
+          action: "accept",
+          original_verdict: "NEEDS_CHANGES",
+          reasoning: managerReasoning,
+        };
+        const reviewRecord: ReviewRecord = {
+          ...ctx.reviewRecord,
+          reviewer: reviewerRecord,
+          manager: managerRecord,
+        };
+        ctx.reviewRecord = reviewRecord;
       }
     } catch (err) {
       ui.warn(`[${phase}] ${label}: Second opinion failed (${err}), keeping NEEDS_CHANGES`);
@@ -266,9 +310,18 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
 
   ctx.reviewVerdict = verdict;
 
-  // Persist normalized verdict to dedicated column for analytics
+  // If reviewer record was built but no manager gate was triggered, set it now
+  if (reviewerRecord && !ctx.reviewRecord?.manager) {
+    ctx.reviewRecord = { ...ctx.reviewRecord, reviewer: reviewerRecord };
+  }
+
+  // Persist review_record + verdict to API
   try {
-    await ctx.api.updateTask(ctx.task.id, { review_verdict: verdict } as Partial<Task>);
+    const updatePayload: Partial<Task> & { review_record?: string } = { review_verdict: verdict };
+    if (ctx.reviewRecord) {
+      updatePayload.review_record = JSON.stringify(ctx.reviewRecord);
+    }
+    await ctx.api.updateTask(ctx.task.id, updatePayload as Partial<Task>);
   } catch { /* non-fatal — review_comment still has the data */ }
 
   ctx.onDataUpdate?.("task", ctx.task.id, { review_comment: reviewComment, review_verdict: verdict });

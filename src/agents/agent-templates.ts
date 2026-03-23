@@ -107,7 +107,7 @@ Do NOT call curl or any API endpoints directly — the CLI handles all API commu
 When completing a task:
 1. Commit your changes: git add -A && git commit -m "<message>"
 2. Output a completion report on a new line in this exact format:
-COMPLETION_JSON:{"review_comment":"<detailed summary — see below>","commits":"<comma-separated commit hashes from git log --format=%H origin/HEAD..HEAD>"}
+COMPLETION_JSON:{"review_comment":"<detailed summary — see below>","commits":"<comma-separated commit hashes from git log --format=%H origin/HEAD..HEAD>","builder_record":{"intent":"<why this change was needed>","changes_summary":["<change 1>","<change 2>"],"risks":["<risk 1>"]}}
 
 review_comment MUST include ALL of these sections (2-4 sentences each):
 - **Why**: What problem this solves and why the change was needed
@@ -115,6 +115,11 @@ review_comment MUST include ALL of these sections (2-4 sentences each):
 - **Files**: Key files changed and what was done in each
 - **Decisions**: Any design choices made and why (e.g. "used X instead of Y because...")
 - **Testing**: How the changes were verified (tests added, manual checks)
+
+builder_record fields:
+- intent: 1-2 sentence summary of WHY the change was needed (not what was done)
+- changes_summary: array of key changes (e.g. ["Added JWT validation middleware", "Guarded 3 API endpoints"])
+- risks: array of known risks or empty array (e.g. ["No integration tests for edge case X"])
 
 Bad example: "Implemented the feature"
 Good example: "Why: Auth middleware was missing, causing unauthenticated API access. What: Added JWT verification + session management. Files: middleware/auth.ts (new, 45 lines), routes/index.ts (added auth guard to 3 endpoints). Decisions: Self-implemented JWT instead of express-jwt to avoid adding a dependency. Testing: Added 5 unit tests for token validation edge cases."
@@ -378,6 +383,10 @@ export interface ActionContext {
   completionJson?: { review_comment?: string; commits?: string };
   /** Parsed RETRO_JSON from agent output (Builder's self-assessment: what went well, what to improve) */
   retroJson?: { went_well?: string; to_improve?: string; suggested_tasks?: Array<{ title: string }> };
+  /** Structured builder record extracted from COMPLETION_JSON */
+  builderRecord?: import("../utils/completion-schema.js").BuilderRecord;
+  /** Accumulated review record (builder → reviewer → manager) */
+  reviewRecord?: import("../utils/completion-schema.js").ReviewRecord;
   /** The matched template for this task */
   template?: AgentTemplate;
   /** Per-task logger for debugging */

@@ -555,6 +555,10 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
               onReviewUpdate: (tid, phase, comment) => actionCtx.onReviewUpdate?.(tid, phase, comment),
               taskId: task.id,
               taskLog,
+              onBuilderRecord: (record) => {
+                actionCtx.builderRecord = record;
+                actionCtx.reviewRecord = { ...actionCtx.reviewRecord, builder: record };
+              },
             });
             if (parsed) {
               actionCtx.completionJson = parsed;
