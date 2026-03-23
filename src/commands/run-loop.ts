@@ -27,6 +27,7 @@ import { trackRetry } from "../utils/retry-tracker.js";
 import { OpsRunner } from "../services/ops-runner.js";
 import { extractJsonObject } from "../utils/extract-json.js";
 import { syncRuleTelemetry } from "../utils/telemetry-sync.js";
+import { loadPipelineState, clearPipelineState, savePipelineState } from "../utils/pipeline-state.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -388,7 +389,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       };
 
       // Check if pipeline state exists — if so, skip builder and run pipeline only
-      const { loadPipelineState, clearPipelineState } = await import("../utils/pipeline-state.js");
+      // loadPipelineState/clearPipelineState imported at top level
       const existingPipelineState = loadPipelineState(task.id);
       if (existingPipelineState?.agent_branch) {
         ui.info(`[task] Pipeline retry: skipping builder, using existing branch ${existingPipelineState.agent_branch}`);
@@ -696,7 +697,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
           // Save pipeline state with agent branch — enables pipeline-only retry without re-running builder
           if (actionCtx.completionJson && actionCtx.agentBranch) {
-            const { savePipelineState } = await import("../utils/pipeline-state.js");
             savePipelineState(task.id, {
               merge_done: false,
               verify_done: false,
