@@ -3,7 +3,7 @@
  */
 
 import type { AgentRunner } from "../runner.js";
-import { createAuthHeaders, type Task } from "../api-client.js";
+import { createAuthHeaders, type Task, type WorkspaceRepository, type ApiClient } from "../api-client.js";
 import { buildAgentPrompt } from "../prompt.js";
 import { getEngine, resolveModelForRole } from "../agent-engine.js";
 import { matchTemplate, executeActions, type ActionContext } from "../agent-templates.js";
@@ -37,6 +37,87 @@ import { syncRuleTelemetry } from "../utils/telemetry-sync.js";
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 
 // ---------------------------------------------------------------------------
+// Startup cleanup — ensure clean state before each Runner session
+// ---------------------------------------------------------------------------
+
+async function startupCleanup(
+  tobanHome: string,
+  repos: WorkspaceRepository[],
+  api: ApiClient,
+  sprintData: { sprint: { number: number }; tasks: Task[] } | null
+): Promise<void> {
+  const { execSync } = await import("node:child_process");
+  const { existsSync, rmSync, unlinkSync } = await import("node:fs");
+  const { join } = await import("node:path");
+
+  ui.info("[cleanup] Starting pre-run cleanup...");
+
+  // 1. Kill orphaned builder processes from previous runs
+  try {
+    const pids = execSync("ps aux | grep 'claude.*dangerously' | grep -v grep | awk '{print $2}'", { stdio: "pipe" }).toString().trim();
+    if (pids) {
+      for (const pid of pids.split("\n").filter(Boolean)) {
+        try { process.kill(parseInt(pid, 10), "SIGTERM"); } catch { /* already dead */ }
+      }
+      ui.info(`[cleanup] Killed ${pids.split("\n").filter(Boolean).length} orphaned builder process(es)`);
+    }
+  } catch { /* no orphans */ }
+
+  // 2. Clean worktrees + agent branches in all manager repos
+  const managerBase = join(tobanHome, "manager");
+  if (existsSync(managerBase)) {
+    try {
+      const orgs = execSync("ls", { cwd: managerBase, stdio: "pipe" }).toString().trim().split("\n").filter(Boolean);
+      for (const org of orgs) {
+        const orgDir = join(managerBase, org);
+        const repoNames = execSync("ls", { cwd: orgDir, stdio: "pipe" }).toString().trim().split("\n").filter(Boolean);
+        for (const repo of repoNames) {
+          const repoDir = join(orgDir, repo);
+          try {
+            // Remove agent worktrees
+            const worktrees = execSync("git worktree list", { cwd: repoDir, stdio: "pipe" }).toString();
+            for (const line of worktrees.split("\n")) {
+              if (line.includes("agent")) {
+                const wtPath = line.split(/\s+/)[0];
+                try { execSync(`git worktree remove --force "${wtPath}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* */ }
+              }
+            }
+            // Delete agent branches
+            const branches = execSync("git branch", { cwd: repoDir, stdio: "pipe" }).toString();
+            for (const line of branches.split("\n")) {
+              const branch = line.trim().replace(/^\* /, "");
+              if (branch.startsWith("agent/")) {
+                try { execSync(`git branch -D "${branch}"`, { cwd: repoDir, stdio: "pipe" }); } catch { /* */ }
+              }
+            }
+          } catch { /* not a git repo */ }
+        }
+      }
+      ui.info("[cleanup] Cleaned worktrees and agent branches");
+    } catch { /* non-fatal */ }
+  }
+
+  // 3. Reset stale in_progress tasks to todo (from previous crashed runs)
+  if (sprintData?.tasks) {
+    const staleTasks = sprintData.tasks.filter((t) => t.status === "in_progress");
+    for (const t of staleTasks) {
+      try {
+        await api.updateTask(t.id, { status: "todo" } as Partial<Task>);
+        ui.info(`[cleanup] Reset stale task: ${t.title?.toString().slice(0, 40)}`);
+      } catch { /* non-fatal */ }
+    }
+  }
+
+  // 4. Clear token cache (force fresh credentials)
+  try { unlinkSync(join(tobanHome, ".git-token-cache")); } catch { /* */ }
+
+  // 5. Clear channel messages (start fresh)
+  try { rmSync(join(tobanHome, "channel"), { recursive: true, force: true }); } catch { /* */ }
+
+  ui.info("[cleanup] Pre-run cleanup complete");
+}
+
+// ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 
@@ -47,6 +128,9 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
   const { api, wsServer, tobanHome, repos, gitToken, gitUserInfo, credentialHelperPath } = ctx;
   let { sprintData } = ctx;
+
+  // --- Startup cleanup: ensure clean state before polling ---
+  await startupCleanup(tobanHome, repos, api, sprintData);
 
   const POLL_INTERVAL_MS = INTERVALS.POLL;
 
