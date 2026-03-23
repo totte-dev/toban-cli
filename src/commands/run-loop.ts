@@ -211,8 +211,12 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         continue;
       }
 
-      // Warn if description lacks structured format (acceptance criteria)
-      if (desc.length >= 20 && !desc.includes("Acceptance Criteria") && !desc.includes("acceptance criteria") && !desc.includes("- [ ]")) {
+      // Warn if description lacks acceptance criteria (check both free text and structured JSON)
+      const { parseStructuredDescription } = await import("../utils/task-description.js");
+      const structured = parseStructuredDescription(desc);
+      const hasAC = structured?.acceptance_criteria?.length
+        || desc.includes("Acceptance Criteria") || desc.includes("acceptance criteria") || desc.includes("- [ ]");
+      if (desc.length >= 20 && !hasAC) {
         ui.warn(`[task] "${task.title}" has no acceptance criteria — agent may produce unclear results`);
       }
 
@@ -277,8 +281,11 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         continue;
       }
 
+      // Build description: if structured JSON, format it nicely; append context_notes
       const contextNotes = task.context_notes as string | undefined;
-      const fullDescription = [task.description, contextNotes].filter(Boolean).join("\n\n") || undefined;
+      const { getPromptDescription } = await import("../utils/task-description.js");
+      const parsedDesc = getPromptDescription(task.description as string | undefined);
+      const fullDescription = [parsedDesc, contextNotes].filter(Boolean).join("\n\n") || undefined;
 
       // Fetch past failures for prompt injection
       let pastFailures: Array<{ summary: string; failure_type: string; agent_name: string | null }> = [];

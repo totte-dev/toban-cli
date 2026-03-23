@@ -5,7 +5,6 @@
  * so the agent knows its role, task, and how to report back.
  */
 
-import { parseStructuredDescription, getPromptDescription } from "./utils/task-description.js";
 
 export interface RepoInfo {
   name: string;
@@ -152,9 +151,8 @@ export function buildAgentPrompt(ctx: PromptContext): string {
 
   const specBlock = buildSpecBlock(ctx.projectSpec);
 
-  const promptDesc = getPromptDescription(ctx.taskDescription);
-  const descriptionBlock = promptDesc
-    ? `\n\nDescription:\n${promptDesc}`
+  const descriptionBlock = ctx.taskDescription
+    ? `\n\nDescription:\n${ctx.taskDescription}`
     : "";
 
   const securityRules = buildSecurityRules(ctx.role);
