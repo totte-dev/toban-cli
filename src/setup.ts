@@ -144,6 +144,16 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
         s.stop(`Repo cloned: ${ws.github_repo}`);
       }
       workingDir = repoDir;
+      // Install dependencies in main repo + api subdirectory
+      for (const dir of [repoDir, join(repoDir, "api")]) {
+        if (!existsSync(join(dir, "package.json"))) continue;
+        const installCmd = detectInstallCommand(dir);
+        if (installCmd) {
+          try {
+            execSync(`${installCmd} --silent`, { cwd: dir, stdio: "pipe", timeout: 120_000 });
+          } catch { ui.warn(`Could not install deps in ${dir}`); }
+        }
+      }
       ui.workspaceInfo(undefined, workingDir, true);
     } else {
       ui.workspaceInfo(undefined, workingDir);
