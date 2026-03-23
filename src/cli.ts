@@ -153,8 +153,7 @@ function parseArgs(argv: string[]): CliArgs {
   } else if (firstArg === "login") {
     const args = process.argv.slice(3);
     const apiUrl = args.includes("--api-url") ? args[args.indexOf("--api-url") + 1] : undefined;
-    const apiKey = args.includes("--api-key") ? args[args.indexOf("--api-key") + 1] : undefined;
-    handleLogin(apiUrl, apiKey).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+    handleLogin(apiUrl).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
   } else if (firstArg === "profile") {
     const sub = process.argv[3];
     if (sub === "use" && process.argv[4]) {
