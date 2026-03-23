@@ -144,9 +144,10 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
         s.stop(`Repo cloned: ${ws.github_repo}`);
       }
       workingDir = repoDir;
-      // Install dependencies in main repo + api subdirectory
+      // Install dependencies in main repo + api subdirectory (skip if node_modules exists)
       for (const dir of [repoDir, join(repoDir, "api")]) {
         if (!existsSync(join(dir, "package.json"))) continue;
+        if (existsSync(join(dir, "node_modules"))) continue;
         const installCmd = detectInstallCommand(dir);
         if (installCmd) {
           try {
@@ -232,9 +233,10 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
       for (const repo of allRepos) {
         try {
           const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken, gitUserInfo, credentialHelperPath);
-          // Install dependencies (required for verify_build)
+          // Install dependencies (required for verify_build, skip if already installed)
           for (const dir of [repoPath, join(repoPath, "api")]) {
             if (!existsSync(join(dir, "package.json"))) continue;
+            if (existsSync(join(dir, "node_modules"))) continue;
             const cmd = detectInstallCommand(dir);
             if (cmd) {
               try {
