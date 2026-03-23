@@ -42,7 +42,7 @@ export function getRunnerPid(): number | null {
 }
 
 /** Start the runner as a daemon process. */
-export function startDaemon(originalArgs: string[]): void {
+export async function startDaemon(originalArgs: string[]): Promise<void> {
   const existingPid = getRunnerPid();
   if (existingPid) {
     console.log(`Runner already running (PID ${existingPid}). Use \`toban stop\` first.`);
@@ -54,8 +54,9 @@ export function startDaemon(originalArgs: string[]): void {
   args.unshift("start", "--foreground");
 
   const logFile = logFilePath();
-  const out = require("node:fs").openSync(logFile, "a");
-  const err = require("node:fs").openSync(logFile, "a");
+  const { openSync } = await import("node:fs");
+  const out = openSync(logFile, "a");
+  const err = openSync(logFile, "a");
 
   const child = spawn(process.execPath, [originalArgs[1], ...args], {
     detached: true,
