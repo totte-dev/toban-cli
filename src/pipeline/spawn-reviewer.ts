@@ -197,14 +197,15 @@ Output format: ${outputFormat}`;
 
       // Build ReviewerRecord from report fields
       const findings: ReviewFinding[] = [];
-      if (report.requirement_match) findings.push({ severity: verdict === "APPROVE" ? "info" : "error", message: String(report.requirement_match), file: undefined });
-      if (report.code_quality) findings.push({ severity: "info", message: String(report.code_quality) });
-      if (report.test_coverage) findings.push({ severity: "info", message: String(report.test_coverage) });
-      if (report.risks && String(report.risks).toLowerCase() !== "none") findings.push({ severity: "warn", message: String(report.risks) });
+      if (report.requirement_match) findings.push({ severity: "info", message: `[requirement] ${report.requirement_match}` });
+      if (report.code_quality) findings.push({ severity: "info", message: `[quality] ${report.code_quality}` });
+      if (report.test_coverage) findings.push({ severity: "info", message: `[tests] ${report.test_coverage}` });
+      if (report.risks && String(report.risks).toLowerCase() !== "none") findings.push({ severity: "warn", message: `[risks] ${report.risks}` });
+      const reasoningParts = [report.requirement_match, report.code_quality, report.test_coverage, report.risks].filter(Boolean).map(String);
       reviewerRecord = {
         verdict,
         findings,
-        reasoning: String(report.requirement_match || report.code_quality || ""),
+        reasoning: reasoningParts.join(" | ") || "No detailed reasoning",
         score: typeof report.score === "number" ? report.score : undefined,
       };
 
@@ -254,9 +255,16 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
       // Extract Manager reasoning from output (first line or full text)
       const managerReasoning = managerResult.replace(/^(OVERRIDE_APPROVE|CONFIRM_REJECT)\s*/i, "").trim().slice(0, 500) || "No detailed reasoning provided";
 
-      if (managerResult.includes("OVERRIDE_APPROVE")) {
+      const isOverride = managerResult.includes("OVERRIDE_APPROVE");
+      const managerRecord: ManagerRecord = {
+        action: isOverride ? "override" : "accept",
+        original_verdict: "NEEDS_CHANGES",
+        reasoning: managerReasoning,
+      };
+      ctx.reviewRecord = { ...ctx.reviewRecord, reviewer: reviewerRecord, manager: managerRecord };
+
+      if (isOverride) {
         ui.info(`[${phase}] ${label}: Manager overrides → APPROVE (Reviewer was too strict)`);
-        // Record as Playbook false positive — Reviewer's rules were too strict
         ctx.eventEmitter?.infraError(ctx.agentName, ctx.task.id, {
           category: "playbook_false_positive",
           summary: "Manager overrode Reviewer rejection — deemed overly strict",
@@ -266,13 +274,6 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
           original_verdict: "NEEDS_CHANGES",
         });
         verdict = "APPROVE";
-        // Build ManagerRecord
-        const managerRecord: ManagerRecord = {
-          action: "override",
-          original_verdict: "NEEDS_CHANGES",
-          reasoning: managerReasoning,
-        };
-        // Update the saved review with override note
         const overrideComment = JSON.stringify({
           ...(completionMatch ? JSON.parse(completionMatch[1]) : {}),
           verdict: "APPROVE",
@@ -280,28 +281,8 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
         });
         reviewComment = overrideComment;
         await ctx.api.updateTask(ctx.task.id, { review_comment: overrideComment } as Partial<Task>);
-
-        // Assemble review_record with manager override
-        const reviewRecord: ReviewRecord = {
-          ...ctx.reviewRecord,
-          reviewer: reviewerRecord,
-          manager: managerRecord,
-        };
-        ctx.reviewRecord = reviewRecord;
       } else {
         ui.info(`[${phase}] ${label}: Manager confirms NEEDS_CHANGES`);
-        // Build ManagerRecord for confirmed rejection
-        const managerRecord: ManagerRecord = {
-          action: "accept",
-          original_verdict: "NEEDS_CHANGES",
-          reasoning: managerReasoning,
-        };
-        const reviewRecord: ReviewRecord = {
-          ...ctx.reviewRecord,
-          reviewer: reviewerRecord,
-          manager: managerRecord,
-        };
-        ctx.reviewRecord = reviewRecord;
       }
     } catch (err) {
       ui.warn(`[${phase}] ${label}: Second opinion failed (${err}), keeping NEEDS_CHANGES`);

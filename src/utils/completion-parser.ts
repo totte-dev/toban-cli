@@ -40,8 +40,8 @@ function extractBuilderRecord(json: Record<string, unknown>): BuilderRecord | un
   const r = raw as Record<string, unknown>;
   return {
     intent: typeof r.intent === "string" ? r.intent : "",
-    changes_summary: Array.isArray(r.changes_summary) ? r.changes_summary.map(String) : [],
-    risks: Array.isArray(r.risks) ? r.risks.map(String) : [],
+    changes_summary: Array.isArray(r.changes_summary) ? r.changes_summary.map(String) : (typeof r.changes_summary === "string" ? [r.changes_summary] : []),
+    risks: Array.isArray(r.risks) ? r.risks.map(String) : (typeof r.risks === "string" ? [r.risks] : []),
   };
 }
 
