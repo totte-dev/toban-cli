@@ -97,11 +97,19 @@ export async function handleMergePipeline(
   });
 
   if (pushFailed) {
-    // Push failure is an infra issue — block the task instead of retrying
-    ui.warn(`[${phase}] merge-pipeline: push failed — blocking task (infra issue, not retrying)`);
+    // Push failure is an infra issue — move to review with ERROR verdict so user can see it
+    ui.warn(`[${phase}] merge-pipeline: push failed — moving to review with error`);
     try {
-      await ctx.api.updateTask(taskId, { status: "blocked", context_notes: "Push failed — check branch protection or Git credentials" } as any);
-      ctx.onDataUpdate?.("task", taskId, { status: "blocked" });
+      await ctx.api.updateTask(taskId, {
+        status: "review",
+        review_verdict: "ERROR",
+        review_comment: JSON.stringify({
+          verdict: "ERROR",
+          reason: "git push failed — check branch protection rules or Git credentials",
+          category: "infra_push",
+        }),
+      } as any);
+      ctx.onDataUpdate?.("task", taskId, { status: "review", review_verdict: "ERROR" });
     } catch { /* non-fatal */ }
     clearPipelineState(taskId);
     // Override exitCode so the template's failure handler doesn't reset to todo
