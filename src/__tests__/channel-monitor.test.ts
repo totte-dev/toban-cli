@@ -7,7 +7,7 @@ describe("ChannelMonitor", () => {
     clearChannel();
   });
 
-  it("detects blocker messages and returns notify action", () => {
+  it("detects blocker messages and returns create_task action", () => {
     const monitor = new ChannelMonitor("2000-01-01T00:00:00Z");
 
     postMessage({
@@ -18,9 +18,10 @@ describe("ChannelMonitor", () => {
 
     const actions = monitor.processNewMessages();
     expect(actions).toHaveLength(1);
-    expect(actions[0].action).toBe("notify");
+    expect(actions[0].action).toBe("create_task");
     expect(actions[0].message.type).toBe("blocker");
     expect(actions[0].description).toContain("builder-1");
+    expect(actions[0].data?.blocked_agent).toBe("builder-1");
   });
 
   it("detects request messages and returns notify action (not create_task)", () => {

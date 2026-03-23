@@ -79,7 +79,22 @@ export async function handleInjectMemory(
       : "";
     // Remove existing memory block to prevent duplicates
     existing = existing.replace(/<!-- TOBAN_MEMORY_START -->[\s\S]*?<!-- TOBAN_MEMORY_END -->\n?/g, "").trimEnd();
-    fs.writeFileSync(claudeMdPath, existing + "\n\n" + memoryBlock + "\n");
+    // Remove existing git rules block
+    existing = existing.replace(/<!-- TOBAN_GIT_RULES_START -->[\s\S]*?<!-- TOBAN_GIT_RULES_END -->\n?/g, "").trimEnd();
+
+    // Inject critical git rules directly into CLAUDE.md (most reliable way to enforce)
+    const gitRulesBlock = [
+      "<!-- TOBAN_GIT_RULES_START -->",
+      "# CRITICAL: Git Rules",
+      "",
+      "- **Do NOT run `git checkout main`** — stay on the current branch.",
+      "- Commit to the CURRENT branch only. Do NOT switch branches.",
+      "- Do NOT run `git push` — the CLI handles pushing.",
+      "- Do NOT create pull requests.",
+      "<!-- TOBAN_GIT_RULES_END -->",
+    ].join("\n");
+
+    fs.writeFileSync(claudeMdPath, existing + "\n\n" + gitRulesBlock + "\n\n" + memoryBlock + "\n");
     injected = allMemories.length;
   }
 

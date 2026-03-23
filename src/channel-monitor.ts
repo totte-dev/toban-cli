@@ -82,10 +82,15 @@ export class ChannelMonitor {
       case "blocker":
         ui.warn(`[channel] BLOCKER from ${msg.from}: ${msg.content}`);
         return {
-          action: "notify",
+          action: "create_task",
           message: msg,
           description: `${msg.from} reports blocker: ${msg.content}`,
-          data: { severity: "high" },
+          data: {
+            severity: "high",
+            blocked_task_id: msg.task_id ?? undefined,
+            blocked_agent: msg.from,
+            suggested_owner: msg.to && msg.to !== "all" ? msg.to : undefined,
+          },
         };
 
       case "request":
