@@ -5,7 +5,6 @@
 
 import { createAuthHeaders } from "../api-client.js";
 import { WS_MSG } from "../ws-types.js";
-import { handlePropose } from "./propose.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
 import type { ChannelMonitor } from "../channel-monitor.js";
@@ -147,45 +146,6 @@ export class SprintController {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
-
-  private async handleRetrospective(sprint: Record<string, unknown>): Promise<void> {
-    try {
-      const headers = createAuthHeaders(this.deps.apiKey);
-      const plansRes = await fetch(`${this.deps.apiUrl}/api/v1/sprints/${sprint.number}/plan`, { headers });
-      if (plansRes.ok) {
-        const plan = (await plansRes.json()) as { status: string; id: string };
-        if (plan.status === "generating") {
-          ui.info("[strategist] Sprint entered retrospective — generating improvement proposals...");
-          try {
-            await fetch(`${this.deps.apiUrl}/api/v1/agents/strategist`, {
-              method: "PATCH", headers,
-              body: JSON.stringify({ status: "working", activity: "Generating proposals..." }),
-            });
-          } catch { /* non-fatal */ }
-
-          let success = false;
-          try {
-            await handlePropose(this.deps.apiUrl, this.deps.apiKey);
-            success = true;
-          } catch (err) {
-            ui.warn(`[strategist] Proposal generation failed: ${err}`);
-          }
-
-          const planSummary = success
-            ? "Proposals generated — review in Backlog > Proposals"
-            : "Proposal generation failed";
-          try {
-            await fetch(`${this.deps.apiUrl}/api/v1/sprints/${sprint.number}/plan`, {
-              method: "POST", headers,
-              body: JSON.stringify({ summary: planSummary, tasks: [{ id: "done", title: planSummary, reason: "" }], total_sp: 0 }),
-            });
-          } catch {
-            ui.warn("[strategist] Could not update plan status — will retry next poll");
-          }
-        }
-      }
-    } catch { /* non-fatal */ }
-  }
 
   private async handleAutoModeTransition(sprint: Record<string, unknown>): Promise<SprintTickResult | null> {
     const headers = createAuthHeaders(this.deps.apiKey);

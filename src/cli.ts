@@ -17,7 +17,6 @@ import { execSync } from "node:child_process";
 
 import { AgentRunner } from "./runner.js";
 import { handleSprintPlan } from "./commands/plan.js";
-import { handlePropose } from "./commands/propose.js";
 import { handleReview } from "./commands/review.js";
 import { handleSprintComplete } from "./commands/sprint-complete.js";
 import { handleInit, loadConfig } from "./commands/init.js";
@@ -204,8 +203,6 @@ if (cliArgs.command === "plan") {
   }
   const goal = goalParts.join(" ").trim() || undefined;
   handleSprintPlan(cliArgs.apiUrl, cliArgs.apiKey, goal).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
-} else if (cliArgs.command === "propose") {
-  handlePropose(cliArgs.apiUrl, cliArgs.apiKey).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
 } else if (cliArgs.command === "review") {
   const rawArgs = process.argv.slice(2);
   const taskIdx = rawArgs.indexOf("--task");
