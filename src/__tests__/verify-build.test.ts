@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { executeActions, type ActionContext, type TemplateAction } from "../agent-templates.js";
 import type { ApiClient, Task } from "../api-client.js";
+import { clearRetry } from "../utils/retry-tracker.js";
 
 // Mock execSync
 const execSyncMock = vi.fn();
@@ -69,6 +70,8 @@ describe("verify_build action", () => {
     execSyncMock.mockReset();
     existsSyncMock.mockReset();
     existsSyncMock.mockReturnValue(false);
+    clearRetry("build:task-123");
+    clearRetry("test:task-123");
   });
 
   it("passes when both build and test succeed", async () => {
@@ -280,5 +283,60 @@ describe("verify_build action", () => {
     await executeActions([VERIFY_BUILD], ctx, "post");
 
     expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks task after 3 consecutive build failures", async () => {
+    const buildError = Object.assign(new Error("fail"), {
+      stderr: Buffer.from("error"), stdout: Buffer.from(""),
+    });
+    execSyncMock.mockImplementation((cmd: string) => {
+      if (cmd.includes("build")) throw buildError;
+      return Buffer.from("ok");
+    });
+
+    const apis: ApiClient[] = [];
+    for (let i = 0; i < 3; i++) {
+      const api = createMockApi();
+      apis.push(api);
+      const ctx = createCtx({ api });
+      await executeActions([VERIFY_BUILD], ctx, "post");
+      expect(ctx.exitCode).toBe(1);
+    }
+
+    // First 2 failures: no blocked
+    expect(apis[0].updateTask).not.toHaveBeenCalledWith(
+      "task-123", expect.objectContaining({ status: "blocked" }),
+    );
+    expect(apis[1].updateTask).not.toHaveBeenCalledWith(
+      "task-123", expect.objectContaining({ status: "blocked" }),
+    );
+    // 3rd failure: blocked
+    expect(apis[2].updateTask).toHaveBeenCalledWith(
+      "task-123", expect.objectContaining({ status: "blocked" }),
+    );
+  });
+
+  it("blocks task after 3 consecutive test failures", async () => {
+    const testError = Object.assign(new Error("fail"), {
+      stderr: Buffer.from(""), stdout: Buffer.from("FAIL test"),
+    });
+    execSyncMock.mockImplementation((cmd: string) => {
+      if ((cmd.includes("npm test") || cmd.includes("vitest run")) && !cmd.includes("--name-only")) throw testError;
+      return Buffer.from("ok");
+    });
+
+    clearRetry("test:task-123");
+    const apis: ApiClient[] = [];
+    for (let i = 0; i < 3; i++) {
+      const api = createMockApi();
+      apis.push(api);
+      const ctx = createCtx({ api });
+      await executeActions([VERIFY_BUILD], ctx, "post");
+    }
+
+    // 3rd failure triggers blocked
+    expect(apis[2].updateTask).toHaveBeenCalledWith(
+      "task-123", expect.objectContaining({ status: "blocked" }),
+    );
   });
 });

@@ -179,7 +179,7 @@ export async function handleVerifyBuild(
     }
     if (buildMaxed) {
       ui.error(`[${phase}] ${label}: build failed ${buildRetry} times — blocking task`);
-      ctx.api.updateTask({ id: ctx.task.id, status: "blocked", review_comment: `Build failed ${buildRetry} times: ${detail.slice(0, 300)}` }).catch(() => {});
+      ctx.api.updateTask(ctx.task.id, { status: "blocked", review_comment: `Build failed ${buildRetry} times: ${detail.slice(0, 300)}` }).catch(() => {});
     }
     return;
   }
@@ -220,7 +220,7 @@ export async function handleVerifyBuild(
       }
       if (testMaxed) {
         ui.error(`[${phase}] ${label}: tests failed ${testRetry} times — blocking task`);
-        ctx.api.updateTask({ id: ctx.task.id, status: "blocked", review_comment: `Tests failed ${testRetry} times: ${detail.slice(0, 300)}` }).catch(() => {});
+        ctx.api.updateTask(ctx.task.id, { status: "blocked", review_comment: `Tests failed ${testRetry} times: ${detail.slice(0, 300)}` }).catch(() => {});
       }
       return;
     }
