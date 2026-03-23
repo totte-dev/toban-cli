@@ -6,6 +6,16 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+
+/** Detect the right install command based on lockfile presence. */
+function detectInstallCommand(dir: string): string | null {
+  if (existsSync(join(dir, "bun.lockb")) || existsSync(join(dir, "bun.lock"))) return "bun install";
+  if (existsSync(join(dir, "pnpm-lock.yaml"))) return "pnpm install";
+  if (existsSync(join(dir, "yarn.lock"))) return "yarn install";
+  if (existsSync(join(dir, "package-lock.json"))) return "npm ci";
+  if (existsSync(join(dir, "package.json"))) return "npm install";
+  return null;
+}
 import { homedir } from "node:os";
 import type { AgentRunner } from "./agents/runner.js";
 import type { AgentType } from "./types.js";
@@ -212,6 +222,16 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
       for (const repo of allRepos) {
         try {
           const repoPath = ensureAgentRepo(reposParent, "shared", repo, gitToken, gitUserInfo, credentialHelperPath);
+          // Install dependencies (required for verify_build)
+          for (const dir of [repoPath, join(repoPath, "api")]) {
+            if (!existsSync(join(dir, "package.json"))) continue;
+            const cmd = detectInstallCommand(dir);
+            if (cmd) {
+              try {
+                execSync(`${cmd} --silent`, { cwd: dir, stdio: "pipe", timeout: 120_000 });
+              } catch { ui.warn(`Could not install deps in ${dir}`); }
+            }
+          }
           managerRepoInfos.push({ name: repo.repo_name, path: repoPath, description: repo.description || undefined });
         } catch (err) { ui.warn(`Could not clone ${repo.repo_name} for Manager: ${err}`); }
       }
