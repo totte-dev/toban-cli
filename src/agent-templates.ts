@@ -390,6 +390,10 @@ export interface ActionContext {
   onDataUpdate?: (entity: string, id: string, changes: Record<string, unknown>) => void;
   /** Broadcast review progress to connected WS clients */
   onReviewUpdate?: (taskId: string, phase: string, reviewComment?: string) => void;
+  /** Event emitter for structured event recording */
+  eventEmitter?: import("./utils/event-emitter.js").EventEmitter;
+  /** Agent's stderr lines (for infra error classification) */
+  agentStderr?: string[];
 }
 
 /**

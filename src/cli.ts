@@ -152,9 +152,6 @@ function parseArgs(argv: string[]): CliArgs {
 if (process.argv[2] === "peers") {
   const { handlePeers } = await import("./commands/peers.js");
   handlePeers(process.argv[3]).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
-} else if (process.argv[2] === "chat") {
-  const { handleChat } = await import("./commands/chat.js");
-  handleChat(process.argv.slice(3)).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
 } else if (process.argv[2] === "task") {
   const { handleTaskCmd } = await import("./commands/task-cmd.js");
   handleTaskCmd(process.argv.slice(3)).catch((err) => { console.error(`Error: ${err}`); process.exit(1); });
@@ -236,6 +233,9 @@ if (cliArgs.command === "plan") {
         shutdownState.activeWsServer?.broadcastStdout(agentName, lines, stream);
       },
       onActivity: (agentName, activity) => {
+        if (activity.kind === "tool" && activity.tool) {
+          runner.recordTool(agentName, activity.tool);
+        }
         if (shutdownState.activeWsServer) {
           shutdownState.activeWsServer.broadcast({
             type: WS_MSG.AGENT_ACTIVITY, agent_name: agentName,

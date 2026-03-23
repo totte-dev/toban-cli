@@ -65,6 +65,8 @@ export class AgentRunner {
   private onActivity?: ActivityCallback;
   private stallCheckInterval: ReturnType<typeof setInterval> | null = null;
   private stallKillMs: number;
+  /** Per-agent tool execution counts (tool name -> count) */
+  private toolStats = new Map<string, Map<string, number>>();
 
   constructor(options?: AgentRunnerOptions) {
     this.useDocker = options?.useDocker ?? true; // default: try Docker
@@ -72,6 +74,22 @@ export class AgentRunner {
     this.onStdout = options?.onStdout;
     this.onActivity = options?.onActivity;
     this.stallKillMs = options?.stallTimeoutMs ?? TIMEOUTS.AGENT_STALL_KILL;
+  }
+
+  /** Record a tool execution for an agent */
+  recordTool(agentName: string, tool: string): void {
+    let stats = this.toolStats.get(agentName);
+    if (!stats) { stats = new Map(); this.toolStats.set(agentName, stats); }
+    stats.set(tool, (stats.get(tool) ?? 0) + 1);
+  }
+
+  /** Get tool stats for an agent and clear them */
+  consumeToolStats(agentName: string): Record<string, number> {
+    const stats = this.toolStats.get(agentName);
+    if (!stats || stats.size === 0) return {};
+    const result = Object.fromEntries(stats);
+    this.toolStats.delete(agentName);
+    return result;
   }
 
   /** Reconfigure the stall kill timeout (ms). */

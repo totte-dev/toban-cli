@@ -155,12 +155,23 @@ export function createAuthHeaders(apiKey: string): Record<string, string> {
   return { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
 }
 
-/** Retry a fetch call on 5xx errors (D1 transient failures) */
-export async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
+/** Retry a fetch call on 5xx or 429 errors with exponential backoff + jitter */
+export async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const res = await fetch(url, options);
-    if (res.ok || res.status < 500 || attempt === maxRetries) return res;
-    await new Promise((r) => setTimeout(r, 500 * (attempt + 1))); // 500ms, 1000ms
+    if (res.ok || attempt === maxRetries) return res;
+    if (res.status === 429) {
+      // Respect Retry-After header, fallback to exponential backoff
+      const retryAfter = res.headers.get("Retry-After");
+      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 1000 * 2 ** attempt;
+      await new Promise((r) => setTimeout(r, delayMs + Math.random() * 500));
+    } else if (res.status >= 500) {
+      // Exponential backoff: 1s, 2s, 4s + jitter
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt + Math.random() * 500));
+    } else {
+      // 4xx (not 429) — don't retry
+      return res;
+    }
   }
   return fetch(url, options); // unreachable, but type-safe
 }

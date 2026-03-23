@@ -26,6 +26,9 @@ export interface EventEmitter {
   reviewCompleted(taskId: string, agentName: string, data?: Record<string, unknown>): void;
   sprintEvent(eventType: "sprint.started" | "sprint.phase_changed" | "sprint.completed" | "sprint.timeout", data?: Record<string, unknown>): void;
   guardrailEvent(eventType: "guardrail.violation" | "guardrail.blocked", data?: Record<string, unknown>): void;
+  commitCreated(agentName: string, taskId: string, data: { hash: string; message: string; files_changed: number }): void;
+  testResult(agentName: string, taskId: string, data: { passed: boolean; command: string; output?: string }): void;
+  infraError(agentName: string, taskId: string, data: { category: string; summary: string }): void;
   emit(event: EventInput): void;
   /** Send all buffered events to API. Call on sprint start and CLI shutdown. */
   flush(): Promise<void>;
@@ -91,6 +94,15 @@ export function createEventEmitter(
     },
     guardrailEvent(eventType, data = {}) {
       addEvent({ type: eventType, span_id: spanId(), data });
+    },
+    commitCreated(agentName, taskId, data) {
+      addEvent({ type: "commit.created", span_id: spanId(), task_id: taskId, agent_name: agentName, data });
+    },
+    testResult(agentName, taskId, data) {
+      addEvent({ type: "test.result", span_id: spanId(), task_id: taskId, agent_name: agentName, data });
+    },
+    infraError(agentName, taskId, data) {
+      addEvent({ type: "infra.error", span_id: spanId(), task_id: taskId, agent_name: agentName, data });
     },
     emit(event) { addEvent(event); },
 

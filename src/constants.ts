@@ -16,7 +16,7 @@ export const TIMEOUTS = {
 
 export const INTERVALS = {
   POLL: 30_000,            // 30 sec
-  MESSAGE_POLL: 10_000,    // 10 sec
+  MESSAGE_POLL: 15_000,    // 15 sec
 } as const;
 
 export const LIMITS = {

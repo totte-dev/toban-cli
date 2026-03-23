@@ -34,11 +34,20 @@ describe("OpsRunner", () => {
   });
 
   it("fetchDueTasks returns empty array on API error", async () => {
+    vi.useFakeTimers();
     globalThis.fetch = mockFetchResponse({}, false, 500);
 
     const runner = new OpsRunner({ apiUrl: API_URL, apiKey: API_KEY });
-    const result = await runner.fetchDueTasks();
+    const resultPromise = runner.fetchDueTasks();
+
+    // Advance past retry backoff delays (1s + 2s + 4s + jitter)
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+
+    const result = await resultPromise;
     expect(result).toEqual([]);
+    vi.useRealTimers();
   });
 
   it("runTask returns failure for empty description", () => {

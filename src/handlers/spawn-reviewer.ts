@@ -14,6 +14,7 @@ import { spawnClaudeOnce } from "../utils/spawn-claude.js";
 import { resolveRepoRoot } from "../git-ops.js";
 import { resolveModelForRole } from "../agent-engine.js";
 import { TIMEOUTS, LIMITS } from "../constants.js";
+import { classifyRejection } from "../utils/infra-classifier.js";
 
 export async function handleSpawnReviewer(
   action: TemplateAction,
@@ -214,6 +215,7 @@ Output format: ${outputFormat}`;
   }
 
   // Second opinion gate: Manager re-evaluates NEEDS_CHANGES verdicts
+  let managerOverrode = false;
   if (verdict === "NEEDS_CHANGES" && reviewComment) {
     ui.info(`[${phase}] ${label}: NEEDS_CHANGES — requesting Manager second opinion...`);
     try {
@@ -270,31 +272,72 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
   // retry and auto-transition must be handled here.
 
   if (verdict === "NEEDS_CHANGES") {
-    const { trackRetry } = await import("../utils/retry-tracker.js");
-    const { retryCount, maxed } = trackRetry(ctx.task.id);
+    // Classify rejection: infrastructure issue vs code quality
+    const agentStderr = (ctx.agentStderr ?? []).join("\n");
+    const { classification, category, reason } = classifyRejection(reviewComment, agentStderr, managerOverrode);
 
-    // Record failure to Failure DB (only on first attempt)
-    if (retryCount === 1) {
-      ctx.api.recordFailure({
-        task_id: ctx.task.id,
-        failure_type: "reject",
-        summary: `NEEDS_CHANGES: ${ctx.task.title}`,
-        agent_name: ctx.agentName,
-        sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
-        review_comment: reviewComment,
-      }).catch(() => { /* best-effort */ });
-    }
+    // Enrich review event with classification
+    ctx.eventEmitter?.reviewCompleted(ctx.task.id, ctx.agentName, {
+      verdict, classification, infra_category: category, reason,
+    });
 
-    if (maxed) {
+    if (classification === "infra") {
+      // Infrastructure issue — don't retry, create bug ticket instead
+      ui.warn(`[reviewer] Infra issue detected: [${category}] ${reason}`);
+      ctx.eventEmitter?.infraError(ctx.agentName, ctx.task.id, {
+        category: category ?? "unknown",
+        summary: reason ?? "Infrastructure error caused review failure",
+      });
+
       await ctx.api.updateTask(ctx.task.id, {
-        status: "review",
-        review_comment: `Blocked: task failed ${retryCount} times. Needs human intervention.`,
+        status: "blocked",
+        review_comment: `[Infra: ${category}] ${reason}. Original review: ${reviewComment.slice(0, 500)}`,
       } as Partial<Task>);
-      ui.error(`[reviewer] Task failed ${retryCount} times — blocked for human intervention`);
+      ctx.onDataUpdate?.("task", ctx.task.id, { status: "blocked" });
+
+      // Auto-create bug ticket in backlog
+      try {
+        await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks`, {
+          method: "POST",
+          headers: createAuthHeaders(ctx.config.apiKey),
+          body: JSON.stringify({
+            title: `[Infra] ${category}: ${reason}`,
+            description: `Auto-generated from review failure.\nTask: ${ctx.task.title} (${ctx.task.id})\nAgent: ${ctx.agentName}\nReview: ${reviewComment.slice(0, 1000)}`,
+            type: "bug",
+            priority: "p1",
+            owner: "user",
+            sprint: -1,
+          }),
+        });
+      } catch { /* best-effort */ }
     } else {
-      await ctx.api.updateTask(ctx.task.id, { status: "todo" } as Partial<Task>);
-      ctx.onDataUpdate?.("task", ctx.task.id, { status: "todo" });
-      ui.warn(`[reviewer] NEEDS_CHANGES (attempt ${retryCount}/3) — resetting to todo`);
+      // Code quality issue — normal retry flow
+      const { trackRetry } = await import("../utils/retry-tracker.js");
+      const { retryCount, maxed } = trackRetry(ctx.task.id);
+
+      // Record failure to Failure DB (only on first attempt)
+      if (retryCount === 1) {
+        ctx.api.recordFailure({
+          task_id: ctx.task.id,
+          failure_type: "reject",
+          summary: `NEEDS_CHANGES: ${ctx.task.title}`,
+          agent_name: ctx.agentName,
+          sprint: typeof ctx.task.sprint === "number" ? ctx.task.sprint : undefined,
+          review_comment: reviewComment,
+        }).catch(() => { /* best-effort */ });
+      }
+
+      if (maxed) {
+        await ctx.api.updateTask(ctx.task.id, {
+          status: "review",
+          review_comment: `Blocked: task failed ${retryCount} times. Needs human intervention.`,
+        } as Partial<Task>);
+        ui.error(`[reviewer] Task failed ${retryCount} times — blocked for human intervention`);
+      } else {
+        await ctx.api.updateTask(ctx.task.id, { status: "todo" } as Partial<Task>);
+        ctx.onDataUpdate?.("task", ctx.task.id, { status: "todo" });
+        ui.warn(`[reviewer] NEEDS_CHANGES (attempt ${retryCount}/3) — resetting to todo`);
+      }
     }
   } else if (verdict === "APPROVE") {
     // Check auto-transition: if all tasks done, move sprint to review phase

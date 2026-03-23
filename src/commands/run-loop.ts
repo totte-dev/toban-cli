@@ -7,7 +7,6 @@ import { createAuthHeaders, type Task, type WorkspaceRepository, type ApiClient 
 import { buildAgentPrompt } from "../prompt.js";
 import { getEngine, resolveModelForRole } from "../agent-engine.js";
 import { matchTemplate, executeActions, type ActionContext } from "../agent-templates.js";
-import { MessagePoller } from "../message-poller.js";
 import { WS_MSG } from "../ws-types.js";
 import { resolveTaskWorkingDir } from "../git-ops.js";
 import { createTaskLogger } from "../task-logger.js";
@@ -27,7 +26,6 @@ import { TIMEOUTS, INTERVALS } from "../constants.js";
 import { trackRetry } from "../utils/retry-tracker.js";
 import { OpsRunner } from "../ops-runner.js";
 import { extractJsonObject } from "../utils/extract-json.js";
-import { ChannelMonitor } from "../channel-monitor.js";
 import { syncRuleTelemetry } from "../utils/telemetry-sync.js";
 
 // ---------------------------------------------------------------------------
@@ -200,15 +198,12 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   };
   peerTracker.start();
 
-  // Channel monitor: watches for actionable messages (blockers, requests, reviews)
-  const channelMonitor = new ChannelMonitor();
 
   // Sprint controller — handles phase transitions, auto-mode, timebox, channel actions
   const sprintController = new SprintController({
     apiUrl: cliArgs.apiUrl,
     apiKey: cliArgs.apiKey,
     wsServer: wsServer,
-    channelMonitor,
     autoMode: {
       enabled: !!cliArgs.autoMode,
       maxSprints: cliArgs.maxSprints ?? 10,
@@ -458,9 +453,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
         ui.agentSpawned({ agentName: agentConfig.name, taskId: task.id, taskTitle: task.title, docker: !cliArgs.noDocker, model: agentModel });
 
-        const messagePoller = new MessagePoller({ api, channel: agentRole, workingDir: taskWorkingDir });
-        messagePoller.start();
-
         // Async dispatch: spawn agent and register completion handler.
         // The loop continues to the next task immediately instead of blocking.
         const capturedSlotName = slotName;
@@ -475,7 +467,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
         await runner.spawn(agentConfig, (runningAgent) => {
           // --- Completion handler: runs when agent process exits ---
-          try { messagePoller.stop(); } catch { /* non-fatal */ }
           peerTracker.unregister(agentName);
 
           const exitCode = runningAgent.exitCode;
@@ -483,12 +474,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           const wasStalled = runningAgent.status === "failed" && runningAgent.stderr.some((l) => l.includes("stall detected"));
           try { ui.taskResult(task.id, task.title, succeeded ? "completed" : "failed", succeeded ? undefined : `exit code: ${exitCode}`); } catch { /* non-fatal */ }
 
-          // Record agent completion/failure event with duration
+          // Record agent completion/failure event with duration and tool stats
           const durationSeconds = Math.round((Date.now() - agentStartTime) / 1000);
+          const toolStats = runner.consumeToolStats(agentName);
           if (succeeded) {
-            eventEmitter.agentCompleted(agentName, task.id, { role: agentRole, exit_code: exitCode, duration_seconds: durationSeconds });
+            eventEmitter.agentCompleted(agentName, task.id, { role: agentRole, exit_code: exitCode, duration_seconds: durationSeconds, tool_stats: toolStats });
           } else {
-            eventEmitter.agentFailed(agentName, task.id, { role: agentRole, exit_code: exitCode, stalled: wasStalled, duration_seconds: durationSeconds });
+            eventEmitter.agentFailed(agentName, task.id, { role: agentRole, exit_code: exitCode, stalled: wasStalled, duration_seconds: durationSeconds, tool_stats: toolStats });
           }
 
           // Record stall kills to Failure DB for visibility
@@ -505,6 +497,8 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           // All post-completion logic (merge, push, retro, notify, status) is in template
           actionCtx.exitCode = exitCode;
           actionCtx.agentBranch = runningAgent.branch;
+          actionCtx.eventEmitter = eventEmitter;
+          actionCtx.agentStderr = runningAgent.stderr;
           actionCtx.onDataUpdate = (entity, id, changes) => {
             ctx.wsServer?.broadcast({
               type: WS_MSG.DATA_UPDATE,

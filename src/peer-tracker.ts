@@ -1,10 +1,9 @@
 /**
  * PeerTracker — Tracks active agents' working files and distributes
- * peer info + channel messages to each agent's worktree.
+ * peer info to each agent's worktree for file-conflict awareness.
  *
- * Writes two files to each worktree:
- *   .toban-peers.md    — Active peers and their modified files
- *   .toban-channel.md  — Recent agent channel messages
+ * Writes one file to each worktree:
+ *   .toban-peers.md — Active peers and their modified files
  *
  * Runs in the CLI run-loop (not in agents). No API communication.
  */
@@ -12,11 +11,9 @@
 import { execSync } from "node:child_process";
 import { writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
-import { readRecentMessages, formatChannelMarkdown } from "./agent-channel.js";
 
 const PEERS_FILE = ".toban-peers.md";
-const CHANNEL_FILE = ".toban-channel.md";
-const TOBAN_FILES = [PEERS_FILE, CHANNEL_FILE, ".toban-messages.md"];
+const TOBAN_FILES = [PEERS_FILE, ".toban-messages.md"];
 
 export interface PeerInfo {
   /** Agent/slot name (e.g. "builder-1") */
@@ -35,9 +32,6 @@ export class PeerTracker {
   private peers: Map<string, PeerInfo> = new Map();
   private interval: ReturnType<typeof setInterval> | null = null;
   private lastPeerSnapshots: Map<string, string> = new Map();
-  private lastChannelSnapshot: string = "";
-  /** Callback for WS broadcast when channel has new messages */
-  onChannelMessage?: (messages: ReturnType<typeof readRecentMessages>) => void;
 
   /**
    * Register an active agent for tracking.
@@ -109,38 +103,20 @@ export class PeerTracker {
   }
 
   /**
-   * Write .toban-peers.md and .toban-channel.md to each worktree.
+   * Write .toban-peers.md to each worktree.
    */
   private publish(): void {
     const peers = this.getPeers();
     if (peers.length === 0) return;
 
-    // Read channel messages once
-    const channelMessages = readRecentMessages(30);
-    const channelContent = formatChannelMarkdown(channelMessages);
-    const channelChanged = channelContent !== this.lastChannelSnapshot;
-    if (channelChanged) {
-      this.lastChannelSnapshot = channelContent;
-      // Notify WS broadcast callback
-      if (this.onChannelMessage) {
-        this.onChannelMessage(channelMessages);
-      }
-    }
-
     for (const peer of peers) {
       try {
-        // Peers file: exclude self
         const otherPeers = peers.filter((p) => p.name !== peer.name);
         const peersContent = this.buildPeersContent(otherPeers);
 
         if (peersContent !== this.lastPeerSnapshots.get(peer.name)) {
           writeFileSync(join(peer.worktreePath, PEERS_FILE), peersContent, "utf-8");
           this.lastPeerSnapshots.set(peer.name, peersContent);
-        }
-
-        // Channel file: same for all agents
-        if (channelChanged) {
-          writeFileSync(join(peer.worktreePath, CHANNEL_FILE), channelContent, "utf-8");
         }
       } catch {
         // Non-fatal: worktree may have been removed

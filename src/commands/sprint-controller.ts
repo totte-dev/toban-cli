@@ -3,11 +3,9 @@
  * Extracted from run-loop.ts to reduce its responsibilities.
  */
 
-import { createAuthHeaders } from "../api-client.js";
 import { WS_MSG } from "../ws-types.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
-import type { ChannelMonitor } from "../channel-monitor.js";
 import type { WsChatServer } from "../ws-server.js";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +27,6 @@ export interface SprintControllerDeps {
   apiUrl: string;
   apiKey: string;
   wsServer?: WsChatServer | null;
-  channelMonitor: ChannelMonitor;
   autoMode: AutoModeConfig;
   autoTag?: boolean;
 }
@@ -132,9 +129,6 @@ export class SprintController {
       if (result) return result;
     }
 
-    // Process channel messages
-    this.processChannelMessages(sprint);
-
     // Only pick up tasks during active phase
     if (sprint.status !== "active") {
       return { action: "wait" };
@@ -197,41 +191,4 @@ export class SprintController {
     return null;
   }
 
-  private processChannelMessages(sprint: Record<string, unknown>): void {
-    const channelActions = this.deps.channelMonitor.processNewMessages();
-
-    for (const ca of channelActions) {
-      if (ca.action === "notify") {
-        this.deps.wsServer?.broadcast({
-          type: WS_MSG.CHANNEL_MESSAGE,
-          messages: [{ from: ca.message.from, type: ca.message.type, topic: ca.message.topic, text: ca.message.content, ts: ca.message.ts }],
-          timestamp: new Date().toISOString(),
-        });
-      }
-      if (ca.action === "create_task" && ca.data) {
-        const sprintNum = sprint.number as number | undefined;
-        if (sprintNum != null) {
-          const owner = ca.data.target as string | undefined;
-          const title = `[channel] ${ca.message.type}: ${ca.message.content.slice(0, 80)}`;
-          fetch(`${this.deps.apiUrl}/api/v1/tasks`, {
-            method: "POST",
-            headers: createAuthHeaders(this.deps.apiKey),
-            body: JSON.stringify({
-              title,
-              description: `Auto-created from channel message.\n\nFrom: ${ca.message.from}\nType: ${ca.message.type}\nTopic: ${ca.message.topic}\n\n${ca.message.content}`,
-              priority: ca.message.type === "review" ? "p1" : "p2",
-              owner: owner && owner !== "all" ? owner : "builder",
-              type: "chore",
-              sprint: sprintNum,
-            }),
-          }).then((res) => {
-            if (!res.ok) throw new Error(`API ${res.status}`);
-            ui.step(`[channel] Created task from ${ca.message.type}: "${title.slice(0, 60)}..."`);
-          }).catch((err) => {
-            ui.warn(`[channel] Failed to create task: ${err}`);
-          });
-        }
-      }
-    }
-  }
 }
