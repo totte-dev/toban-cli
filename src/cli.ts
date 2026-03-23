@@ -20,6 +20,7 @@ import { handleSprintPlan } from "./commands/plan.js";
 import { handleReview } from "./commands/review.js";
 import { handleSprintComplete } from "./commands/sprint-complete.js";
 import { handleInit, loadConfig } from "./commands/init.js";
+import { handleLogin, handleProfile, loadActiveProfile, setActiveProfile } from "./commands/profile.js";
 import { runLoop } from "./commands/run-loop.js";
 import { createShutdownState, setupShutdownHandlers } from "./commands/shutdown.js";
 
@@ -37,6 +38,10 @@ Usage:
   toban sprint complete [--push]
 
 Commands:
+  login                 Save API credentials to profile (~/.toban/profiles/)
+  profile               Show current profile
+  profile list          List all saved profiles
+  profile use <name>    Switch active profile
   init                  Initialize a new project (interactive setup)
   start                 Start the agent runner (background daemon)
   start --foreground    Start in foreground (blocks terminal)
@@ -103,14 +108,15 @@ function parseArgs(argv: string[]): CliArgs {
     return args[idx + 1];
   }
 
-  // Load .toban/config.json as fallback for api-url/api-key
+  // Load credentials: CLI flag > env > project config > global profile
   const config = loadConfig(process.cwd());
+  const profile = loadActiveProfile();
 
-  const apiUrl = getFlag("--api-url") ?? process.env.TOBAN_API_URL ?? config?.api_url;
-  const apiKey = getFlag("--api-key") ?? process.env.TOBAN_API_KEY ?? config?.api_key;
+  const apiUrl = getFlag("--api-url") ?? process.env.TOBAN_API_URL ?? config?.api_url ?? profile?.api_url;
+  const apiKey = getFlag("--api-key") ?? process.env.TOBAN_API_KEY ?? config?.api_key ?? profile?.api_key;
 
-  if (!apiUrl) { ui.error("--api-url or TOBAN_API_URL is required (or run `toban init`)"); process.exit(1); }
-  if (!apiKey) { ui.error("--api-key or TOBAN_API_KEY is required (or run `toban init`)"); process.exit(1); }
+  if (!apiUrl) { ui.error("--api-url or TOBAN_API_URL is required (or run `toban login`)"); process.exit(1); }
+  if (!apiKey) { ui.error("--api-key or TOBAN_API_KEY is required (or run `toban login`)"); process.exit(1); }
 
   const hostname = (() => { try { return execSync("hostname", { encoding: "utf-8" }).trim(); } catch { return "agent"; } })();
   const explicitWorkingDir = getFlag("--working-dir");
@@ -139,11 +145,25 @@ function parseArgs(argv: string[]): CliArgs {
 // Main
 // ---------------------------------------------------------------------------
 
-// Handle `init` early — it does not require --api-url/--api-key
+// Handle commands that don't require --api-url/--api-key
 {
   const firstArg = process.argv[2];
   if (firstArg === "init") {
     handleInit().catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  } else if (firstArg === "login") {
+    const args = process.argv.slice(3);
+    const apiUrl = args.includes("--api-url") ? args[args.indexOf("--api-url") + 1] : undefined;
+    const apiKey = args.includes("--api-key") ? args[args.indexOf("--api-key") + 1] : undefined;
+    handleLogin(apiUrl, apiKey).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
+  } else if (firstArg === "profile") {
+    const sub = process.argv[3];
+    if (sub === "use" && process.argv[4]) {
+      setActiveProfile(process.argv[4]);
+      console.log(`Switched to profile: ${process.argv[4]}`);
+    } else {
+      handleProfile(sub);
+    }
+    if (firstArg === "profile") process.exit(0);
   }
 }
 
