@@ -130,7 +130,12 @@ async function handleGoalDecompose(apiUrl: string, apiKey: string, goal: string)
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({
           title: t.title,
-          description: JSON.stringify(t.desc),
+          description: t.desc.context || "",
+          category: t.desc.category || "mutating",
+          steps: t.desc.steps || null,
+          acceptance_criteria: t.desc.acceptance_criteria || null,
+          files_hint: t.desc.files_hint || null,
+          constraints_list: t.desc.constraints || null,
           priority: t.priority,
           story_points: t.story_points,
           type: t.type,

@@ -23,8 +23,13 @@ export interface PromptContext {
   taskId: string;
   /** Task title */
   taskTitle: string;
-  /** Task description / instructions */
+  /** Task description / context (free text) */
   taskDescription?: string;
+  /** Structured task fields (from DB columns, not description JSON) */
+  taskSteps?: string[];
+  taskAcceptanceCriteria?: string[];
+  taskFilesHint?: string[];
+  taskConstraints?: string[];
   /** Task priority (p0, p1, p2) */
   taskPriority?: string;
   /** Task type (e.g. "feature", "bug", "research", "chore") */
@@ -151,9 +156,14 @@ export function buildAgentPrompt(ctx: PromptContext): string {
 
   const specBlock = buildSpecBlock(ctx.projectSpec);
 
-  const descriptionBlock = ctx.taskDescription
-    ? `\n\nDescription:\n${ctx.taskDescription}`
-    : "";
+  // Build structured description block from dedicated fields
+  const descParts: string[] = [];
+  if (ctx.taskDescription) descParts.push(`Context:\n${ctx.taskDescription}`);
+  if (ctx.taskSteps?.length) descParts.push(`Steps:\n${ctx.taskSteps.map((s, i) => `${i + 1}. ${s}`).join("\n")}`);
+  if (ctx.taskAcceptanceCriteria?.length) descParts.push(`Acceptance Criteria:\n${ctx.taskAcceptanceCriteria.map((c) => `- ${c}`).join("\n")}`);
+  if (ctx.taskFilesHint?.length) descParts.push(`Files to focus on:\n${ctx.taskFilesHint.map((f) => `- ${f}`).join("\n")}`);
+  if (ctx.taskConstraints?.length) descParts.push(`Constraints:\n${ctx.taskConstraints.map((c) => `- ${c}`).join("\n")}`);
+  const descriptionBlock = descParts.length > 0 ? `\n\nDescription:\n${descParts.join("\n\n")}` : "";
 
   const securityRules = buildSecurityRules(ctx.role);
   const playbookBlock = ctx.playbookRules ?? "";

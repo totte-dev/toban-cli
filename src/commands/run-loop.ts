@@ -295,10 +295,15 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         continue;
       }
 
-      // Warn if description lacks acceptance criteria (check both free text and structured JSON)
-      const { parseStructuredDescription } = await import("../utils/task-description.js");
-      const structured = parseStructuredDescription(desc);
-      const hasAC = structured?.acceptance_criteria?.length
+      // Warn if task lacks acceptance criteria (check DB column first, then description text)
+      const parseJsonArray = (v: unknown): string[] | undefined => {
+        if (!v) return undefined;
+        if (Array.isArray(v)) return v;
+        if (typeof v === "string") { try { const arr = JSON.parse(v); return Array.isArray(arr) ? arr : undefined; } catch { return undefined; } }
+        return undefined;
+      };
+      const acFromDb = parseJsonArray((task as Record<string, unknown>).acceptance_criteria);
+      const hasAC = acFromDb?.length
         || desc.includes("Acceptance Criteria") || desc.includes("acceptance criteria") || desc.includes("- [ ]");
       if (desc.length >= 20 && !hasAC) {
         ui.warn(`[task] "${task.title}" has no acceptance criteria — agent may produce unclear results`);
@@ -404,6 +409,10 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         role: agentRole, projectName: ctx.workspaceName, projectSpec: ctx.workspaceSpec,
         taskId: task.id, taskTitle: task.title,
         taskDescription: fullDescription,
+        taskSteps: parseJsonArray((task as Record<string, unknown>).steps),
+        taskAcceptanceCriteria: parseJsonArray((task as Record<string, unknown>).acceptance_criteria),
+        taskFilesHint: parseJsonArray((task as Record<string, unknown>).files_hint),
+        taskConstraints: parseJsonArray((task as Record<string, unknown>).constraints_list),
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
         taskType, apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey,
         language: ctx.language,
