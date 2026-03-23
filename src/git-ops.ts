@@ -31,9 +31,22 @@ export function setupGitCredentialHelper(tobanHome: string, apiUrl: string, apiK
   const cachePath = join(tobanHome, ".git-token-cache");
   const script = `#!/bin/sh
 # Toban git credential helper — fetches fresh GitHub App token on demand
-# Caches token for 50 minutes (GitHub App tokens expire in 1 hour)
+# Supports multi-org: extracts repo path from git input, requests per-repo token
 if [ "$1" = "get" ]; then
-  CACHE_FILE="${cachePath}"
+  # Read git credential input to extract host and path
+  REPO_PATH=""
+  while IFS= read -r line; do
+    case "$line" in
+      path=*) REPO_PATH="\${line#path=}" ;;
+      "") break ;;
+    esac
+  done
+  # Strip .git suffix if present
+  REPO_PATH="\${REPO_PATH%.git}"
+
+  # Use repo-specific cache file
+  CACHE_KEY=$(echo "$REPO_PATH" | tr '/' '_')
+  CACHE_FILE="${cachePath}-\${CACHE_KEY:-default}"
   CACHE_MAX_AGE=3000
   if [ -f "$CACHE_FILE" ]; then
     CACHE_AGE=$(( $(date +%s) - $(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0) ))
@@ -42,7 +55,12 @@ if [ "$1" = "get" ]; then
       exit 0
     fi
   fi
-  TOKEN=$(curl -sf -H "Authorization: Bearer ${apiKey}" "${apiUrl}/api/v1/workspace/git-token" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
+  # Fetch token, optionally scoped to repo
+  TOKEN_URL="${apiUrl}/api/v1/workspace/git-token"
+  if [ -n "$REPO_PATH" ]; then
+    TOKEN_URL="\${TOKEN_URL}?repo=\${REPO_PATH}"
+  fi
+  TOKEN=$(curl -sf -H "Authorization: Bearer ${apiKey}" "$TOKEN_URL" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
   if [ -n "$TOKEN" ]; then
     OUTPUT="protocol=https
 host=github.com
