@@ -154,13 +154,16 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
       console.log(`Description: ${desc.slice(0, 200)}${desc.length > 200 ? "..." : ""}`);
 
       // Fetch workspace repositories for target_repo inference
-      let repoList = "";
+      let repoNames: string[] = [];
       try {
         const repos = (await apiFetch(`${apiUrl}/api/v1/repos`, apiKey)) as Array<{ repo_name?: string }>;
-        if (repos.length > 0) {
-          repoList = `\nAvailable repositories: ${repos.map((r) => r.repo_name).join(", ")}`;
-        }
-      } catch { /* ignore — repos endpoint may not exist */ }
+        repoNames = repos.map((r) => r.repo_name).filter((n): n is string => Boolean(n));
+      } catch (e) {
+        console.warn(`  Warning: could not fetch repos: ${e instanceof Error ? e.message : e}`);
+      }
+      const repoSection = repoNames.length > 0
+        ? `\n\nAvailable repositories:\n${repoNames.join("\n")}`
+        : "";
 
       const { spawnClaudeOnce } = await import("../utils/spawn-claude.js");
       const prompt = `You are a task decomposition agent. Given a task title and description memo, generate structured fields.
@@ -168,7 +171,7 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
 Task: ${title}
 Type: ${taskType}
 Description memo:
-${desc}${repoList}
+${desc}${repoSection}
 
 Output ONLY a JSON object with these fields (no markdown, no explanation):
 {
@@ -205,7 +208,13 @@ Rules:
         };
 
         const update: Record<string, unknown> = {};
-        if (parsed.target_repo) update.target_repo = parsed.target_repo;
+        if (parsed.target_repo) {
+          if (repoNames.length === 0 || repoNames.includes(parsed.target_repo)) {
+            update.target_repo = parsed.target_repo;
+          } else {
+            console.warn(`  Warning: LLM suggested repo "${parsed.target_repo}" not in workspace repos, skipping`);
+          }
+        }
         if (parsed.steps?.length) update.steps = parsed.steps;
         if (parsed.acceptance_criteria?.length) update.acceptance_criteria = parsed.acceptance_criteria;
         if (parsed.files_hint?.length) update.files_hint = parsed.files_hint;
