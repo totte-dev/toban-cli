@@ -17,6 +17,8 @@ import { normalizeCompletion, toLegacyFormat, type AgentCompletion, type Builder
 export interface CompletionResult {
   review_comment: string;
   commits: string;
+  build_command?: string;
+  test_command?: string;
 }
 
 /**
@@ -51,6 +53,8 @@ function extractBuilderRecord(json: Record<string, unknown>): BuilderRecord | un
 function parseCompletionJson(json: Record<string, unknown>): { completion: AgentCompletion; legacy: CompletionResult; builderRecord?: BuilderRecord } {
   const completion = normalizeCompletion(json);
   const legacy = toLegacyFormat(completion);
+  if (typeof json.build_command === "string" && json.build_command) legacy.build_command = json.build_command;
+  if (typeof json.test_command === "string" && json.test_command) legacy.test_command = json.test_command;
   const builderRecord = extractBuilderRecord(json);
   return { completion, legacy, builderRecord };
 }

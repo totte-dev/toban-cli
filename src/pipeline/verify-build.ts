@@ -111,8 +111,9 @@ export async function handleVerifyBuild(
 ): Promise<void> {
   const label = _action.label ?? "verify_build";
   const repoDir = resolveRepoRoot(ctx.config.workingDir);
-  const buildCmd = ctx.config.buildCommand || "npm run build";
-  const testCmd = ctx.config.testCommand || "npm test";
+  // Builder-specified commands take priority over workspace defaults
+  const buildCmd = ctx.completionJson?.build_command || ctx.config.buildCommand || "npm run build";
+  const testCmd = ctx.completionJson?.test_command || ctx.config.testCommand || "npm test";
   const timeout = 180_000; // 3 minutes per command
 
   const revertMerge = () => {
