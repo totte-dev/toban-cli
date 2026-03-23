@@ -164,19 +164,26 @@ export function createAuthHeaders(apiKey: string): Record<string, string> {
 /** Retry a fetch call on 5xx or 429 errors with exponential backoff + jitter */
 export async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 3): Promise<Response> {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const res = await fetch(url, options);
-    if (res.ok || attempt === maxRetries) return res;
-    if (res.status === 429) {
-      // Respect Retry-After header, fallback to exponential backoff
-      const retryAfter = res.headers.get("Retry-After");
-      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 1000 * 2 ** attempt;
-      await new Promise((r) => setTimeout(r, delayMs + Math.random() * 500));
-    } else if (res.status >= 500) {
-      // Exponential backoff: 1s, 2s, 4s + jitter
-      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt + Math.random() * 500));
-    } else {
-      // 4xx (not 429) — don't retry
-      return res;
+    try {
+      const res = await fetch(url, options);
+      if (res.ok || attempt === maxRetries) return res;
+      if (res.status === 429) {
+        // Respect Retry-After header, fallback to exponential backoff
+        const retryAfter = res.headers.get("Retry-After");
+        const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 2000 * 2 ** attempt;
+        await new Promise((r) => setTimeout(r, delayMs + Math.random() * 500));
+      } else if (res.status >= 500) {
+        // Exponential backoff: 2s, 4s, 8s + jitter
+        await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt + Math.random() * 500));
+      } else {
+        // 4xx (not 429) — don't retry
+        return res;
+      }
+    } catch (err) {
+      // Network error (fetch failed, connection refused, etc.)
+      if (attempt === maxRetries) throw err;
+      // Exponential backoff: 2s, 4s, 8s + jitter
+      await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt + Math.random() * 500));
     }
   }
   return fetch(url, options); // unreachable, but type-safe
