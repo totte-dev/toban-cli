@@ -387,6 +387,32 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         },
       };
 
+      // Check if pipeline state exists — if so, skip builder and run pipeline only
+      const { loadPipelineState, clearPipelineState } = await import("../utils/pipeline-state.js");
+      const existingPipelineState = loadPipelineState(task.id);
+      if (existingPipelineState?.agent_branch) {
+        ui.info(`[task] Pipeline retry: skipping builder, using existing branch ${existingPipelineState.agent_branch}`);
+        taskLog.event("pipeline_retry", { agent_branch: existingPipelineState.agent_branch });
+
+        // Restore completion JSON
+        if (existingPipelineState.completion_json) {
+          try { actionCtx.completionJson = JSON.parse(existingPipelineState.completion_json); } catch { /* ignore */ }
+        }
+        actionCtx.agentBranch = existingPipelineState.agent_branch;
+
+        // Run post_actions (merge pipeline + reviewer) directly
+        try {
+          await executeActions(agentTemplate.pre_actions, actionCtx, "pre");
+          await executeActions(agentTemplate.post_actions, actionCtx, "post");
+          taskLog.event("pipeline_retry_done");
+        } catch (err) {
+          logError(CLI_ERR.ACTION_FAILED, `Pipeline retry failed: ${err}`, { taskId: task.id }, err);
+          ui.error(`[task] Pipeline retry failed: ${err}`);
+        }
+        scheduler.releaseSlot(slotName);
+        continue;
+      }
+
       try { await executeActions(agentTemplate.pre_actions, actionCtx, "pre"); }
       catch (err) {
         logError(CLI_ERR.ACTION_FAILED, `Pre-actions failed: ${err}`, { taskId: task.id, phase: "pre" }, err);
@@ -667,6 +693,20 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
             }
           };
           taskLog.stdout(runningAgent.stdout);
+
+          // Save pipeline state with agent branch — enables pipeline-only retry without re-running builder
+          if (actionCtx.completionJson && actionCtx.agentBranch) {
+            const { savePipelineState } = await import("../utils/pipeline-state.js");
+            savePipelineState(task.id, {
+              merge_done: false,
+              verify_done: false,
+              push_done: false,
+              updated_at: "",
+              agent_branch: actionCtx.agentBranch,
+              completion_json: JSON.stringify(actionCtx.completionJson),
+            });
+          }
+
           taskLog.event("post_actions_start", { exitCode, mergeSkipped: actionCtx.mergeSkipped, hasCompletion: !!actionCtx.completionJson, reviewVerdict: actionCtx.reviewVerdict });
 
           // Run post_actions asynchronously, then release the slot

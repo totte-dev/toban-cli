@@ -18,6 +18,10 @@ export interface PipelineStepState {
   verify_done: boolean;
   push_done: boolean;
   updated_at: string;
+  /** Agent branch name — used to skip builder on pipeline retry */
+  agent_branch?: string;
+  /** Completion JSON from builder — preserved for reviewer */
+  completion_json?: string;
 }
 
 const STATE_DIR = join(homedir(), ".toban", "pipeline");
