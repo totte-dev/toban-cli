@@ -242,6 +242,18 @@ if (cliArgs.command === "plan") {
 } else if (cliArgs.command === "stop") {
   const { stopRunner } = await import("./commands/daemon.js");
   stopRunner();
+} else if (cliArgs.command === "report") {
+  const rawArgs = process.argv.slice(2);
+  // Everything after "report" that isn't a flag is the issue description
+  const parts: string[] = [];
+  for (let i = 1; i < rawArgs.length; i++) {
+    if (rawArgs[i].startsWith("--")) { i++; continue; }
+    parts.push(rawArgs[i]);
+  }
+  const issue = parts.join(" ").trim();
+  if (!issue) { ui.error("Usage: toban report \"description of the issue\""); process.exit(1); }
+  const { handleReport } = await import("./commands/report.js");
+  handleReport(cliArgs.apiUrl, cliArgs.apiKey, issue).catch((err) => { ui.error(`Fatal: ${err}`); process.exit(1); });
 } else if (cliArgs.command === "start") {
   const foreground = process.argv.includes("--foreground") || process.env.TOBAN_FOREGROUND === "1";
 
