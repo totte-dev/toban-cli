@@ -263,7 +263,13 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
         original_verdict: "NEEDS_CHANGES",
         reasoning: managerReasoning,
       };
-      ctx.reviewRecord = { ...ctx.reviewRecord, reviewer: reviewerRecord, manager: managerRecord };
+      // Build fallback reviewerRecord from raw reviewComment if structured parse failed
+      const finalReviewerRecord = reviewerRecord ?? {
+        verdict: "NEEDS_CHANGES" as const,
+        findings: [{ severity: "info" as const, message: reviewComment.slice(0, 500) }],
+        reasoning: reviewComment.slice(0, 300),
+      };
+      ctx.reviewRecord = { ...ctx.reviewRecord, reviewer: finalReviewerRecord, manager: managerRecord };
 
       if (isOverride) {
         ui.info(`[${phase}] ${label}: Manager overrides → APPROVE (Reviewer was too strict)`);
@@ -276,12 +282,14 @@ Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
           original_verdict: "NEEDS_CHANGES",
         });
         verdict = "APPROVE";
+        // Preserve original reviewer report, add override metadata
         const overrideComment = JSON.stringify({
           ...(completionMatch ? JSON.parse(completionMatch[1]) : {}),
           verdict: "APPROVE",
-          manager_override: "Reviewer rejection overridden — deemed overly strict",
+          manager_override: managerReasoning,
+          original_reviewer_verdict: "NEEDS_CHANGES",
         });
-        reviewComment = overrideComment;
+        // Don't overwrite reviewComment — keep original for reference in review_record
         await ctx.api.updateTask(ctx.task.id, { review_comment: overrideComment } as Partial<Task>);
       } else {
         ui.info(`[${phase}] ${label}: Manager confirms NEEDS_CHANGES`);
