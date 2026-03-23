@@ -44,6 +44,7 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
   toban task list              List all sprint tasks
   toban task create "title"    Create a new task (--desc, --priority, --type, --sprint)
   toban task done <id>         Mark a task as done
+  toban task enrich <id>       Auto-decompose description into structured fields via LLM
   toban task complete "msg"    Report task completion (agent use)
   toban task blocker "reason"  Report blocker (agent use)`);
     return;
@@ -135,6 +136,83 @@ export async function handleTaskCmd(args: string[]): Promise<void> {
         body: JSON.stringify({ status: "done" }),
       });
       console.log(`Task ${id.slice(0, 8)} marked as done.`);
+      break;
+    }
+
+    case "enrich": {
+      const id = args[1];
+      if (!id) { console.error("Usage: toban task enrich <task-id>"); return; }
+      const task = (await apiFetch(`${apiUrl}/api/v1/tasks`, apiKey)) as Array<Record<string, unknown>>;
+      const target = task.find((t) => (t.id as string).startsWith(id));
+      if (!target) { console.error(`Task not found: ${id}`); return; }
+
+      const title = target.title as string;
+      const desc = target.description as string || "";
+      const taskType = target.type as string || "feature";
+
+      console.log(`Enriching task: ${title}`);
+      console.log(`Description: ${desc.slice(0, 200)}${desc.length > 200 ? "..." : ""}`);
+
+      const { spawnClaudeOnce } = await import("../utils/spawn-claude.js");
+      const prompt = `You are a task decomposition agent. Given a task title and description memo, generate structured fields.
+
+Task: ${title}
+Type: ${taskType}
+Description memo:
+${desc}
+
+Output ONLY a JSON object with these fields (no markdown, no explanation):
+{
+  "steps": ["step 1", "step 2", ...],
+  "acceptance_criteria": ["criterion 1", "criterion 2", ...],
+  "files_hint": ["path/to/likely/file.ts", ...],
+  "constraints_list": ["constraint 1", ...],
+  "category": "read_only" | "mutating" | "destructive"
+}
+
+Rules:
+- steps: 3-8 concrete implementation steps
+- acceptance_criteria: 2-5 testable conditions for "done"
+- files_hint: likely files to modify (best guess from description)
+- constraints_list: things to avoid or be careful about
+- category: read_only (no code changes), mutating (code changes), destructive (deploy/revert/delete)`;
+
+      const result = await spawnClaudeOnce(prompt, { role: "strategist", maxTurns: 1, timeout: 60_000 });
+
+      // Extract JSON from response
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) { console.error("Failed to parse LLM response"); return; }
+
+      try {
+        const parsed = JSON.parse(jsonMatch[0]) as {
+          steps?: string[];
+          acceptance_criteria?: string[];
+          files_hint?: string[];
+          constraints_list?: string[];
+          category?: string;
+        };
+
+        const update: Record<string, unknown> = {};
+        if (parsed.steps?.length) update.steps = parsed.steps;
+        if (parsed.acceptance_criteria?.length) update.acceptance_criteria = parsed.acceptance_criteria;
+        if (parsed.files_hint?.length) update.files_hint = parsed.files_hint;
+        if (parsed.constraints_list?.length) update.constraints_list = parsed.constraints_list;
+        if (parsed.category) update.category = parsed.category;
+
+        await apiFetch(`${apiUrl}/api/v1/tasks/${target.id}`, apiKey, {
+          method: "PATCH",
+          body: JSON.stringify(update),
+        });
+
+        console.log(`\nEnriched ${(target.id as string).slice(0, 8)}:`);
+        if (parsed.steps) console.log(`  Steps: ${parsed.steps.length}`);
+        if (parsed.acceptance_criteria) console.log(`  Acceptance criteria: ${parsed.acceptance_criteria.length}`);
+        if (parsed.files_hint) console.log(`  Files hint: ${parsed.files_hint.join(", ")}`);
+        if (parsed.category) console.log(`  Category: ${parsed.category}`);
+      } catch (e) {
+        console.error(`Failed to parse: ${e}`);
+        console.error(`Raw: ${result.slice(0, 500)}`);
+      }
       break;
     }
 

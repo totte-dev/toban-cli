@@ -15,6 +15,19 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import type { WsChatServer } from "../ws-server.js";
 
+/** Check if a task has structured details (steps or acceptance_criteria). */
+function hasStructuredDetails(t: Task): boolean {
+  const steps = t.steps as string | string[] | null | undefined;
+  const ac = t.acceptance_criteria as string | string[] | null | undefined;
+  // Parse JSON string if needed
+  const parseArr = (v: string | string[] | null | undefined): string[] => {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    try { const parsed = JSON.parse(v); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+  };
+  return parseArr(steps).length > 0 || parseArr(ac).length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -71,7 +84,7 @@ export class TaskScheduler {
 
     // --- Auto-split large tasks ---
     const todoForAgents = allTasks.filter(
-      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && t.review_verdict !== "ERROR" && t.category !== "destructive",
+      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && t.review_verdict !== "ERROR" && t.category !== "destructive" && hasStructuredDetails(t),
     );
 
     const tasksToSplit = todoForAgents.filter((t) => shouldSplit(t, 8));

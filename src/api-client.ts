@@ -18,6 +18,10 @@ export interface Task {
   review_comment?: string | null;
   review_verdict?: string | null;
   category?: "read_only" | "mutating" | "destructive" | null;
+  steps?: string | string[] | null;
+  acceptance_criteria?: string | string[] | null;
+  files_hint?: string | string[] | null;
+  constraints_list?: string | string[] | null;
   context_notes?: string | null;
   sprint?: number | null;
   parent_task?: string | null;
