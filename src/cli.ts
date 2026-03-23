@@ -245,9 +245,11 @@ if (cliArgs.command === "plan") {
 } else if (cliArgs.command === "report") {
   const rawArgs = process.argv.slice(2);
   // Everything after "report" that isn't a flag is the issue description
+  // Known flags with values: --api-url, --api-key, --engine (skip next arg)
+  const flagsWithValues = new Set(["--api-url", "--api-key", "--engine"]);
   const parts: string[] = [];
   for (let i = 1; i < rawArgs.length; i++) {
-    if (rawArgs[i].startsWith("--")) { i++; continue; }
+    if (rawArgs[i].startsWith("--")) { if (flagsWithValues.has(rawArgs[i])) i++; continue; }
     parts.push(rawArgs[i]);
   }
   const issue = parts.join(" ").trim();
