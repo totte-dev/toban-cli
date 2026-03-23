@@ -47,6 +47,9 @@ interface WsMessage {
   review_comment?: string;
   /** Channel message fields */
   messages?: Array<Record<string, unknown>>;
+  /** Enrich result fields */
+  ok?: boolean;
+  status?: string;
 }
 
 export interface WsChatServerOptions {
@@ -520,9 +523,105 @@ export class WsChatServer {
         break;
       }
 
+      case WS_MSG.ENRICH_TASK: {
+        if (!msg.task_id) {
+          ws.send(JSON.stringify({ type: WS_MSG.ENRICH_RESULT, task_id: null, content: "Missing task_id", ok: false, timestamp: new Date().toISOString() }));
+          return;
+        }
+        ui.info(`[ws] Enrich requested for task ${msg.task_id}`);
+        // Fire async — don't block WS handler
+        this.handleEnrichTask(msg.task_id).catch((err) => {
+          ui.warn(`[ws] Enrich failed: ${err}`);
+        });
+        break;
+      }
+
       default:
         // Ignore unknown message types
         break;
+    }
+  }
+
+  private async handleEnrichTask(taskId: string): Promise<void> {
+    // Broadcast enriching status
+    this.broadcast({
+      type: WS_MSG.ENRICH_RESULT,
+      task_id: taskId,
+      content: "Enriching...",
+      ok: true,
+      status: "started",
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      // Fetch task details
+      const res = await fetch(`${this.apiUrl}/api/v1/tasks?sprint=-1`, {
+        headers: createAuthHeaders(this.apiKey),
+      });
+      // Also check active sprints
+      const allTasksRes = await fetch(`${this.apiUrl}/api/v1/tasks`, {
+        headers: createAuthHeaders(this.apiKey),
+      });
+      const allTasks = (await allTasksRes.json()) as Array<{ id: string; title: string; description: string; type?: string }>;
+      const task = allTasks.find((t) => t.id === taskId || t.id.startsWith(taskId));
+
+      if (!task) {
+        this.broadcast({ type: WS_MSG.ENRICH_RESULT, task_id: taskId, content: "Task not found", ok: false, timestamp: new Date().toISOString() });
+        return;
+      }
+
+      const { spawnClaudeOnce } = await import("./utils/spawn-claude.js");
+      const prompt = `You are a task decomposition agent. Given a task title and description memo, generate structured fields.
+
+Task: ${task.title}
+Type: ${task.type || "feature"}
+Description memo:
+${task.description || "(empty)"}
+
+Output ONLY a JSON object with these fields (no markdown, no explanation):
+{
+  "steps": ["step 1", "step 2", ...],
+  "acceptance_criteria": ["criterion 1", "criterion 2", ...],
+  "files_hint": ["path/to/likely/file.ts", ...],
+  "constraints_list": ["constraint 1", ...],
+  "category": "read_only" | "mutating" | "destructive"
+}
+
+Rules:
+- steps: 3-8 concrete implementation steps
+- acceptance_criteria: 2-5 testable conditions for "done"
+- files_hint: likely files to modify (best guess from description)
+- constraints_list: things to avoid or be careful about
+- category: read_only (no code changes), mutating (code changes), destructive (deploy/revert/delete)`;
+
+      const result = await spawnClaudeOnce(prompt, { role: "strategist", maxTurns: 1, timeout: 60_000 });
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        this.broadcast({ type: WS_MSG.ENRICH_RESULT, task_id: taskId, content: "Failed to parse LLM response", ok: false, timestamp: new Date().toISOString() });
+        return;
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+      const update: Record<string, unknown> = {};
+      if (Array.isArray(parsed.steps) && parsed.steps.length) update.steps = parsed.steps;
+      if (Array.isArray(parsed.acceptance_criteria) && parsed.acceptance_criteria.length) update.acceptance_criteria = parsed.acceptance_criteria;
+      if (Array.isArray(parsed.files_hint) && parsed.files_hint.length) update.files_hint = parsed.files_hint;
+      if (Array.isArray(parsed.constraints_list) && parsed.constraints_list.length) update.constraints_list = parsed.constraints_list;
+      if (parsed.category) update.category = parsed.category;
+
+      // Save to API
+      await fetch(`${this.apiUrl}/api/v1/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: createAuthHeaders(this.apiKey),
+        body: JSON.stringify(update),
+      });
+
+      // Broadcast completion + data update
+      this.broadcast({ type: WS_MSG.ENRICH_RESULT, task_id: taskId, content: "Enriched", ok: true, status: "completed", timestamp: new Date().toISOString() });
+      this.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: task.id, changes: update, timestamp: new Date().toISOString() });
+      ui.info(`[ws] Enriched task ${task.id.slice(0, 8)}: ${Object.keys(update).join(", ")}`);
+    } catch (err) {
+      this.broadcast({ type: WS_MSG.ENRICH_RESULT, task_id: taskId, content: `Error: ${err instanceof Error ? err.message : err}`, ok: false, timestamp: new Date().toISOString() });
     }
   }
 
