@@ -309,10 +309,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       ui.step(`Starting task: ${task.title} [slot: ${slotName}]`);
 
-      // Pre-check: reject tasks with no meaningful description
+      // Pre-check: reject tasks with no meaningful details (description, steps, or acceptance_criteria)
       const desc = task.description || "";
-      if (desc.length < 20 && !task.type?.toString().match(/^(chore)$/)) {
-        ui.warn(`[task] Skipping "${task.title}" — description too short (${desc.length} chars). Add details to the task.`);
+      const hasSteps = task.steps && (Array.isArray(task.steps) ? task.steps.length > 0 : task.steps.length > 2);
+      const hasCriteria = task.acceptance_criteria && (Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length > 0 : task.acceptance_criteria.length > 2);
+      const hasDetails = desc.length >= 20 || hasSteps || hasCriteria;
+      if (!hasDetails && !task.type?.toString().match(/^(chore)$/)) {
+        ui.warn(`[task] Skipping "${task.title}" — no meaningful details (description, steps, or acceptance_criteria). Add details to the task.`);
         try { await api.updateTask(task.id, { status: "blocked" } as unknown as Partial<Task>); } catch { /* non-fatal */ }
         scheduler.releaseSlot(slotName);
         continue;
