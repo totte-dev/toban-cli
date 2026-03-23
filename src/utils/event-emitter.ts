@@ -2,20 +2,25 @@
  * Event emitter for recording TobanEvents.
  *
  * Events are buffered in memory and persisted to a local JSONL file.
- * No API calls are made until flush() is explicitly called.
+ * No API calls are made until flush() is explicitly called (or autoFlush fires).
  *
- * Flush strategy (caller's responsibility):
- * - Sprint start: flush startup events (sprint.started)
- * - CLI shutdown: flush remaining events
- * - Sprint snapshot (API-side Pull): API reads events table directly
- *
- * This keeps API calls to ~2 per Sprint (start + shutdown).
+ * Flush strategy:
+ * - autoFlush.interval (default 30s): periodic timer
+ * - autoFlush.threshold (default 10): immediate flush when buffer reaches this size
+ * - CLI shutdown: explicit flush() + destroy() clears the timer
  */
 
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ApiClient, EventInput } from "../services/api-client.js";
+
+export interface AutoFlushOptions {
+  /** Milliseconds between periodic flushes. Default: 30000 */
+  interval?: number;
+  /** Flush immediately when buffer reaches this many events. Default: 10 */
+  threshold?: number;
+}
 
 export interface EventEmitter {
   agentSpawned(agentName: string, taskId: string, data?: Record<string, unknown>): void;
@@ -30,8 +35,10 @@ export interface EventEmitter {
   testResult(agentName: string, taskId: string, data: { passed: boolean; command: string; output?: string }): void;
   infraError(agentName: string, taskId: string, data: { category: string; summary: string }): void;
   emit(event: EventInput): void;
-  /** Send all buffered events to API. Call on sprint start and CLI shutdown. */
+  /** Send all buffered events to API. */
   flush(): Promise<void>;
+  /** Stop auto-flush timers. Call before process exit to prevent leaks. */
+  destroy(): void;
   /** Number of events currently buffered */
   readonly pending: number;
 }
@@ -50,10 +57,60 @@ export function createEventEmitter(
   api: ApiClient,
   sprint?: number,
   traceId?: string,
+  autoFlush?: AutoFlushOptions,
 ): EventEmitter {
   const resolvedTraceId = traceId ?? (sprint != null ? `sprint-${sprint}` : undefined);
   const bufferPath = getBufferPath();
   let memoryBuffer: EventInput[] = [];
+  let flushInProgress = false;
+  let intervalHandle: ReturnType<typeof setInterval> | null = null;
+
+  async function doFlush(): Promise<void> {
+    if (flushInProgress) return;
+    flushInProgress = true;
+    try {
+      await flushImpl();
+    } finally {
+      flushInProgress = false;
+    }
+  }
+
+  async function flushImpl(): Promise<void> {
+    // Merge memory buffer with any crash-recovered events from disk
+    let diskEvents: EventInput[] = [];
+    if (existsSync(bufferPath)) {
+      try {
+        const content = readFileSync(bufferPath, "utf-8").trim();
+        if (content) {
+          diskEvents = content.split("\n").filter(Boolean).map((line) => {
+            try { return JSON.parse(line); } catch { return null; }
+          }).filter(Boolean);
+        }
+      } catch { /* best-effort */ }
+    }
+
+    // Disk file is the source of truth (memory buffer is a subset)
+    const events = diskEvents.length > 0 ? diskEvents : memoryBuffer;
+    if (events.length === 0) return;
+
+    // Send in batches of 50
+    for (let i = 0; i < events.length; i += 50) {
+      const batch = events.slice(i, i + 50);
+      try {
+        await api.recordEvents(batch);
+      } catch {
+        // Keep unsent events for next flush
+        const remaining = events.slice(i);
+        try { writeFileSync(bufferPath, remaining.map((e) => JSON.stringify(e)).join("\n") + "\n"); } catch { /* */ }
+        memoryBuffer = remaining;
+        return;
+      }
+    }
+
+    // All sent — clear both buffers
+    memoryBuffer = [];
+    try { writeFileSync(bufferPath, ""); } catch { /* best-effort */ }
+  }
 
   function addEvent(event: EventInput): void {
     const full: EventInput = {
@@ -66,6 +123,22 @@ export function createEventEmitter(
     try {
       appendFileSync(bufferPath, JSON.stringify(full) + "\n");
     } catch { /* best-effort */ }
+
+    // Auto-flush when buffer reaches threshold
+    if (autoFlush) {
+      const threshold = autoFlush.threshold ?? 10;
+      if (memoryBuffer.length >= threshold) {
+        void doFlush();
+      }
+    }
+  }
+
+  // Set up periodic flush timer
+  if (autoFlush) {
+    const interval = autoFlush.interval ?? 30_000;
+    intervalHandle = setInterval(() => { void doFlush(); }, interval);
+    // Don't keep the process alive just for the flush timer
+    intervalHandle.unref?.();
   }
 
   return {
@@ -106,41 +179,13 @@ export function createEventEmitter(
     },
     emit(event) { addEvent(event); },
 
-    async flush() {
-      // Merge memory buffer with any crash-recovered events from disk
-      let diskEvents: EventInput[] = [];
-      if (existsSync(bufferPath)) {
-        try {
-          const content = readFileSync(bufferPath, "utf-8").trim();
-          if (content) {
-            diskEvents = content.split("\n").filter(Boolean).map((line) => {
-              try { return JSON.parse(line); } catch { return null; }
-            }).filter(Boolean);
-          }
-        } catch { /* best-effort */ }
+    async flush() { await doFlush(); },
+
+    destroy() {
+      if (intervalHandle != null) {
+        clearInterval(intervalHandle);
+        intervalHandle = null;
       }
-
-      // Disk file is the source of truth (memory buffer is a subset)
-      const events = diskEvents.length > 0 ? diskEvents : memoryBuffer;
-      if (events.length === 0) return;
-
-      // Send in batches of 50
-      for (let i = 0; i < events.length; i += 50) {
-        const batch = events.slice(i, i + 50);
-        try {
-          await api.recordEvents(batch);
-        } catch {
-          // Keep unsent events for next flush
-          const remaining = events.slice(i);
-          try { writeFileSync(bufferPath, remaining.map((e) => JSON.stringify(e)).join("\n") + "\n"); } catch { /* */ }
-          memoryBuffer = remaining;
-          return;
-        }
-      }
-
-      // All sent — clear both buffers
-      memoryBuffer = [];
-      try { writeFileSync(bufferPath, ""); } catch { /* best-effort */ }
     },
   };
 }

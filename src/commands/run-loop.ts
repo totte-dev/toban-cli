@@ -174,7 +174,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
   // Create event emitter for recording lifecycle events
   const sprintNum = sprintData?.sprint?.number as number | undefined;
-  const eventEmitter: EventEmitter = createEventEmitter(api, sprintNum);
+  const eventEmitter: EventEmitter = createEventEmitter(api, sprintNum, undefined, { interval: 30_000, threshold: 10 });
 
   // Set currentSprint on WS server for envelope context
   if (wsServer && sprintNum != null) {
@@ -713,6 +713,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
   opsRunner.stop();
   peerTracker.stop();
+  eventEmitter.destroy(); // Stop periodic flush timer
   await eventEmitter.flush(); // Ensure all buffered events are sent before exit
   await syncRuleTelemetry(cliArgs.apiUrl, cliArgs.apiKey, ctx.workingDir, sprintData?.sprint?.number);
   await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "Shut down" });

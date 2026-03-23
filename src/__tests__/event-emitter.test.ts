@@ -5,6 +5,8 @@ import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+// Allow vi.useFakeTimers in tests that need it
+
 function createMockApiClient(): ApiClient & { recordedEvents: EventInput[][] } {
   const recorded: EventInput[][] = [];
   return {
@@ -215,5 +217,94 @@ describe("EventEmitter", () => {
 
     await emitter.flush();
     expect(emitter.pending).toBe(0);
+  });
+
+  it("destroy is a no-op when autoFlush is not enabled", () => {
+    const api = createMockApiClient();
+    const emitter = createEventEmitter(api, 76);
+    // Should not throw
+    expect(() => emitter.destroy()).not.toThrow();
+  });
+});
+
+describe("EventEmitter autoFlush", () => {
+  beforeEach(() => {
+    clearDiskBuffer();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    clearDiskBuffer();
+    vi.useRealTimers();
+  });
+
+  it("flushes immediately when threshold is reached", async () => {
+    const api = createMockApiClient();
+    const emitter = createEventEmitter(api, 76, undefined, { threshold: 3, interval: 60_000 });
+
+    emitter.agentSpawned("builder", "task-1");
+    emitter.agentSpawned("builder", "task-2");
+    // Not yet at threshold — no flush
+    expect(api.recordEvents).not.toHaveBeenCalled();
+
+    emitter.agentSpawned("builder", "task-3");
+    // Threshold reached — doFlush() scheduled as void promise; run microtasks
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(api.recordEvents).toHaveBeenCalledTimes(1);
+    const batch = (api.recordEvents as ReturnType<typeof vi.fn>).mock.calls[0][0] as EventInput[];
+    expect(batch).toHaveLength(3);
+    emitter.destroy();
+  });
+
+  it("flushes on interval when threshold is not reached", async () => {
+    const api = createMockApiClient();
+    const emitter = createEventEmitter(api, 76, undefined, { threshold: 10, interval: 5_000 });
+
+    emitter.agentSpawned("builder", "task-1");
+    expect(api.recordEvents).not.toHaveBeenCalled();
+
+    // Advance time past the interval
+    await vi.advanceTimersByTimeAsync(5_001);
+
+    expect(api.recordEvents).toHaveBeenCalledTimes(1);
+    emitter.destroy();
+  });
+
+  it("destroy stops the interval timer", async () => {
+    const api = createMockApiClient();
+    const emitter = createEventEmitter(api, 76, undefined, { threshold: 100, interval: 5_000 });
+
+    emitter.agentSpawned("builder", "task-1");
+    emitter.destroy();
+
+    // Advance time — timer should be cleared, no flush
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(api.recordEvents).not.toHaveBeenCalled();
+  });
+
+  it("does not run concurrent flushes", async () => {
+    let resolveFlush!: () => void;
+    const slowApi = createMockApiClient();
+    // Make recordEvents hang until we resolve it
+    (slowApi.recordEvents as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<void>((res) => { resolveFlush = res; }),
+    );
+
+    const emitter = createEventEmitter(slowApi, 76, undefined, { threshold: 2, interval: 60_000 });
+
+    // Trigger threshold flush
+    emitter.agentSpawned("builder", "task-1");
+    emitter.agentSpawned("builder", "task-2");
+    await Promise.resolve();
+
+    // Trigger interval while first flush is still in progress
+    await vi.advanceTimersByTimeAsync(60_001);
+
+    // Only one call should have been made (second was skipped due to flushInProgress)
+    expect(slowApi.recordEvents).toHaveBeenCalledTimes(1);
+    resolveFlush();
+    emitter.destroy();
   });
 });
