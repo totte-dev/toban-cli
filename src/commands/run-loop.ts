@@ -298,7 +298,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       sprintData = await api.fetchSprintData();
     } catch (err) {
       logError(CLI_ERR.API_REQUEST_FAILED, `Failed to refresh sprint: ${err}`, { phase: "poll" }, err);
-      ui.warn(`Failed to refresh sprint: ${err}`);
+      ui.warn(`Failed to refresh sprint: ${err} — retrying in ${POLL_INTERVAL_MS / 1000}s`);
       await sleep(POLL_INTERVAL_MS);
       continue;
     }
@@ -362,30 +362,36 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       ui.step(`Starting task: ${task.title} [slot: ${slotName}]`);
 
+      // Meta-tasks (decompose, research, etc.) skip detail/AC checks
+      const META_TASK_TYPES = ["decompose", "research", "strategy", "docs"];
+      const isMetaTask = META_TASK_TYPES.includes(task.type?.toString() ?? "");
+
       // Pre-check: reject tasks with no meaningful details (description, steps, or acceptance_criteria)
       const desc = task.description || "";
-      const hasSteps = task.steps && (Array.isArray(task.steps) ? task.steps.length > 0 : task.steps.length > 2);
-      const hasCriteria = task.acceptance_criteria && (Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length > 0 : task.acceptance_criteria.length > 2);
-      const hasDetails = desc.length >= 20 || hasSteps || hasCriteria;
-      if (!hasDetails && !task.type?.toString().match(/^(chore)$/)) {
-        ui.warn(`[task] Skipping "${task.title}" — no meaningful details (description, steps, or acceptance_criteria). Add details to the task.`);
-        try { await api.updateTask(task.id, { status: "blocked" } as unknown as Partial<Task>); } catch { /* non-fatal */ }
-        scheduler.releaseSlot(slotName);
-        continue;
-      }
+      if (!isMetaTask) {
+        const hasSteps = task.steps && (Array.isArray(task.steps) ? task.steps.length > 0 : task.steps.length > 2);
+        const hasCriteria = task.acceptance_criteria && (Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length > 0 : task.acceptance_criteria.length > 2);
+        const hasDetails = desc.length >= 20 || hasSteps || hasCriteria;
+        if (!hasDetails && !task.type?.toString().match(/^(chore)$/)) {
+          ui.warn(`[task] Skipping "${task.title}" — no meaningful details (description, steps, or acceptance_criteria). Add details to the task.`);
+          try { await api.updateTask(task.id, { status: "blocked" } as unknown as Partial<Task>); } catch { /* non-fatal */ }
+          scheduler.releaseSlot(slotName);
+          continue;
+        }
 
-      // Warn if task lacks acceptance criteria (check DB column first, then description text)
-      const parseJsonArray = (v: unknown): string[] | undefined => {
-        if (!v) return undefined;
-        if (Array.isArray(v)) return v;
-        if (typeof v === "string") { try { const arr = JSON.parse(v); return Array.isArray(arr) ? arr : undefined; } catch { return undefined; } }
-        return undefined;
-      };
-      const acFromDb = parseJsonArray((task as Record<string, unknown>).acceptance_criteria);
-      const hasAC = acFromDb?.length
-        || desc.includes("Acceptance Criteria") || desc.includes("acceptance criteria") || desc.includes("- [ ]");
-      if (desc.length >= 20 && !hasAC) {
-        ui.warn(`[task] "${task.title}" has no acceptance criteria — agent may produce unclear results`);
+        // Warn if task lacks acceptance criteria (check DB column first, then description text)
+        const parseJsonArray = (v: unknown): string[] | undefined => {
+          if (!v) return undefined;
+          if (Array.isArray(v)) return v;
+          if (typeof v === "string") { try { const arr = JSON.parse(v); return Array.isArray(arr) ? arr : undefined; } catch { return undefined; } }
+          return undefined;
+        };
+        const acFromDb = parseJsonArray((task as Record<string, unknown>).acceptance_criteria);
+        const hasAC = acFromDb?.length
+          || desc.includes("Acceptance Criteria") || desc.includes("acceptance criteria") || desc.includes("- [ ]");
+        if (desc.length >= 20 && !hasAC) {
+          ui.warn(`[task] "${task.title}" has no acceptance criteria — agent may produce unclear results`);
+        }
       }
 
       const taskWorkingDir = resolveTaskWorkingDir(
