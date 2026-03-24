@@ -247,7 +247,9 @@ ${reviewComment}
 If the rejection is clearly correct (real bugs, test failures, missing requirements), respond: CONFIRM_REJECT
 If the rejection seems overly strict, cosmetic, or based on style preferences rather than correctness, respond: OVERRIDE_APPROVE
 
-Respond with ONLY one of: CONFIRM_REJECT or OVERRIDE_APPROVE`;
+Respond in this format (2 lines):
+Line 1: CONFIRM_REJECT or OVERRIDE_APPROVE
+Line 2: Brief reason (1 sentence explaining your decision)`;
 
       const managerResult = await spawnClaudeOnce(secondOpinionPrompt, {
         role: "manager", maxTurns: 1, timeout: 60_000, cwd: resolveRepoRoot(ctx.config.workingDir),
