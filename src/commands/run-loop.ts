@@ -366,6 +366,14 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const META_TASK_TYPES = ["decompose", "research", "strategy", "docs"];
       const isMetaTask = META_TASK_TYPES.includes(task.type?.toString() ?? "");
 
+      // Shared helper for parsing JSON arrays from DB columns
+      const parseJsonArray = (v: unknown): string[] | undefined => {
+        if (!v) return undefined;
+        if (Array.isArray(v)) return v;
+        if (typeof v === "string") { try { const arr = JSON.parse(v); return Array.isArray(arr) ? arr : undefined; } catch { return undefined; } }
+        return undefined;
+      };
+
       // Pre-check: reject tasks with no meaningful details (description, steps, or acceptance_criteria)
       const desc = task.description || "";
       if (!isMetaTask) {
@@ -379,13 +387,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           continue;
         }
 
-        // Warn if task lacks acceptance criteria (check DB column first, then description text)
-        const parseJsonArray = (v: unknown): string[] | undefined => {
-          if (!v) return undefined;
-          if (Array.isArray(v)) return v;
-          if (typeof v === "string") { try { const arr = JSON.parse(v); return Array.isArray(arr) ? arr : undefined; } catch { return undefined; } }
-          return undefined;
-        };
+        // Warn if task lacks acceptance criteria
         const acFromDb = parseJsonArray((task as Record<string, unknown>).acceptance_criteria);
         const hasAC = acFromDb?.length
           || desc.includes("Acceptance Criteria") || desc.includes("acceptance criteria") || desc.includes("- [ ]");
