@@ -131,9 +131,18 @@ export class TaskScheduler {
     this.checkEmptyRepoSafety();
 
     // --- Dependency-aware ordering ---
-    const inProgressTasks = allTasks.filter(
+    // Story grouping also applies to in_progress tasks: only the lead task should be dispatched
+    const inProgressAll = allTasks.filter(
       (t) => t.status === "in_progress" && t.owner !== "user",
     );
+    const seenStoryIdsInProgress = new Set<string>();
+    const inProgressTasks = inProgressAll.filter((t) => {
+      const storyId = (t as Record<string, unknown>).story_id as string | undefined;
+      if (!storyId) return true;
+      if (seenStoryIdsInProgress.has(storyId)) return false;
+      seenStoryIdsInProgress.add(storyId);
+      return true;
+    });
     const completedTaskIds = new Set(
       allTasks.filter((t) => t.status === "done" || t.status === "review").map((t) => t.id),
     );
