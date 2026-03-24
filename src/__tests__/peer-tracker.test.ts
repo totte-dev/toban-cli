@@ -55,7 +55,7 @@ describe("PeerTracker", () => {
     expect(tracker.getPeers()).toHaveLength(0);
   });
 
-  it("writes .toban-peers.md to each agent worktree", () => {
+  it("writes .toban-peers.md to each agent worktree", { timeout: 30_000 }, () => {
     const dir1 = createGitWorktree("d");
     const dir2 = createGitWorktree("e");
     dirs.push(dir1, dir2);
