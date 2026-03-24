@@ -129,8 +129,9 @@ export class SprintController {
       if (result) return result;
     }
 
-    // Only pick up tasks during active phase
-    if (sprint.status !== "active") {
+    // Allow task dispatch during active and planning phases.
+    // Planning phase runs meta-tasks (decompose, enrich, report) but not implementation.
+    if (sprint.status !== "active" && sprint.status !== "planning") {
       return { action: "wait" };
     }
 
