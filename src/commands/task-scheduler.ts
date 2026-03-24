@@ -7,7 +7,7 @@ import type { Task } from "../services/api-client.js";
 import type { ApiClient } from "../services/api-client.js";
 import type { SlotScheduler } from "../services/slot-scheduler.js";
 import { WS_MSG } from "../channel/ws-types.js";
-import { shouldSplit, autoSplitTasks } from "../services/task-splitter.js";
+// task-splitter removed — Story-level execution replaces auto-split
 import { detectDependencies, sortByDependency } from "../services/task-dependency.js";
 import * as ui from "../ui.js";
 import { execSync } from "node:child_process";
@@ -89,7 +89,7 @@ export class TaskScheduler {
     // During planning phase, only meta-tasks (decompose, research, etc.) are allowed
     const isPlanning = sprintStatus === "planning";
     const todoForAgents = allTasks.filter(
-      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && (t.review_verdict !== "ERROR" || PLANNING_SAFE_TYPES.includes(t.type as string)) && t.category !== "destructive" && (t.type === "decompose" || hasStructuredDetails(t)) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
+      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && (t.review_verdict !== "ERROR" || PLANNING_SAFE_TYPES.includes(t.type as string)) && t.category !== "destructive" && (t.type === "decompose" || (t as Record<string, unknown>).story_id || hasStructuredDetails(t)) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
     );
 
     // --- Story grouping: only dispatch one task per story_id ---
@@ -105,25 +105,6 @@ export class TaskScheduler {
     // Replace todoForAgents with deduped for downstream processing
     todoForAgents.length = 0;
     todoForAgents.push(...deduped);
-
-    const tasksToSplit = todoForAgents.filter((t) => shouldSplit(t, 8));
-    if (tasksToSplit.length > 0) {
-      const sprintNum = allTasks[0]?.sprint as number | undefined;
-      if (sprintNum != null) {
-        const splitResults = await autoSplitTasks(tasksToSplit, sprintNum, {
-          minSp: 8,
-          apiUrl: this.deps.apiUrl,
-          apiKey: this.deps.apiKey,
-        });
-        const splitIds = new Set(splitResults.filter((r) => !r.skipped).map((r) => r.taskId));
-        for (const id of splitIds) {
-          wsServer?.broadcast({
-            type: WS_MSG.DATA_UPDATE, entity: "task", task_id: id,
-            changes: { status: "blocked" }, timestamp: new Date().toISOString(),
-          });
-        }
-      }
-    }
 
     // --- Auto-transition todo → in_progress ---
     for (const t of todoForAgents) {
