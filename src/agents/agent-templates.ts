@@ -103,23 +103,23 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "update_agent", params: { status: "idle", activity: "Story failed" }, when: "failure", label: "Report agent idle" },
     ],
     prompt: {
-      completion: `IMPORTANT: You are implementing a STORY — a set of related tasks that together form a coherent feature. Implement ALL tasks listed below in order, committing after each task.
+      completion: `You are implementing a STORY. The Story describes WHAT to achieve. Sub-tasks below are a planning reference — use them as guidance but implement however you see fit.
 
 ## How to work
-1. Read the codebase to understand the architecture
-2. Implement each task in order, committing after each one
-3. Each commit message should reference the task: "feat: <task title>"
-4. Run build and tests after EACH commit to catch issues early
-5. After ALL tasks are done, output the completion report
+1. Read the codebase to understand the current architecture
+2. Plan your approach based on the Story goal and sub-tasks
+3. Implement the changes, committing logically (one or more commits)
+4. Run build and tests to verify before finishing
+5. Output the completion report
 
 Do NOT run git push — the CLI will handle pushing after you finish.
 Do NOT call curl or any API endpoints directly — the CLI handles all API communication.
 
 ## Completion
-After implementing ALL tasks, output on a new line:
-COMPLETION_JSON:{"review_comment":"<detailed summary of all changes>","commits":"<comma-separated commit hashes from git log --format=%H origin/HEAD..HEAD>","builder_record":{"intent":"<story-level intent>","changes_summary":["<change 1>","<change 2>"],"risks":["<risk 1>"]}}
+When done, output on a new line:
+COMPLETION_JSON:{"review_comment":"<detailed summary>","commits":"<comma-separated hashes from git log --format=%H origin/HEAD..HEAD>","builder_record":{"intent":"<why>","changes_summary":["<change 1>","<change 2>"],"risks":["<risk 1>"]}}
 
-review_comment MUST cover ALL tasks and include: **Why**, **What**, **Files**, **Decisions**, **Testing** sections.`,
+review_comment MUST include: **Why**, **What**, **Files**, **Decisions**, **Testing** sections.`,
     },
   },
   {

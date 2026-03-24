@@ -595,7 +595,8 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         fullDescription = [
           storyTitle ? `## Story: ${storyTitle}` : undefined,
           storyDescription || undefined,
-          "\n## Tasks to implement (in order)\n",
+          storyFeedback ? `\n**Feedback:** ${storyFeedback}` : undefined,
+          "\n## Sub-tasks (planning reference — implement as you see fit)\n",
           storyTasksBlock,
         ].filter(Boolean).join("\n");
       }
