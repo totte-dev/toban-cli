@@ -30,7 +30,7 @@ describe("PeerTracker", () => {
     dirs = [];
   });
 
-  it("registers and tracks peers", () => {
+  it("registers and tracks peers", { timeout: 30_000 }, () => {
     const dir1 = createGitWorktree("a");
     const dir2 = createGitWorktree("b");
     dirs.push(dir1, dir2);

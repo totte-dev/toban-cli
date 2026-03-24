@@ -13,14 +13,14 @@ vi.mock("node:child_process", () => ({
 }));
 
 // Mock agent-engine
-vi.mock("../agent-engine.js", () => ({
+vi.mock("../agents/agent-engine.js", () => ({
   getEngine: () => ({ supportsStructuredOutput: false }),
   extractTextFromStreamJson: () => "",
   resolveModelForRole: () => "claude-sonnet-4-20250514",
 }));
 
 // Mock spawner
-vi.mock("../spawner.js", () => ({
+vi.mock("../agents/spawner.js", () => ({
   spawnAgent: () => ({
     process: {
       stdout: { on: vi.fn() },
@@ -33,7 +33,7 @@ vi.mock("../spawner.js", () => ({
 }));
 
 // Mock api-client
-vi.mock("../api-client.js", () => ({
+vi.mock("../services/api-client.js", () => ({
   createApiClient: () => ({
     fetchTasks: vi.fn().mockResolvedValue([]),
     fetchPlaybookPrompt: vi.fn().mockResolvedValue(""),
@@ -42,12 +42,26 @@ vi.mock("../api-client.js", () => ({
 }));
 
 // Mock prompt templates
-vi.mock("../prompts/templates.js", () => ({
+vi.mock("../manager/prompts/templates.js", () => ({
   PROMPT_TEMPLATES: {
     "reviewer-system": "Review system for {{projectName}}",
     "reviewer-type-hints": "{}",
     "reviewer-output-format": '{"verdict":"APPROVE or NEEDS_CHANGES"}',
   },
+}));
+
+// Mock agent-templates
+vi.mock("../agents/agent-templates.js", () => ({
+  interpolate: (template: string, vars: Record<string, string>) => {
+    let result = template;
+    for (const [k, v] of Object.entries(vars)) result = result.replace(new RegExp(`\\{\\{${k}\\}\\}`, "g"), v);
+    return result;
+  },
+}));
+
+// Mock parse-labels
+vi.mock("../utils/parse-labels.js", () => ({
+  parseTaskLabels: () => [],
 }));
 
 // Mock ui
