@@ -449,8 +449,9 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       };
 
       // Check if pipeline state exists — if so, skip builder and run pipeline only
+      // Read-only templates (decompose, research) don't benefit from pipeline retry — always re-run agent
       // loadPipelineState/clearPipelineState imported at top level
-      const existingPipelineState = loadPipelineState(task.id);
+      const existingPipelineState = agentTemplate.allow_no_commit_completion ? null : loadPipelineState(task.id);
       if (existingPipelineState?.agent_branch) {
         ui.info(`[task] Pipeline retry: skipping builder, using existing branch ${existingPipelineState.agent_branch}`);
         taskLog.event("pipeline_retry", { agent_branch: existingPipelineState.agent_branch });
