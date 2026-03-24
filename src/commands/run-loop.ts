@@ -553,6 +553,31 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const parsedDesc = getPromptDescription(task.description as string | undefined);
       let fullDescription = [parsedDesc, contextNotes].filter(Boolean).join("\n\n") || undefined;
 
+      // Fetch Story info early (needed by story-mode description and decompose prompt)
+      let storyTitle: string | undefined;
+      let storyDescription: string | undefined;
+      let storyFeedback: string | undefined;
+      const storyIdForFetch = taskType === "decompose"
+        ? (task.description || "").match(/story_id:([a-f0-9-]+)/)?.[1]
+        : taskStoryId;
+      if (storyIdForFetch) {
+        try {
+          const storyRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${storyIdForFetch}`, {
+            headers: { Authorization: `Bearer ${cliArgs.apiKey}` },
+          });
+          if (storyRes.ok) {
+            const story = (await storyRes.json()) as { title: string; description: string; feedback?: string };
+            storyTitle = story.title;
+            storyDescription = story.description;
+            storyFeedback = story.feedback || undefined;
+          }
+        } catch { /* use task title/description as fallback */ }
+      }
+      if (taskType === "decompose" && !storyTitle) {
+        storyTitle = task.title;
+        storyDescription = task.description || "";
+      }
+
       // Story mode: build description with all tasks
       if (isStoryMode && storyTasks.length > 0) {
         const storyTasksBlock = storyTasks.map((t, i) => {
@@ -602,31 +627,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       if (previousReview) {
         ui.warn(`Injecting previous review feedback into agent prompt`);
         taskLog.event("previous_review_injected", { preview: previousReview.slice(0, 200) });
-      }
-
-      // Fetch Story info for decompose tasks or story-mode
-      let storyTitle: string | undefined;
-      let storyDescription: string | undefined;
-      let storyFeedback: string | undefined;
-      const storyIdForFetch = taskType === "decompose"
-        ? (task.description || "").match(/story_id:([a-f0-9-]+)/)?.[1]
-        : taskStoryId;
-      if (storyIdForFetch) {
-        try {
-          const storyRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${storyIdForFetch}`, {
-            headers: { Authorization: `Bearer ${cliArgs.apiKey}` },
-          });
-          if (storyRes.ok) {
-            const story = (await storyRes.json()) as { title: string; description: string; feedback?: string };
-            storyTitle = story.title;
-            storyDescription = story.description;
-            storyFeedback = story.feedback || undefined;
-          }
-        } catch { /* use task title/description as fallback */ }
-      }
-      if (taskType === "decompose" && !storyTitle) {
-        storyTitle = task.title;
-        storyDescription = task.description || "";
       }
 
       const prompt = buildAgentPrompt({

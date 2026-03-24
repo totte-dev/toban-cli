@@ -124,9 +124,11 @@ export function fetchAndResetToRemote(repoDir: string): void {
   try {
     execSync("git pull --ff-only", { cwd: repoDir, stdio: "pipe" });
   } catch {
-    execSync("git reset --hard origin/main 2>/dev/null || git reset --hard origin/master", {
-      cwd: repoDir, stdio: "pipe", shell: "/bin/sh",
-    });
+    try {
+      execSync("git reset --hard origin/main", { cwd: repoDir, stdio: "pipe" });
+    } catch {
+      execSync("git reset --hard origin/master", { cwd: repoDir, stdio: "pipe" });
+    }
   }
 }
 
