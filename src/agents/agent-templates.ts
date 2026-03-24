@@ -249,6 +249,63 @@ COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>
     },
   },
   {
+    id: "story-decompose",
+    name: "Story Decomposition",
+    allow_no_commit_completion: true,
+    match: {
+      task_types: ["decompose"],
+    },
+    tools: ["Read", "Grep", "Glob", "Bash"],
+    pre_actions: [
+      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
+      { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
+      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
+    ],
+    post_actions: [
+      { type: "save_decomposition", when: "success", label: "Save decomposition to API" },
+      { type: "update_agent", params: { status: "idle", activity: "Decomposition complete" }, when: "success", label: "Report agent idle" },
+      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
+      { type: "update_agent", params: { status: "idle", activity: "Decomposition failed" }, when: "failure", label: "Report agent idle" },
+    ],
+    prompt: {
+      mode_header: "## DECOMPOSE MODE — Read code, analyze, and decompose a Story into tasks. Do NOT modify any files.",
+      completion: `You are a Story decomposition agent. Your job is to read the codebase and break a Story into concrete, implementable tasks.
+
+## Story
+Title: {{storyTitle}}
+Description: {{storyDescription}}
+{{storyFeedback}}
+
+## Instructions
+1. Read the codebase to understand the current architecture and relevant files
+2. Decompose the Story into 2-6 tasks that together fulfill the Story's intent
+3. For each task, provide:
+   - title: concise, starts with a verb
+   - acceptance_criteria: 2-5 testable conditions (REQUIRED, be specific)
+   - files_hint: files likely to be modified (REQUIRED, use actual paths from the codebase)
+   - priority: p1 (must-have) / p2 (should-have) / p3 (nice-to-have)
+   - story_points: 1 (trivial) / 2 (small) / 3 (medium) / 5 (large)
+   - type: feature / bug / chore / infra
+   - steps: optional brief implementation notes (the agent will figure out the details)
+4. Also suggest existing backlog tasks that relate to this Story (by ID prefix)
+
+## Quality rules
+- acceptance_criteria MUST be verifiable (build passes, behavior changes, test exists)
+- files_hint MUST reference real files you found in the codebase
+- Each task should be completable independently by one agent
+- Order tasks by dependency (foundational first)
+
+## Output
+Output ONLY valid JSON on a new line:
+COMPLETION_JSON:{"summary":"1-2 sentence rationale","tasks":[{"title":"...","acceptance_criteria":["..."],"files_hint":["..."],"priority":"p1","story_points":3,"type":"feature","steps":["optional"]}],"related_backlog":["8char-id"],"total_sp":0}`,
+      rules: [
+        "You MUST NOT create, edit, write, or delete any files.",
+        "You MUST read actual source code to determine files_hint — do not guess.",
+        "acceptance_criteria must be specific and testable, not vague.",
+      ],
+    },
+  },
+  {
     id: "reviewer",
     name: "Code Reviewer",
     match: {
@@ -498,6 +555,92 @@ export async function executeActions(
             await ctx.onRetro();
             ui.info( `[${phase}] ${label}`);
           }
+          break;
+        }
+        case "save_decomposition": {
+          // Parse COMPLETION_JSON and save decomposed tasks via API
+          if (!ctx.completionJson) {
+            ui.warn(`[${phase}] ${label}: no COMPLETION_JSON — skipping`);
+            break;
+          }
+          const decomp = ctx.completionJson as unknown as {
+            summary?: string;
+            tasks?: Array<{
+              title: string;
+              acceptance_criteria?: string[];
+              files_hint?: string[];
+              priority?: string;
+              story_points?: number;
+              type?: string;
+              steps?: string[];
+            }>;
+            related_backlog?: string[];
+            total_sp?: number;
+          };
+          if (!decomp.tasks?.length) {
+            ui.warn(`[${phase}] ${label}: no tasks in decomposition`);
+            break;
+          }
+          // Extract story_id from task description (injected by Dashboard when creating decompose task)
+          const storyIdMatch = (ctx.task.description || "").match(/story_id:([a-f0-9-]+)/);
+          const storyId = storyIdMatch?.[1] || undefined;
+          const sprintNum = ctx.config.sprintNumber;
+
+          // Create child tasks via API
+          let created = 0;
+          const taskIds: string[] = [];
+          for (const t of decomp.tasks) {
+            try {
+              const res = await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks`, {
+                method: "POST",
+                headers: { ...createAuthHeaders(ctx.config.apiKey), "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  title: t.title,
+                  description: t.steps?.join("; ") || "",
+                  acceptance_criteria: t.acceptance_criteria || [],
+                  files_hint: t.files_hint || [],
+                  steps: t.steps || [],
+                  priority: t.priority || "p2",
+                  story_points: t.story_points || 3,
+                  type: t.type || "feature",
+                  owner: "builder",
+                  sprint: -1, // backlog — user approves during planning
+                  story_id: storyId || null,
+                  category: "mutating",
+                }),
+              });
+              const body = (await res.json()) as { id?: string };
+              if (body.id) { taskIds.push(body.id); created++; }
+            } catch (err) { ui.warn(`[${phase}] Failed to create task: ${t.title} — ${err}`); }
+          }
+
+          // Save plan summary to sprint_plans (if sprint available)
+          if (sprintNum != null) {
+            try {
+              await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/sprints/${sprintNum}/plan`, {
+                method: "POST",
+                headers: { ...createAuthHeaders(ctx.config.apiKey), "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  summary: decomp.summary || "Story decomposition",
+                  tasks: decomp.tasks.map((t, i) => ({ id: taskIds[i]?.slice(0, 8) || `new-${i}`, title: t.title, reason: "" })),
+                  total_sp: decomp.total_sp || decomp.tasks.reduce((s, t) => s + (t.story_points || 3), 0),
+                }),
+              });
+            } catch { /* non-fatal */ }
+          }
+
+          // Update Story status to ready
+          if (storyId) {
+            try {
+              await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/stories/${storyId}`, {
+                method: "PATCH",
+                headers: { ...createAuthHeaders(ctx.config.apiKey), "Content-Type": "application/json" },
+                body: JSON.stringify({ status: "ready" }),
+              });
+            } catch { /* non-fatal */ }
+          }
+
+          ui.info(`[${phase}] ${label}: ${created}/${decomp.tasks.length} tasks created${storyId ? ` for story ${storyId.slice(0, 8)}` : ""}`);
           break;
         }
         case "spawn_reviewer": {

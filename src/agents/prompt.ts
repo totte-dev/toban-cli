@@ -56,6 +56,12 @@ export interface PromptContext {
   previousReview?: string;
   /** Guardrail rules to inject (from buildGuardrailRules) */
   guardrailRules?: string[];
+  /** Story title (for decompose template) */
+  storyTitle?: string;
+  /** Story description (for decompose template) */
+  storyDescription?: string;
+  /** Story feedback from user (for re-decomposition) */
+  storyFeedback?: string;
 }
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -186,7 +192,10 @@ export function buildAgentPrompt(ctx: PromptContext): string {
 
   // Match template based on task type and role
   const template = matchTemplate(ctx.taskType, ctx.role);
-  const vars = { apiUrl: ctx.apiUrl, apiKey: ctx.apiKey, taskId: ctx.taskId };
+  const vars: Record<string, string> = { apiUrl: ctx.apiUrl, apiKey: ctx.apiKey, taskId: ctx.taskId };
+  if (ctx.storyTitle) vars.storyTitle = ctx.storyTitle;
+  if (ctx.storyDescription) vars.storyDescription = ctx.storyDescription;
+  vars.storyFeedback = ctx.storyFeedback ? `\n## User Feedback (address these concerns)\n${ctx.storyFeedback}` : "";
 
   const modeHeader = template.prompt.mode_header
     ? `\n${template.prompt.mode_header}\n`

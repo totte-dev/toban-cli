@@ -509,6 +509,31 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         taskLog.event("previous_review_injected", { preview: previousReview.slice(0, 200) });
       }
 
+      // Fetch Story info for decompose tasks
+      let storyTitle: string | undefined;
+      let storyDescription: string | undefined;
+      let storyFeedback: string | undefined;
+      if (taskType === "decompose") {
+        const storyIdMatch = (task.description || "").match(/story_id:([a-f0-9-]+)/);
+        if (storyIdMatch) {
+          try {
+            const storyRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${storyIdMatch[1]}`, {
+              headers: { Authorization: `Bearer ${cliArgs.apiKey}` },
+            });
+            if (storyRes.ok) {
+              const story = (await storyRes.json()) as { title: string; description: string; feedback?: string };
+              storyTitle = story.title;
+              storyDescription = story.description;
+              storyFeedback = story.feedback || undefined;
+            }
+          } catch { /* use task title/description as fallback */ }
+        }
+        if (!storyTitle) {
+          storyTitle = task.title;
+          storyDescription = task.description || "";
+        }
+      }
+
       const prompt = buildAgentPrompt({
         role: agentRole, projectName: ctx.workspaceName, projectSpec: ctx.workspaceSpec,
         taskId: task.id, taskTitle: task.title,
@@ -526,6 +551,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         pastFailures: pastFailures.length > 0 ? pastFailures : undefined,
         previousReview,
         guardrailRules: buildGuardrailRules(guardrailConfig, cliArgs.autoMode),
+        storyTitle, storyDescription, storyFeedback,
       });
 
       try {
