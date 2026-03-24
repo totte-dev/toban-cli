@@ -28,6 +28,7 @@ import { OpsRunner } from "../services/ops-runner.js";
 import { extractJsonObject } from "../utils/extract-json.js";
 import { syncRuleTelemetry } from "../utils/telemetry-sync.js";
 import { loadPipelineState, clearPipelineState, savePipelineState } from "../utils/pipeline-state.js";
+import { runHealthCheck } from "../utils/main-health-check.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -207,6 +208,33 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     }
   } catch { /* non-fatal — use defaults */ }
 
+  // --- Startup health check: verify main branch before dispatching tasks ---
+  const healthCheckBuildCmd = workspaceBuildCommand || "npm run build";
+  const healthCheckTestCmd = workspaceTestCommand || "npm test";
+  const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000; // re-check every 5 minutes
+
+  let mainHealthy = true;
+  let lastHealthCheckTime = 0;
+
+  // Only run health check when the working directory is a git-tracked repo
+  const { existsSync: fsExistsSync } = await import("node:fs");
+  const { join: pathJoin } = await import("node:path");
+  const shouldHealthCheck = !!(ctx.workingDir && fsExistsSync(pathJoin(ctx.workingDir, ".git")));
+
+  if (shouldHealthCheck) {
+    ui.info("[health-check] Verifying main branch before dispatching tasks...");
+    const result = runHealthCheck(ctx.workingDir, healthCheckBuildCmd, healthCheckTestCmd);
+    lastHealthCheckTime = Date.now();
+    if (!result.passed) {
+      mainHealthy = false;
+      const msg = `Main branch health check failed — task dispatch paused.\nCommand: ${result.failedCommand}\nError: ${(result.errorDetail ?? "").slice(0, 300)}`;
+      ui.error(`[health-check] ${msg}`);
+      await api.sendMessage("manager", "user", msg);
+    } else {
+      ui.info("[health-check] Main branch is healthy");
+    }
+  }
+
   // Start stall detection for agent processes
   runner.startStallDetection();
 
@@ -269,6 +297,28 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     } catch (err) {
       logError(CLI_ERR.API_REQUEST_FAILED, `Failed to refresh sprint: ${err}`, { phase: "poll" }, err);
       ui.warn(`Failed to refresh sprint: ${err}`);
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
+
+    // Periodic health check: re-verify main branch every 5 minutes
+    if (shouldHealthCheck && Date.now() - lastHealthCheckTime > HEALTH_CHECK_INTERVAL_MS) {
+      lastHealthCheckTime = Date.now();
+      const hcResult = runHealthCheck(ctx.workingDir, healthCheckBuildCmd, healthCheckTestCmd);
+      if (!hcResult.passed && mainHealthy) {
+        mainHealthy = false;
+        const msg = `Main branch health check failed — task dispatch paused.\nCommand: ${hcResult.failedCommand}\nError: ${(hcResult.errorDetail ?? "").slice(0, 300)}`;
+        ui.error(`[health-check] ${msg}`);
+        await api.sendMessage("manager", "user", msg);
+      } else if (hcResult.passed && !mainHealthy) {
+        mainHealthy = true;
+        ui.info("[health-check] Main branch recovered — resuming task dispatch");
+        await api.sendMessage("manager", "user", "Main branch health check passed. Resuming task dispatch.");
+      }
+    }
+
+    // Gate task dispatch when main branch is unhealthy
+    if (!mainHealthy) {
       await sleep(POLL_INTERVAL_MS);
       continue;
     }
