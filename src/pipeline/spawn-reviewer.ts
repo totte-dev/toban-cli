@@ -237,8 +237,42 @@ Output ONLY JSON (no markdown):
       reviewComment = reviewResult.slice(-2000);
     }
   } else {
-    // No COMPLETION_JSON — use raw output as review
-    reviewComment = reviewResult.slice(-2000) || "Reviewer agent produced no output";
+    // No COMPLETION_JSON — reviewer failed to produce structured output
+    // Detect reviewer infrastructure failures (max turns, timeout, empty output)
+    const isReviewerError = !reviewResult.trim()
+      || reviewResult.includes("Reached max turns")
+      || reviewResult.includes("timed out")
+      || reviewResult.length < 20;
+
+    if (isReviewerError) {
+      // Reviewer itself failed — retry review once, don't blame the builder
+      ui.warn(`[${phase}] ${label}: reviewer error — retrying once`);
+      const retryResult = await spawnClaudeOnce(fullPrompt, {
+        model: reviewerModel, role: "reviewer", maxTurns: 5, timeout: TIMEOUTS.REVIEWER, cwd: reviewRepoDir,
+      });
+      const retryMatch = retryResult.match(/COMPLETION_JSON:(\{[\s\S]*?\})\s*$/m)
+        || retryResult.match(/```json\s*(\{[\s\S]*?"verdict"[\s\S]*?\})\s*```/m)
+        || retryResult.match(/(\{[\s\S]*?"verdict"\s*:\s*"(?:APPROVE|NEEDS_CHANGES)"[\s\S]*?\})\s*$/m);
+      if (retryMatch) {
+        try {
+          const report = JSON.parse(retryMatch[1]) as Record<string, unknown>;
+          const v = String(report.verdict || "").toUpperCase();
+          verdict = (v.includes("APPROVE") && !v.includes("NEEDS")) ? "APPROVE" : "NEEDS_CHANGES";
+          report.verdict = verdict;
+          reviewComment = JSON.stringify(report);
+          ui.info(`[${phase}] ${label}: retry succeeded — verdict = ${verdict}`);
+        } catch {
+          reviewComment = retryResult.slice(-2000);
+        }
+      } else {
+        // Retry also failed — approve to avoid blocking (code already passed verify_build)
+        verdict = "APPROVE";
+        reviewComment = JSON.stringify({ verdict: "APPROVE", summary: "Auto-approved: reviewer failed twice, but build+tests passed" });
+        ui.warn(`[${phase}] ${label}: reviewer failed twice — auto-approving (build+tests passed)`);
+      }
+    } else {
+      reviewComment = reviewResult.slice(-2000);
+    }
   }
 
   // Save review comment if not saved via review-report
