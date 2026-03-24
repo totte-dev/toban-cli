@@ -28,7 +28,7 @@ import { handleRuleMatch } from "../pipeline/rule-match.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline" | "rule_match" | "save_decomposition" | "complete_story_tasks";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline" | "rule_match" | "save_decomposition";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -74,54 +74,6 @@ export interface AgentTemplate {
 let _lastGitAuthOk = 0;
 
 const DEFAULT_TEMPLATES: AgentTemplate[] = [
-  {
-    id: "story-implementation",
-    name: "Story Implementation (multi-task)",
-    match: {
-      // Matched explicitly by run-loop when story_id is present, not by task_types
-    },
-    tools: "all",
-    allow_no_commit_completion: true,
-    pre_actions: [
-      { type: "git_auth_check", label: "Verify git push credentials" },
-      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
-      { type: "fetch_recent_changes", label: "Fetch recent changes from other agents" },
-      { type: "update_task", params: { status: "in_progress" }, label: "Mark lead task in_progress" },
-      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
-    ],
-    post_actions: [
-      { type: "collect_memory", when: "success", label: "Collect agent memory" },
-      { type: "record_changes", when: "success", label: "Record change summary for other agents" },
-      { type: "merge_pipeline", when: "success", label: "Merge, verify build, push" },
-      { type: "rule_match", when: "success", label: "Match diff against playbook rules" },
-      { type: "complete_story_tasks", when: "success", label: "Mark all story tasks as done" },
-      { type: "submit_retro", when: "success", label: "Submit retrospective" },
-      { type: "update_agent", params: { status: "idle", activity: "Story completed" }, when: "success", label: "Report agent idle" },
-      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer for story review (async)" },
-      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset lead task to todo on failure" },
-      { type: "notify_user", params: { message: "⚠️ Story \"{{taskTitle}}\" {{status}}" }, when: "failure", label: "Notify user of failure" },
-      { type: "update_agent", params: { status: "idle", activity: "Story failed" }, when: "failure", label: "Report agent idle" },
-    ],
-    prompt: {
-      completion: `You are implementing a STORY. The Story describes WHAT to achieve. Sub-tasks below are a planning reference — use them as guidance but implement however you see fit.
-
-## How to work
-1. Read the codebase to understand the current architecture
-2. Plan your approach based on the Story goal and sub-tasks
-3. Implement the changes, committing logically (one or more commits)
-4. Run build and tests to verify before finishing
-5. Output the completion report
-
-Do NOT run git push — the CLI will handle pushing after you finish.
-Do NOT call curl or any API endpoints directly — the CLI handles all API communication.
-
-## Completion
-When done, output on a new line:
-COMPLETION_JSON:{"review_comment":"<detailed summary>","commits":"<comma-separated hashes from git log --format=%H origin/HEAD..HEAD>","builder_record":{"intent":"<why>","changes_summary":["<change 1>","<change 2>"],"risks":["<risk 1>"]}}
-
-review_comment MUST include: **Why**, **What**, **Files**, **Decisions**, **Testing** sections.`,
-    },
-  },
   {
     id: "implementation",
     name: "Implementation (default)",
@@ -418,15 +370,8 @@ export function matchTemplate(
   taskType?: string,
   role?: string,
   templates?: AgentTemplate[],
-  storyMode?: boolean,
 ): AgentTemplate {
   const list = templates ?? DEFAULT_TEMPLATES;
-
-  // 0. Story mode — use story-implementation template
-  if (storyMode) {
-    const storyTemplate = list.find((t) => t.id === "story-implementation");
-    if (storyTemplate) return storyTemplate;
-  }
 
   // 1. Match by task type (most specific)
   if (taskType) {
@@ -530,8 +475,6 @@ export interface ActionContext {
   agentStderr?: string[];
   /** Job queue for enrich/review jobs (if available) */
   jobQueue?: import("../services/job-queue.js").JobQueue;
-  /** Sibling tasks in the same Story (for story-implementation template) */
-  storyTasks?: Task[];
 }
 
 /**
@@ -802,37 +745,6 @@ export async function executeActions(
         }
         case "record_changes": {
           await handleRecordChanges(action, ctx, phase);
-          break;
-        }
-        case "complete_story_tasks": {
-          // If no commits were made, don't promote tasks — reset to todo instead
-          if (ctx.mergeSkipped) {
-            ui.warn(`[${phase}] ${label}: no commits — resetting all story tasks to todo`);
-            const siblings = ctx.storyTasks ?? [];
-            for (const sibling of siblings) {
-              try {
-                await ctx.api.updateTask(sibling.id, { status: "todo" } as Partial<Task>);
-                ctx.onDataUpdate?.("task", sibling.id, { status: "todo" });
-              } catch { /* non-fatal */ }
-            }
-            await ctx.api.updateTask(ctx.task.id, { status: "todo" } as Partial<Task>);
-            ctx.onDataUpdate?.("task", ctx.task.id, { status: "todo" });
-            ctx.exitCode = 1; // trigger failure path
-            break;
-          }
-          // Mark all sibling tasks in the story as review
-          const siblings = ctx.storyTasks ?? [];
-          for (const sibling of siblings) {
-            if (sibling.id === ctx.task.id) continue;
-            try {
-              await ctx.api.updateTask(sibling.id, { status: "review" } as Partial<Task>);
-              ctx.onDataUpdate?.("task", sibling.id, { status: "review" });
-              ui.info(`[${phase}] ${label}: ${sibling.id.slice(0, 8)} → review`);
-            } catch { /* non-fatal */ }
-          }
-          await ctx.api.updateTask(ctx.task.id, { status: "review" } as Partial<Task>);
-          ctx.onDataUpdate?.("task", ctx.task.id, { status: "review" });
-          ui.info(`[${phase}] ${label}: ${siblings.length + 1} tasks → review`);
           break;
         }
         case "verify_build": {

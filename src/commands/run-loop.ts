@@ -432,38 +432,9 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const taskType = task.type as string | undefined;
       const taskLabels = parseTaskLabels(task);
 
-      // Story mode: detect if task has story_id and fetch sibling tasks
-      const taskStoryId = (task as Record<string, unknown>).story_id as string | undefined;
-      let storyTasks: Task[] = [];
-      let isStoryMode = false;
-      if (taskStoryId && !isMetaTask) {
-        try {
-          const siblingRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${taskStoryId}/tasks`, {
-            headers: { Authorization: `Bearer ${cliArgs.apiKey}` },
-          });
-          if (siblingRes.ok) {
-            const siblingData = (await siblingRes.json()) as Task[] | { tasks: Task[] };
-            storyTasks = (Array.isArray(siblingData) ? siblingData : siblingData.tasks || [])
-              .filter((t) => t.status !== "cancelled" && t.status !== "done");
-            isStoryMode = storyTasks.length > 1;
-          }
-        } catch { /* non-fatal, fall back to single task mode */ }
-        if (isStoryMode) {
-          ui.info(`[task] Story mode: ${storyTasks.length} tasks for story ${taskStoryId.slice(0, 8)}`);
-          // Mark all sibling tasks as in_progress
-          for (const sibling of storyTasks) {
-            if (sibling.id === task.id) continue;
-            try {
-              await api.updateTask(sibling.id, { status: "in_progress" } as Partial<Task>);
-              ctx.wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: sibling.id, changes: { status: "in_progress" }, timestamp: new Date().toISOString() });
-            } catch { /* non-fatal */ }
-          }
-        }
-      }
-
-      const agentTemplate = matchTemplate(taskType, agentRole, undefined, isStoryMode);
+      const agentTemplate = matchTemplate(taskType, agentRole);
       const isReadOnly = agentTemplate.tools !== "all";
-      ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}${isStoryMode ? ` (story: ${storyTasks.length} tasks)` : ""}`);
+      ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
 
       // Restore persisted conflict retry count from context_notes (survives CLI restart)
       const conflictRetryMatch = ((task.context_notes as string) || "").match(/\[conflict_retries:(\d+)\]/);
@@ -477,7 +448,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       const actionCtx: ActionContext = {
         api, task, agentName, template: agentTemplate, taskLog, jobQueue,
-        ...(isStoryMode ? { storyTasks } : {}),
         config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine, agentEngine: agentInfo?.engine, buildCommand: workspaceBuildCommand, testCommand: workspaceTestCommand, guardrailConfig, autoMode: cliArgs.autoMode },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({
@@ -553,13 +523,13 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const parsedDesc = getPromptDescription(task.description as string | undefined);
       let fullDescription = [parsedDesc, contextNotes].filter(Boolean).join("\n\n") || undefined;
 
-      // Fetch Story info early (needed by story-mode description and decompose prompt)
+      // Fetch Story info for decompose tasks
       let storyTitle: string | undefined;
       let storyDescription: string | undefined;
       let storyFeedback: string | undefined;
       const storyIdForFetch = taskType === "decompose"
         ? (task.description || "").match(/story_id:([a-f0-9-]+)/)?.[1]
-        : taskStoryId;
+        : undefined;
       if (storyIdForFetch) {
         try {
           const storyRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${storyIdForFetch}`, {
@@ -576,29 +546,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       if (taskType === "decompose" && !storyTitle) {
         storyTitle = task.title;
         storyDescription = task.description || "";
-      }
-
-      // Story mode: build description with all tasks
-      if (isStoryMode && storyTasks.length > 0) {
-        const storyTasksBlock = storyTasks.map((t, i) => {
-          const ac = parseJsonArray((t as Record<string, unknown>).acceptance_criteria) || [];
-          const files = parseJsonArray((t as Record<string, unknown>).files_hint) || [];
-          const steps = parseJsonArray((t as Record<string, unknown>).steps) || [];
-          return [
-            `### Task ${i + 1}: ${t.title}`,
-            ...(ac.length > 0 ? [`**Acceptance Criteria:**`, ...ac.map((a) => `- ${a}`)] : []),
-            ...(files.length > 0 ? [`**Files:** ${files.join(", ")}`] : []),
-            ...(steps.length > 0 ? [`**Steps:** ${steps.join("; ")}`] : []),
-          ].join("\n");
-        }).join("\n\n");
-
-        fullDescription = [
-          storyTitle ? `## Story: ${storyTitle}` : undefined,
-          storyDescription || undefined,
-          storyFeedback ? `\n**Feedback:** ${storyFeedback}` : undefined,
-          "\n## Sub-tasks (planning reference — implement as you see fit)\n",
-          storyTasksBlock,
-        ].filter(Boolean).join("\n");
       }
 
       // Fetch past failures for prompt injection

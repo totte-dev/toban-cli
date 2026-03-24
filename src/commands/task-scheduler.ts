@@ -89,22 +89,8 @@ export class TaskScheduler {
     // During planning phase, only meta-tasks (decompose, research, etc.) are allowed
     const isPlanning = sprintStatus === "planning";
     const todoForAgents = allTasks.filter(
-      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && (t.review_verdict !== "ERROR" || PLANNING_SAFE_TYPES.includes(t.type as string)) && t.category !== "destructive" && (t.type === "decompose" || (t as Record<string, unknown>).story_id || hasStructuredDetails(t)) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
+      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && (t.review_verdict !== "ERROR" || PLANNING_SAFE_TYPES.includes(t.type as string)) && t.category !== "destructive" && (t.type === "decompose" || hasStructuredDetails(t)) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
     );
-
-    // --- Story grouping: only dispatch one task per story_id ---
-    // The run-loop will fetch all sibling tasks and pass them to the agent
-    const seenStoryIds = new Set<string>();
-    const deduped = todoForAgents.filter((t) => {
-      const storyId = (t as Record<string, unknown>).story_id as string | undefined;
-      if (!storyId) return true; // no story — keep as individual task
-      if (seenStoryIds.has(storyId)) return false; // already dispatching this story
-      seenStoryIds.add(storyId);
-      return true;
-    });
-    // Replace todoForAgents with deduped for downstream processing
-    todoForAgents.length = 0;
-    todoForAgents.push(...deduped);
 
     // --- Auto-transition todo → in_progress ---
     for (const t of todoForAgents) {
@@ -131,18 +117,9 @@ export class TaskScheduler {
     this.checkEmptyRepoSafety();
 
     // --- Dependency-aware ordering ---
-    // Story grouping also applies to in_progress tasks: only the lead task should be dispatched
-    const inProgressAll = allTasks.filter(
+    const inProgressTasks = allTasks.filter(
       (t) => t.status === "in_progress" && t.owner !== "user",
     );
-    const seenStoryIdsInProgress = new Set<string>();
-    const inProgressTasks = inProgressAll.filter((t) => {
-      const storyId = (t as Record<string, unknown>).story_id as string | undefined;
-      if (!storyId) return true;
-      if (seenStoryIdsInProgress.has(storyId)) return false;
-      seenStoryIdsInProgress.add(storyId);
-      return true;
-    });
     const completedTaskIds = new Set(
       allTasks.filter((t) => t.status === "done" || t.status === "review").map((t) => t.id),
     );
