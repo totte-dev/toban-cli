@@ -678,6 +678,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           };
           // Extract COMPLETION_JSON from agent stdout
           if (!actionCtx.completionJson) {
+            let rawCompletionJson: Record<string, unknown> | null = null;
             const parsed = extractCompletionJson(runningAgent.stdout, agentTemplate.post_actions, {
               onReviewUpdate: (tid, phase, comment) => actionCtx.onReviewUpdate?.(tid, phase, comment),
               taskId: task.id,
@@ -686,9 +687,11 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
                 actionCtx.builderRecord = record;
                 actionCtx.reviewRecord = { ...actionCtx.reviewRecord, builder: record };
               },
+              onRawJson: (raw) => { rawCompletionJson = raw; },
             });
             if (parsed) {
-              actionCtx.completionJson = parsed;
+              // Use raw JSON for templates that need full data (e.g. decompose with tasks array)
+              actionCtx.completionJson = rawCompletionJson ?? parsed;
             }
           }
 

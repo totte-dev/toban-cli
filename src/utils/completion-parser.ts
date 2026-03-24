@@ -76,6 +76,8 @@ export function extractCompletionJson(
     onCompletion?: (completion: AgentCompletion) => void;
     /** Receive extracted builder_record for review_record */
     onBuilderRecord?: (record: BuilderRecord) => void;
+    /** Receive the raw parsed JSON before normalization (for templates needing full data like decompose) */
+    onRawJson?: (raw: Record<string, unknown>) => void;
   }
 ): CompletionResult | null {
   // Pass 1: stream-json result events (fallback for when no direct COMPLETION_JSON line exists)
@@ -89,6 +91,7 @@ export function extractCompletionJson(
         if (cjMatch) {
           try {
             const cj = JSON.parse(cjMatch[1]);
+            callbacks?.onRawJson?.(cj);
             const parsed = parseCompletionJson(cj);
             completion = parsed.completion;
             result = parsed.legacy;
@@ -118,6 +121,7 @@ export function extractCompletionJson(
     if (line.startsWith("COMPLETION_JSON:")) {
       try {
         const json = JSON.parse(line.slice("COMPLETION_JSON:".length));
+        callbacks?.onRawJson?.(json);
         const { completion, legacy, builderRecord } = parseCompletionJson(json);
         if (builderRecord) callbacks?.onBuilderRecord?.(builderRecord);
         injectIntoPostActions(postActions, legacy.review_comment, legacy.commits);
@@ -143,6 +147,7 @@ export function extractCompletionJson(
         const match = event.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
         if (match) {
           const json = JSON.parse(match[1]);
+          callbacks?.onRawJson?.(json);
           const { completion, legacy, builderRecord } = parseCompletionJson(json);
           if (builderRecord) callbacks?.onBuilderRecord?.(builderRecord);
           injectIntoPostActions(postActions, legacy.review_comment, legacy.commits);
