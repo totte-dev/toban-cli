@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { rebaseOntoBase, escalateConflict } from "../pipeline/git-merge.js";
+import { rebaseOntoBase, escalateConflict, handleGitMerge } from "../pipeline/git-merge.js";
 import type { ActionContext } from "../agents/agent-templates.js";
+
+vi.mock("node:child_process", () => ({ execSync: vi.fn() }));
+vi.mock("node:fs", () => ({ existsSync: vi.fn(() => false), rmSync: vi.fn() }));
+vi.mock("../services/git-ops.js", () => ({ resolveRepoRoot: vi.fn((p: string) => p) }));
+vi.mock("../services/error-logger.js", () => ({ logError: vi.fn(), CLI_ERR: { GIT_MERGE_FAILED: "GIT_MERGE_FAILED" } }));
+vi.mock("../ui.js", () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 
 describe("rebaseOntoBase", () => {
   it("returns success when rebase completes without conflict", () => {
@@ -157,5 +163,70 @@ describe("escalateConflict", () => {
     await escalateConflict(ctx, ["file.ts"], "agent/builder-abc");
 
     expect(mockUpdateTask).toHaveBeenCalled();
+  });
+});
+
+describe("handleGitMerge — merge commit message format", () => {
+  it("includes [taskId] and title in merge commit message", async () => {
+    const { execSync: mockExec } = await import("node:child_process");
+    const execMock = vi.mocked(mockExec);
+
+    // Reset mock and set up return values for the git commands sequence:
+    // 1. git log (agentCommits check) — returns commit lines
+    // 2. git diff --name-only (meaningfulFiles check) — returns a ts file
+    // 3. git checkout -- . (clean working dir)
+    // 4. git clean -fd
+    // 5. git checkout <worktreeBranch> (rebase step)
+    // 6. git rebase <baseBranch> (rebase step)
+    // 7. git rev-parse HEAD (preMergeHash)
+    // 8. git checkout <baseBranch>
+    // 9. git merge --no-ff (the commit we want to verify)
+    // 10. git rev-parse HEAD (mergeCommit)
+    // 11. git branch -D (cleanup)
+    execMock.mockReset();
+    execMock
+      .mockReturnValueOnce(Buffer.from("abc1234 some commit\n")) // git log (agentCommits)
+      .mockReturnValueOnce(Buffer.from("src/foo.ts\n"))          // git diff --name-only
+      .mockReturnValueOnce(Buffer.from(""))                       // git checkout -- .
+      .mockReturnValueOnce(Buffer.from(""))                       // git clean -fd
+      .mockReturnValueOnce(Buffer.from(""))                       // git checkout worktreeBranch (rebase)
+      .mockReturnValueOnce(Buffer.from(""))                       // git rebase baseBranch
+      .mockReturnValueOnce(Buffer.from("aabbccdd1122\n"))         // git rev-parse HEAD (preMergeHash)
+      .mockReturnValueOnce(Buffer.from(""))                       // git checkout baseBranch
+      .mockReturnValueOnce(Buffer.from(""))                       // git merge --no-ff
+      .mockReturnValueOnce(Buffer.from("eeff00112233\n"))         // git rev-parse HEAD (mergeCommit)
+      .mockReturnValueOnce(Buffer.from(""));                      // git branch -D
+
+    const mockUpdateTask = vi.fn().mockResolvedValue(undefined);
+    const ctx: ActionContext = {
+      api: { updateTask: mockUpdateTask, sendMessage: vi.fn(), recordFailure: vi.fn() } as never,
+      task: {
+        id: "aa4e081c-0000-0000-0000-000000000000",
+        title: "API側イベント自動記録",
+        description: "desc",
+        status: "in_progress",
+        priority: "p2",
+      },
+      agentName: "builder",
+      agentBranch: "agent/builder-1-aa4e081c",
+      config: {
+        apiUrl: "http://localhost:8787",
+        apiKey: "tb_test",
+        workingDir: "/repo/.worktrees/agent-builder-1-aa4e081c",
+        baseBranch: "main",
+      },
+    };
+
+    await handleGitMerge({ type: "git_merge" }, ctx, "post");
+
+    // Find the merge commit call
+    const mergeCalls = execMock.mock.calls.filter(([cmd]) =>
+      typeof cmd === "string" && cmd.includes("git merge --no-ff")
+    );
+    expect(mergeCalls).toHaveLength(1);
+    const mergeCmd = mergeCalls[0][0] as string;
+    // Should include short task ID (first 8 chars) and task title
+    expect(mergeCmd).toContain("[aa4e081c]");
+    expect(mergeCmd).toContain("API側イベント自動記録");
   });
 });
