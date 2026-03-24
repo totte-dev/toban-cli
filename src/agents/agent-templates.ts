@@ -70,6 +70,9 @@ export interface AgentTemplate {
 // Default templates (system-defined)
 // ---------------------------------------------------------------------------
 
+/** Cache timestamp for git_auth_check (avoid repeated ls-remote calls) */
+let _lastGitAuthOk = 0;
+
 const DEFAULT_TEMPLATES: AgentTemplate[] = [
   {
     id: "story-implementation",
@@ -586,22 +589,27 @@ export async function executeActions(
           break;
         }
         case "git_auth_check": {
+          // Cache successful auth checks for 5 minutes to avoid repeated ls-remote calls
+          const now = Date.now();
+          if (_lastGitAuthOk && now - _lastGitAuthOk < 300_000) {
+            ui.info(`[${phase}] ${label}: cached ok`);
+            break;
+          }
           const exec = execSync;
           try {
-            // Use ls-remote without --exit-code (empty repos return exit 2 with --exit-code)
             exec("git ls-remote origin", {
               cwd: ctx.config.workingDir,
               stdio: "pipe",
               timeout: 15_000,
             });
+            _lastGitAuthOk = now;
             ui.info( `[${phase}] ${label}: ok`);
           } catch (authErr) {
             const msg = authErr instanceof Error ? authErr.message : String(authErr);
-            // 403/401 = auth failure, other errors might be network
             if (msg.includes("403") || msg.includes("401") || msg.includes("denied")) {
+              _lastGitAuthOk = 0;
               throw new Error(`Git auth check failed — push will not work. Fix credentials before spawning agent.\n${msg.slice(0, 200)}`);
             }
-            // Non-auth errors (empty repo, network timeout) — warn but continue
             ui.warn(`[${phase}] ${label}: ${msg.slice(0, 100)} (continuing anyway)`);
           }
           break;

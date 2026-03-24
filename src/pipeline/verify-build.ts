@@ -139,9 +139,18 @@ export async function handleVerifyBuild(
     }
   } catch { /* diff check failed, continue with build */ }
 
-  // Install dependencies (detect package manager from lockfile)
+  // Install dependencies only if node_modules is missing or package.json changed in this commit
   const pkgJsonPath = join(repoDir, "package.json");
-  if (existsSync(pkgJsonPath)) {
+  const nodeModulesPath = join(repoDir, "node_modules");
+  const needsInstall = existsSync(pkgJsonPath) && (!existsSync(nodeModulesPath) || (() => {
+    try {
+      const changed = execSync("git diff HEAD~1..HEAD --name-only", { cwd: repoDir, stdio: "pipe", timeout: 5000 })
+        .toString().trim().split("\n");
+      return changed.some((f) => f === "package.json" || f === "package-lock.json" || f === "yarn.lock" || f === "pnpm-lock.yaml");
+    } catch { return false; }
+  })());
+
+  if (needsInstall) {
     const { detectInstallCommand } = await import("../utils/detect-package-manager.js");
     const installCmd = detectInstallCommand(repoDir) || "npm install";
     ui.info(`[${phase}] ${label}: installing dependencies (${installCmd})...`);
@@ -156,6 +165,8 @@ export async function handleVerifyBuild(
       ctx.taskLog?.event("action_error", { action: "verify_build", label, error: `Install failed: ${detail.slice(0, 200)}` });
       return;
     }
+  } else if (existsSync(pkgJsonPath)) {
+    ui.info(`[${phase}] ${label}: node_modules exists, no lockfile changes — skipping install`);
   }
 
   // Build
