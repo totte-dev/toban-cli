@@ -410,9 +410,39 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const apiDocs = await api.fetchApiDocs(agentRole);
       const taskType = task.type as string | undefined;
       const taskLabels = parseTaskLabels(task);
-      const agentTemplate = matchTemplate(taskType, agentRole);
+
+      // Story mode: detect if task has story_id and fetch sibling tasks
+      const taskStoryId = (task as Record<string, unknown>).story_id as string | undefined;
+      let storyTasks: Task[] = [];
+      let isStoryMode = false;
+      if (taskStoryId && !isMetaTask) {
+        try {
+          const siblingRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${taskStoryId}/tasks`, {
+            headers: { Authorization: `Bearer ${cliArgs.apiKey}` },
+          });
+          if (siblingRes.ok) {
+            const siblingData = (await siblingRes.json()) as Task[] | { tasks: Task[] };
+            storyTasks = (Array.isArray(siblingData) ? siblingData : siblingData.tasks || [])
+              .filter((t) => t.status !== "cancelled" && t.status !== "done");
+            isStoryMode = storyTasks.length > 1;
+          }
+        } catch { /* non-fatal, fall back to single task mode */ }
+        if (isStoryMode) {
+          ui.info(`[task] Story mode: ${storyTasks.length} tasks for story ${taskStoryId.slice(0, 8)}`);
+          // Mark all sibling tasks as in_progress
+          for (const sibling of storyTasks) {
+            if (sibling.id === task.id) continue;
+            try {
+              await api.updateTask(sibling.id, { status: "in_progress" } as Partial<Task>);
+              ctx.wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity: "task", task_id: sibling.id, changes: { status: "in_progress" }, timestamp: new Date().toISOString() });
+            } catch { /* non-fatal */ }
+          }
+        }
+      }
+
+      const agentTemplate = matchTemplate(taskType, agentRole, undefined, isStoryMode);
       const isReadOnly = agentTemplate.tools !== "all";
-      ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}`);
+      ui.info(`[task] Template: "${agentTemplate.id}"${isReadOnly ? ` (read-only: ${(agentTemplate.tools as string[]).join(", ")})` : ""}${isStoryMode ? ` (story: ${storyTasks.length} tasks)` : ""}`);
 
       // Restore persisted conflict retry count from context_notes (survives CLI restart)
       const conflictRetryMatch = ((task.context_notes as string) || "").match(/\[conflict_retries:(\d+)\]/);
@@ -426,6 +456,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       const actionCtx: ActionContext = {
         api, task, agentName, template: agentTemplate, taskLog, jobQueue,
+        ...(isStoryMode ? { storyTasks } : {}),
         config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: taskWorkingDir, baseBranch: cliArgs.baseBranch, sprintNumber: sprintData.sprint.number, language: ctx.language, engine: cliArgs.engine, agentEngine: agentInfo?.engine, buildCommand: workspaceBuildCommand, testCommand: workspaceTestCommand, guardrailConfig, autoMode: cliArgs.autoMode },
         onDataUpdate: (entity, id, changes) => {
           ctx.wsServer?.broadcast({
@@ -499,7 +530,29 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const contextNotes = task.context_notes as string | undefined;
       const { getPromptDescription } = await import("../utils/task-description.js");
       const parsedDesc = getPromptDescription(task.description as string | undefined);
-      const fullDescription = [parsedDesc, contextNotes].filter(Boolean).join("\n\n") || undefined;
+      let fullDescription = [parsedDesc, contextNotes].filter(Boolean).join("\n\n") || undefined;
+
+      // Story mode: build description with all tasks
+      if (isStoryMode && storyTasks.length > 0) {
+        const storyTasksBlock = storyTasks.map((t, i) => {
+          const ac = parseJsonArray((t as Record<string, unknown>).acceptance_criteria) || [];
+          const files = parseJsonArray((t as Record<string, unknown>).files_hint) || [];
+          const steps = parseJsonArray((t as Record<string, unknown>).steps) || [];
+          return [
+            `### Task ${i + 1}: ${t.title}`,
+            ...(ac.length > 0 ? [`**Acceptance Criteria:**`, ...ac.map((a) => `- ${a}`)] : []),
+            ...(files.length > 0 ? [`**Files:** ${files.join(", ")}`] : []),
+            ...(steps.length > 0 ? [`**Steps:** ${steps.join("; ")}`] : []),
+          ].join("\n");
+        }).join("\n\n");
+
+        fullDescription = [
+          storyTitle ? `## Story: ${storyTitle}` : undefined,
+          storyDescription || undefined,
+          "\n## Tasks to implement (in order)\n",
+          storyTasksBlock,
+        ].filter(Boolean).join("\n");
+      }
 
       // Fetch past failures for prompt injection
       let pastFailures: Array<{ summary: string; failure_type: string; agent_name: string | null }> = [];
@@ -530,29 +583,29 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         taskLog.event("previous_review_injected", { preview: previousReview.slice(0, 200) });
       }
 
-      // Fetch Story info for decompose tasks
+      // Fetch Story info for decompose tasks or story-mode
       let storyTitle: string | undefined;
       let storyDescription: string | undefined;
       let storyFeedback: string | undefined;
-      if (taskType === "decompose") {
-        const storyIdMatch = (task.description || "").match(/story_id:([a-f0-9-]+)/);
-        if (storyIdMatch) {
-          try {
-            const storyRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${storyIdMatch[1]}`, {
-              headers: { Authorization: `Bearer ${cliArgs.apiKey}` },
-            });
-            if (storyRes.ok) {
-              const story = (await storyRes.json()) as { title: string; description: string; feedback?: string };
-              storyTitle = story.title;
-              storyDescription = story.description;
-              storyFeedback = story.feedback || undefined;
-            }
-          } catch { /* use task title/description as fallback */ }
-        }
-        if (!storyTitle) {
-          storyTitle = task.title;
-          storyDescription = task.description || "";
-        }
+      const storyIdForFetch = taskType === "decompose"
+        ? (task.description || "").match(/story_id:([a-f0-9-]+)/)?.[1]
+        : taskStoryId;
+      if (storyIdForFetch) {
+        try {
+          const storyRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${storyIdForFetch}`, {
+            headers: { Authorization: `Bearer ${cliArgs.apiKey}` },
+          });
+          if (storyRes.ok) {
+            const story = (await storyRes.json()) as { title: string; description: string; feedback?: string };
+            storyTitle = story.title;
+            storyDescription = story.description;
+            storyFeedback = story.feedback || undefined;
+          }
+        } catch { /* use task title/description as fallback */ }
+      }
+      if (taskType === "decompose" && !storyTitle) {
+        storyTitle = task.title;
+        storyDescription = task.description || "";
       }
 
       const prompt = buildAgentPrompt({

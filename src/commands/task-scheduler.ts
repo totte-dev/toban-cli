@@ -92,6 +92,20 @@ export class TaskScheduler {
       (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && (t.review_verdict !== "ERROR" || PLANNING_SAFE_TYPES.includes(t.type as string)) && t.category !== "destructive" && (t.type === "decompose" || hasStructuredDetails(t)) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
     );
 
+    // --- Story grouping: only dispatch one task per story_id ---
+    // The run-loop will fetch all sibling tasks and pass them to the agent
+    const seenStoryIds = new Set<string>();
+    const deduped = todoForAgents.filter((t) => {
+      const storyId = (t as Record<string, unknown>).story_id as string | undefined;
+      if (!storyId) return true; // no story — keep as individual task
+      if (seenStoryIds.has(storyId)) return false; // already dispatching this story
+      seenStoryIds.add(storyId);
+      return true;
+    });
+    // Replace todoForAgents with deduped for downstream processing
+    todoForAgents.length = 0;
+    todoForAgents.push(...deduped);
+
     const tasksToSplit = todoForAgents.filter((t) => shouldSplit(t, 8));
     if (tasksToSplit.length > 0) {
       const sprintNum = allTasks[0]?.sprint as number | undefined;

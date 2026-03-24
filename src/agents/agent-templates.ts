@@ -28,7 +28,7 @@ import { handleRuleMatch } from "../pipeline/rule-match.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline" | "rule_match";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline" | "rule_match" | "save_decomposition" | "complete_story_tasks";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -71,6 +71,54 @@ export interface AgentTemplate {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_TEMPLATES: AgentTemplate[] = [
+  {
+    id: "story-implementation",
+    name: "Story Implementation (multi-task)",
+    match: {
+      // Matched explicitly by run-loop when story_id is present, not by task_types
+    },
+    tools: "all",
+    allow_no_commit_completion: true,
+    pre_actions: [
+      { type: "git_auth_check", label: "Verify git push credentials" },
+      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
+      { type: "fetch_recent_changes", label: "Fetch recent changes from other agents" },
+      { type: "update_task", params: { status: "in_progress" }, label: "Mark lead task in_progress" },
+      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
+    ],
+    post_actions: [
+      { type: "collect_memory", when: "success", label: "Collect agent memory" },
+      { type: "record_changes", when: "success", label: "Record change summary for other agents" },
+      { type: "merge_pipeline", when: "success", label: "Merge, verify build, push" },
+      { type: "rule_match", when: "success", label: "Match diff against playbook rules" },
+      { type: "complete_story_tasks", when: "success", label: "Mark all story tasks as done" },
+      { type: "submit_retro", when: "success", label: "Submit retrospective" },
+      { type: "update_agent", params: { status: "idle", activity: "Story completed" }, when: "success", label: "Report agent idle" },
+      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer for story review (async)" },
+      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset lead task to todo on failure" },
+      { type: "notify_user", params: { message: "⚠️ Story \"{{taskTitle}}\" {{status}}" }, when: "failure", label: "Notify user of failure" },
+      { type: "update_agent", params: { status: "idle", activity: "Story failed" }, when: "failure", label: "Report agent idle" },
+    ],
+    prompt: {
+      completion: `IMPORTANT: You are implementing a STORY — a set of related tasks that together form a coherent feature. Implement ALL tasks listed below in order, committing after each task.
+
+## How to work
+1. Read the codebase to understand the architecture
+2. Implement each task in order, committing after each one
+3. Each commit message should reference the task: "feat: <task title>"
+4. Run build and tests after EACH commit to catch issues early
+5. After ALL tasks are done, output the completion report
+
+Do NOT run git push — the CLI will handle pushing after you finish.
+Do NOT call curl or any API endpoints directly — the CLI handles all API communication.
+
+## Completion
+After implementing ALL tasks, output on a new line:
+COMPLETION_JSON:{"review_comment":"<detailed summary of all changes>","commits":"<comma-separated commit hashes from git log --format=%H origin/HEAD..HEAD>","builder_record":{"intent":"<story-level intent>","changes_summary":["<change 1>","<change 2>"],"risks":["<risk 1>"]}}
+
+review_comment MUST cover ALL tasks and include: **Why**, **What**, **Files**, **Decisions**, **Testing** sections.`,
+    },
+  },
   {
     id: "implementation",
     name: "Implementation (default)",
@@ -366,9 +414,16 @@ COMPLETION_JSON:{"verdict":"APPROVE or NEEDS_CHANGES","requirement_match":"met/p
 export function matchTemplate(
   taskType?: string,
   role?: string,
-  templates?: AgentTemplate[]
+  templates?: AgentTemplate[],
+  storyMode?: boolean,
 ): AgentTemplate {
   const list = templates ?? DEFAULT_TEMPLATES;
+
+  // 0. Story mode — use story-implementation template
+  if (storyMode) {
+    const storyTemplate = list.find((t) => t.id === "story-implementation");
+    if (storyTemplate) return storyTemplate;
+  }
 
   // 1. Match by task type (most specific)
   if (taskType) {
@@ -472,6 +527,8 @@ export interface ActionContext {
   agentStderr?: string[];
   /** Job queue for enrich/review jobs (if available) */
   jobQueue?: import("../services/job-queue.js").JobQueue;
+  /** Sibling tasks in the same Story (for story-implementation template) */
+  storyTasks?: Task[];
 }
 
 /**
@@ -737,6 +794,23 @@ export async function executeActions(
         }
         case "record_changes": {
           await handleRecordChanges(action, ctx, phase);
+          break;
+        }
+        case "complete_story_tasks": {
+          // Mark all sibling tasks in the story as done (+ review status)
+          const siblings = ctx.storyTasks ?? [];
+          for (const sibling of siblings) {
+            if (sibling.id === ctx.task.id) continue; // lead task handled by update_task
+            try {
+              await ctx.api.updateTask(sibling.id, { status: "review" } as Partial<Task>);
+              ctx.onDataUpdate?.("task", sibling.id, { status: "review" });
+              ui.info(`[${phase}] ${label}: ${sibling.id.slice(0, 8)} → review`);
+            } catch { /* non-fatal */ }
+          }
+          // Also move lead task to review
+          await ctx.api.updateTask(ctx.task.id, { status: "review" } as Partial<Task>);
+          ctx.onDataUpdate?.("task", ctx.task.id, { status: "review" });
+          ui.info(`[${phase}] ${label}: ${siblings.length + 1} tasks → review`);
           break;
         }
         case "verify_build": {
