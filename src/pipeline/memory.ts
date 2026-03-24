@@ -98,13 +98,22 @@ export async function handleInjectMemory(
   }
 
 
-  // Mark CLAUDE.md as assume-unchanged so inject_memory additions don't get committed
-  // Agent can still read the file, but git won't track the memory block changes
+  // Prevent CLAUDE.md memory changes from being committed by the agent.
+  // Use .git/info/exclude (works in worktrees, unlike assume-unchanged)
   if (injected > 0 && hasClaudeMd) {
     try {
-      const { execSync: gitExec2 } = await import("node:child_process");
-      gitExec2("git update-index --assume-unchanged CLAUDE.md", { cwd: ctx.config.workingDir, stdio: "pipe" });
-    } catch { /* non-fatal — worktree may not support this */ }
+      const gitDir = (() => {
+        const { execSync: gitExec2 } = require("node:child_process") as typeof import("node:child_process");
+        return gitExec2("git rev-parse --git-dir", { cwd: ctx.config.workingDir, stdio: "pipe" }).toString().trim();
+      })();
+      const excludePath = path.join(ctx.config.workingDir, gitDir, "info", "exclude");
+      const excludeDir = path.dirname(excludePath);
+      if (!fs.existsSync(excludeDir)) fs.mkdirSync(excludeDir, { recursive: true });
+      const excludeContent = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, "utf-8") : "";
+      if (!excludeContent.includes("CLAUDE.md")) {
+        fs.appendFileSync(excludePath, "\nCLAUDE.md\n");
+      }
+    } catch { /* non-fatal */ }
   }
 
   if (injected > 0 || !hasClaudeMd) {
