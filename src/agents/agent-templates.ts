@@ -7,7 +7,7 @@
  */
 
 import { execSync } from "node:child_process";
-import type { ApiClient, Task } from "../services/api-client.js";
+import { fetchWithRetry, type ApiClient, type Task } from "../services/api-client.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../services/error-logger.js";
 import type { GuardrailConfig } from "../utils/guardrail.js";
