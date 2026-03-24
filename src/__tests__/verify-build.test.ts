@@ -84,7 +84,7 @@ describe("verify_build action", () => {
     // Calls: guardrail diff, build, scoped-test diff (changed files), test command
     const cmds = execSyncMock.mock.calls.map((c: unknown[]) => c[0]);
     expect(cmds.some((c: string) => c.includes("git diff") && c.includes("--stat"))).toBe(true);
-    expect(cmds).toContain("npm run build");
+    expect(cmds).toContain("npm run typecheck --if-present");
     // Test command may be scoped (npx vitest run ...) or fallback (npm test)
     expect(cmds.some((c: string) => c.includes("test") || c.includes("vitest"))).toBe(true);
     expect(ctx.api.recordFailure).not.toHaveBeenCalled();
@@ -119,7 +119,7 @@ describe("verify_build action", () => {
       status: 1,
     });
     execSyncMock.mockImplementation((cmd: string) => {
-      if (cmd.includes("build")) throw buildError;
+      if (cmd.includes("typecheck")) throw buildError;
       return Buffer.from("ok");
     });
     const ctx = createCtx();
@@ -230,7 +230,7 @@ describe("verify_build action", () => {
     expect(ctx.exitCode).toBe(0);
     const cmds = execSyncMock.mock.calls.map((c: unknown[]) => c[0]);
     expect(cmds).toContain("npm ci");
-    expect(cmds).toContain("npm run build");
+    expect(cmds).toContain("npm run typecheck --if-present");
   });
 
   it("runs npm install when package.json exists but no lockfile", async () => {
@@ -272,7 +272,7 @@ describe("verify_build action", () => {
 
     expect(ctx.exitCode).toBe(0);
     const cmds = execSyncMock.mock.calls.map((c: unknown[]) => c[0]);
-    expect(cmds).toContain("npm run build");
+    expect(cmds).toContain("npm run typecheck --if-present");
     // No npm ci or npm install
     expect(cmds.every((c: string) => !c.startsWith("npm ci") && !c.startsWith("npm install"))).toBe(true);
   });
@@ -290,7 +290,7 @@ describe("verify_build action", () => {
       stderr: Buffer.from("error"), stdout: Buffer.from(""),
     });
     execSyncMock.mockImplementation((cmd: string) => {
-      if (cmd.includes("build")) throw buildError;
+      if (cmd.includes("typecheck")) throw buildError;
       return Buffer.from("ok");
     });
 

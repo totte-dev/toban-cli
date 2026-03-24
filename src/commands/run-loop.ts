@@ -211,7 +211,8 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   } catch { /* non-fatal — use defaults */ }
 
   // --- Startup health check: verify main branch before dispatching tasks ---
-  const healthCheckBuildCmd = workspaceBuildCommand || "npm run build";
+  // Use typecheck instead of full build — faster, no cache issues, catches real errors
+  const healthCheckBuildCmd = workspaceBuildCommand || "npm run typecheck --if-present";
   const healthCheckTestCmd = workspaceTestCommand || "npm test";
   const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000; // re-check every 5 minutes
 

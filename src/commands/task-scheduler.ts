@@ -89,7 +89,7 @@ export class TaskScheduler {
     // During planning phase, only meta-tasks (decompose, research, etc.) are allowed
     const isPlanning = sprintStatus === "planning";
     const todoForAgents = allTasks.filter(
-      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && t.review_verdict !== "ERROR" && t.category !== "destructive" && (t.type === "decompose" || hasStructuredDetails(t)) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
+      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && (t.review_verdict !== "ERROR" || PLANNING_SAFE_TYPES.includes(t.type as string)) && t.category !== "destructive" && (t.type === "decompose" || hasStructuredDetails(t)) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
     );
 
     const tasksToSplit = todoForAgents.filter((t) => shouldSplit(t, 8));
@@ -115,7 +115,14 @@ export class TaskScheduler {
     for (const t of todoForAgents) {
       if ((t.status as string) === "blocked") continue;
       try {
-        await api.updateTask(t.id, { status: "in_progress" } as Partial<Task>);
+        // Clear ERROR verdict for meta-tasks being retried
+        const patch: Partial<Task> = { status: "in_progress" } as Partial<Task>;
+        if (t.review_verdict === "ERROR" && PLANNING_SAFE_TYPES.includes(t.type as string)) {
+          (patch as Record<string, unknown>).review_verdict = null;
+          (patch as Record<string, unknown>).review_comment = null;
+          ui.info(`[auto] ${t.id.slice(0, 8)}: clearing ERROR verdict for meta-task retry`);
+        }
+        await api.updateTask(t.id, patch);
         t.status = "in_progress" as Task["status"];
         ui.info(`[auto] ${t.owner}/${t.id.slice(0, 8)}: todo → in_progress`);
         wsServer?.broadcast({

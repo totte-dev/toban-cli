@@ -112,7 +112,8 @@ export async function handleVerifyBuild(
   const label = _action.label ?? "verify_build";
   const repoDir = resolveRepoRoot(ctx.config.workingDir);
   // Builder-specified commands take priority over workspace defaults
-  const buildCmd = ctx.completionJson?.build_command || ctx.config.buildCommand || "npm run build";
+  // Use typecheck instead of full build — faster, no .next cache issues, catches real type errors
+  const buildCmd = ctx.completionJson?.build_command || ctx.config.buildCommand || "npm run typecheck --if-present";
   const testCmd = ctx.completionJson?.test_command || ctx.config.testCommand || "npm test";
   const timeout = 180_000; // 3 minutes per command
 

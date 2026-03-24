@@ -263,6 +263,7 @@ COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>
     ],
     post_actions: [
       { type: "save_decomposition", when: "success", label: "Save decomposition to API" },
+      { type: "update_task", params: { status: "done" }, when: "success", label: "Mark decompose task done" },
       { type: "update_agent", params: { status: "idle", activity: "Decomposition complete" }, when: "success", label: "Report agent idle" },
       { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
       { type: "update_agent", params: { status: "idle", activity: "Decomposition failed" }, when: "failure", label: "Report agent idle" },
@@ -598,7 +599,8 @@ export async function executeActions(
           }
 
           if (!decomp.tasks?.length) {
-            ui.warn(`[${phase}] ${label}: no tasks in decomposition`);
+            ui.warn(`[${phase}] ${label}: no tasks in decomposition — treating as failure`);
+            ctx.exitCode = 1; // Trigger failure path so task is reset to todo, not marked done
             break;
           }
           // Extract story_id from task description (injected by Dashboard when creating decompose task)
@@ -658,6 +660,14 @@ export async function executeActions(
                 body: JSON.stringify({ status: "ready" }),
               });
             } catch { /* non-fatal */ }
+          }
+
+          // Notify dashboard so Plan View refreshes
+          for (const tid of taskIds) {
+            ctx.onDataUpdate?.("task", tid, { status: "todo" });
+          }
+          if (storyId) {
+            ctx.onDataUpdate?.("story", storyId, { status: "ready" });
           }
 
           ui.info(`[${phase}] ${label}: ${created}/${decomp.tasks.length} tasks created${storyId ? ` for story ${storyId.slice(0, 8)}` : ""}`);
