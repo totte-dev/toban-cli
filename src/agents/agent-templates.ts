@@ -805,17 +805,31 @@ export async function executeActions(
           break;
         }
         case "complete_story_tasks": {
-          // Mark all sibling tasks in the story as done (+ review status)
+          // If no commits were made, don't promote tasks — reset to todo instead
+          if (ctx.mergeSkipped) {
+            ui.warn(`[${phase}] ${label}: no commits — resetting all story tasks to todo`);
+            const siblings = ctx.storyTasks ?? [];
+            for (const sibling of siblings) {
+              try {
+                await ctx.api.updateTask(sibling.id, { status: "todo" } as Partial<Task>);
+                ctx.onDataUpdate?.("task", sibling.id, { status: "todo" });
+              } catch { /* non-fatal */ }
+            }
+            await ctx.api.updateTask(ctx.task.id, { status: "todo" } as Partial<Task>);
+            ctx.onDataUpdate?.("task", ctx.task.id, { status: "todo" });
+            ctx.exitCode = 1; // trigger failure path
+            break;
+          }
+          // Mark all sibling tasks in the story as review
           const siblings = ctx.storyTasks ?? [];
           for (const sibling of siblings) {
-            if (sibling.id === ctx.task.id) continue; // lead task handled by update_task
+            if (sibling.id === ctx.task.id) continue;
             try {
               await ctx.api.updateTask(sibling.id, { status: "review" } as Partial<Task>);
               ctx.onDataUpdate?.("task", sibling.id, { status: "review" });
               ui.info(`[${phase}] ${label}: ${sibling.id.slice(0, 8)} → review`);
             } catch { /* non-fatal */ }
           }
-          // Also move lead task to review
           await ctx.api.updateTask(ctx.task.id, { status: "review" } as Partial<Task>);
           ctx.onDataUpdate?.("task", ctx.task.id, { status: "review" });
           ui.info(`[${phase}] ${label}: ${siblings.length + 1} tasks → review`);
