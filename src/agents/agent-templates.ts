@@ -254,24 +254,27 @@ COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>
     match: {
       roles: ["reviewer"],
     },
-    tools: ["Read", "Grep", "Glob", "Bash", "Agent"],
+    tools: ["Read", "Grep", "Glob", "Bash"],
     pre_actions: [],
     post_actions: [],
     prompt: {
-      mode_header: "## REVIEW MODE — Analyze code changes, run tests, report verdict. Do NOT modify any files.",
-      completion: `You are reviewing code changes for a task. You have LIMITED TURNS — be fast and direct.
+      mode_header: "## REVIEW MODE — Analyze code changes ONLY. Do NOT run tests, do NOT modify files.",
+      completion: `You are reviewing code changes for a task. Tests have ALREADY PASSED in verify_build. Your job is CODE REVIEW ONLY.
 
-## Step 1 (Turn 1): Run these two commands immediately
+You have LIMITED TURNS (max 5) — be fast and direct. Do NOT run tests.
+
+## Step 1 (Turn 1): Read the diff
 - git diff {{diffRef}} --stat
-- {{testCommand}} 2>&1 | tail -20
+- git diff {{diffRef}}
 
-## Step 2 (Turn 2-3): Quick analysis
-- If tests failed → verdict is NEEDS_CHANGES, skip to Step 3
-- If diff is empty or metadata-only → verdict is NEEDS_CHANGES, skip to Step 3
-- Glance at changed files — do they match the task description?
+## Step 2 (Turn 2): Quick analysis
+- If diff is empty or metadata-only → verdict is NEEDS_CHANGES
+- Do the changes match the task description?
+- Code quality: readability, security, error handling
+- Are there obvious bugs or missing edge cases?
 
 ## Step 3: Output verdict IMMEDIATELY
-Output COMPLETION_JSON right now. Do NOT do more analysis. Do NOT read additional files.
+Output COMPLETION_JSON right now. Do NOT read additional files. Do NOT run tests.
 
 ## Review Criteria
 {{reviewCriteria}}

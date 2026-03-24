@@ -136,11 +136,10 @@ Description: ${ctx.task.description || "(no description)"}
 The Builder agent reported NO CODE CHANGES were needed:
 "${ctx.completionJson.review_comment}"
 
-Verify this claim:
+Verify this claim (do NOT run tests — they have already passed in verify_build):
 1. Check if the task requirements are actually already met in the codebase
-2. Run tests if applicable (${ctx.config.testCommand || "npm test"})
-3. If the agent's claim is correct and the task is truly complete, verdict = APPROVE
-4. If the task is NOT actually complete, verdict = NEEDS_CHANGES with explanation
+2. If the agent's claim is correct and the task is truly complete, verdict = APPROVE
+3. If the task is NOT actually complete, verdict = NEEDS_CHANGES with explanation
 
 ${customRules}
 
