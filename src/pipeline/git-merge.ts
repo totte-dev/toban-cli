@@ -250,7 +250,9 @@ export async function handleGitMerge(
       // Record pre-merge hash for accurate diff in reviewer
       try { ctx.preMergeHash = gitExec("git rev-parse HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(); } catch { /* non-fatal */ }
       gitExec(`git checkout "${baseBranch}"`, { cwd: repoDir, stdio: "pipe" });
-      gitExec(`git merge --no-ff "${worktreeBranch}" -m "merge: ${worktreeBranch}"`, { cwd: repoDir, stdio: "pipe" });
+      const taskShortId = ctx.task.id.slice(0, 8);
+      const mergeMsg = `merge: [${taskShortId}] ${ctx.task.title}`;
+      gitExec(`git merge --no-ff "${worktreeBranch}" -m "${mergeMsg}"`, { cwd: repoDir, stdio: "pipe" });
       // Record merge commit hash — reviewer should use preMergeHash..mergeCommit (not ..HEAD)
       try { ctx.mergeCommit = gitExec("git rev-parse HEAD", { cwd: repoDir, stdio: "pipe" }).toString().trim(); } catch { /* non-fatal */ }
       ui.info( `[${phase}] ${label}: merged ${worktreeBranch}`);
