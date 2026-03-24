@@ -168,6 +168,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   const scheduler = new SlotScheduler([
     { role: "builder", maxConcurrency: 2 },
     { role: "cloud-engineer", maxConcurrency: 1 },
+    { role: "strategist", maxConcurrency: 1 },
   ]);
 
   // Fetch plan limits and reconfigure scheduler
