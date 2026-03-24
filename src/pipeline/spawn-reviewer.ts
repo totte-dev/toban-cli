@@ -190,9 +190,9 @@ Output ONLY JSON (no markdown):
 
   // Use agent's DB engine setting for model resolution (respects dashboard config)
   const reviewerModel = resolveModelForRole("reviewer", ctx.config.agentEngine);
-  // maxTurns=1: diff is included in prompt, no tool use needed
+  // Diff is included in prompt but Claude may still use tools to verify — allow 3 turns
   const reviewResult = await spawnClaudeOnce(fullPrompt, {
-    model: reviewerModel, role: "reviewer", maxTurns: 1, timeout: TIMEOUTS.REVIEWER, cwd: reviewRepoDir,
+    model: reviewerModel, role: "reviewer", maxTurns: 3, timeout: TIMEOUTS.REVIEWER, cwd: reviewRepoDir,
   });
 
   // Parse COMPLETION_JSON from reviewer output (supports COMPLETION_JSON: prefix and ```json blocks)
