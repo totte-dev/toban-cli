@@ -138,15 +138,16 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     } else if (job.type === "review") {
       const { handleSpawnReviewer } = await import("../pipeline/spawn-reviewer.js");
       // Build minimal ActionContext for the reviewer
+      const reviewJob = job as import("../types.js").ReviewJob;
       const reviewCtx = {
         api,
         task: sprintData.tasks.find((t) => t.id === job.taskId) || { id: job.taskId, title: "Review", status: "review" } as any,
         agentName: "reviewer",
-        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: repos[0]?.path || process.cwd(), baseBranch: "main" },
+        config: { apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey, workingDir: reviewJob.repoDir || ctx.workingDir, baseBranch: "main" },
         exitCode: 0,
-        preMergeHash: (job as any).preMergeHash,
-        mergeCommit: (job as any).mergeCommit,
-        retroJson: (job as any).retroJson ? JSON.parse((job as any).retroJson) : undefined,
+        preMergeHash: reviewJob.preMergeHash,
+        mergeCommit: reviewJob.mergeCommit,
+        retroJson: reviewJob.retroJson ? JSON.parse(reviewJob.retroJson) : undefined,
       };
       await handleSpawnReviewer({ type: "spawn_reviewer", when: "success", label: "Review" }, reviewCtx as any, "post", []);
     }

@@ -107,4 +107,8 @@ export interface ReviewJob extends JobBase {
   retroJson?: string;
   /** Pre-merge commit hash */
   preMergeHash?: string;
+  /** Post-merge commit hash */
+  mergeCommit?: string;
+  /** Filesystem path of the repo where merge was performed */
+  repoDir?: string;
 }

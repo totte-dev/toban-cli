@@ -514,6 +514,7 @@ export async function executeActions(
               retroJson: ctx.retroJson ? JSON.stringify(ctx.retroJson) : undefined,
               preMergeHash: ctx.preMergeHash,
               mergeCommit: ctx.mergeCommit,
+              repoDir: ctx.config.workingDir,
             });
             ui.info(`[${phase}] ${label}: enqueued review job`);
           } else {
