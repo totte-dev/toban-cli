@@ -54,6 +54,36 @@ CLI starts → setup.ts (workspace, repos, Manager, WS server)
 - **Credential helper**: ~/.toban/git-credential-helper.sh fetches fresh GitHub App tokens
 - **Manager prompts**: prompts/templates.ts — edit here to change Manager behavior
 
+## Code Index (key files and exports)
+
+### Core Flow: cli.ts → setup.ts → commands/run-loop.ts → agents/agent-templates.ts → agents/runner.ts → pipeline/*
+
+| File | Key Exports | Responsibility |
+|------|-------------|----------------|
+| `agents/agent-templates.ts` | `matchTemplate()`, `executeActions()`, `ActionContext` | Template definitions, pre/post action execution |
+| `agents/prompt.ts` | `buildAgentPrompt()`, `PromptContext` | Agent prompt builder (role, spec, rules) |
+| `agents/runner.ts` | `AgentRunner` | Agent lifecycle (spawn, monitor, stream output) |
+| `agents/spawner.ts` | `spawnAgent()`, `createWorktree()` | Low-level process spawning + worktree |
+| `agents/agent-engine.ts` | `AgentEngineProvider`, `resolveModelForRole()` | Engine abstraction (Claude, Codex, Gemini) |
+| `commands/run-loop.ts` | `runLoop()` | Main task execution loop, story-mode dispatch |
+| `commands/task-scheduler.ts` | `TaskScheduler` | Task filtering, story grouping, slot assignment |
+| `commands/sprint-controller.ts` | `SprintController` | Sprint state management |
+| `pipeline/merge-pipeline.ts` | `handleMergePipeline()` | git_merge → verify_build → git_push (idempotent) |
+| `pipeline/verify-build.ts` | `handleVerifyBuild()` | typecheck + full test verification |
+| `pipeline/git-merge.ts` | `handleGitMerge()` | Git merge with rebase + conflict retry |
+| `pipeline/spawn-reviewer.ts` | `handleSpawnReviewer()` | Async reviewer agent spawning |
+| `pipeline/memory.ts` | `handleInjectMemory()`, `handleCollectMemory()` | Agent memory injection/collection |
+| `pipeline/context-sharing.ts` | `handleFetchRecentChanges()`, `handleRecordChanges()` | Peer agent context sharing |
+| `channel/ws-server.ts` | `WsChatServer` | WebSocket server for browser-CLI communication |
+| `services/api-client.ts` | `createApiClient()`, `ApiClient`, `Task` | REST client for Toban API |
+| `services/git-ops.ts` | `setupGitCredentialHelper()`, `resolveRepoRoot()` | Git operations (credential, clone, fetch) |
+| `services/slot-scheduler.ts` | `SlotScheduler` | Agent slot allocation |
+| `services/job-queue.ts` | `JobQueue` | Unified job queue (enrich, review) |
+| `utils/completion-parser.ts` | `extractCompletionJson()` | Parse COMPLETION_JSON from agent output |
+| `utils/main-health-check.ts` | `runHealthCheck()` | Main branch health verification |
+| `utils/pipeline-state.ts` | `loadPipelineState()`, `savePipelineState()` | Idempotent pipeline step persistence |
+| `utils/guardrail.ts` | `buildGuardrailRules()`, `checkDiffViolations()` | Diff guardrail rules |
+
 ## Commands
 
 ```bash
