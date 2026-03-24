@@ -225,11 +225,10 @@ export async function handleVerifyBuild(
   if (!hasTestScript) {
     ui.info(`[${phase}] ${label}: no test script in package.json — skipping tests`);
   } else {
-    // Detect changed files and find related test files
-    const scopedTestCmd = effectiveTestDir !== repoDir ? effectiveTestCmd : buildScopedTestCommand(repoDir, effectiveTestCmd);
-    ui.info(`[${phase}] ${label}: running tests (${scopedTestCmd}) in ${effectiveTestDir === repoDir ? "root" : effectiveTestDir.split("/").pop()}...`);
+    // Always run full test suite — scoped tests miss failures in related test files
+    ui.info(`[${phase}] ${label}: running tests (${effectiveTestCmd}) in ${effectiveTestDir === repoDir ? "root" : effectiveTestDir.split("/").pop()}...`);
     try {
-      execSync(scopedTestCmd, { cwd: effectiveTestDir, stdio: "pipe", timeout });
+      execSync(effectiveTestCmd, { cwd: effectiveTestDir, stdio: "pipe", timeout });
       ui.info(`[${phase}] ${label}: tests passed`);
     } catch (testErr) {
       const detail = getExecError(testErr);
