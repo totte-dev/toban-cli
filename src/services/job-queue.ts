@@ -14,7 +14,6 @@ export type JobHandler = (job: Job) => Promise<void>;
 
 export class JobQueue {
   private queue: Job[] = [];
-  private processing = false;
   private handler: JobHandler | null = null;
   private onUpdate: ((jobs: Job[]) => void) | null = null;
 
@@ -59,33 +58,42 @@ export class JobQueue {
     this.onUpdate?.(this.getJobs());
   }
 
+  /** Max concurrent jobs (review is lightweight with maxTurns=1) */
+  private maxConcurrent = 3;
+  private runningCount = 0;
+
   private async processNext(): Promise<void> {
-    if (this.processing || !this.handler) return;
+    if (!this.handler) return;
 
-    const next = this.queue.find((j) => j.status === "pending");
-    if (!next) return;
+    while (this.runningCount < this.maxConcurrent) {
+      const next = this.queue.find((j) => j.status === "pending");
+      if (!next) break;
 
-    this.processing = true;
-    next.status = "running";
-    next.startedAt = new Date().toISOString();
-    this.notify();
+      this.runningCount++;
+      next.status = "running";
+      next.startedAt = new Date().toISOString();
+      this.notify();
 
-    try {
-      await this.handler(next);
-      next.status = "done";
-      next.completedAt = new Date().toISOString();
-    } catch (err) {
-      next.status = "failed";
-      next.completedAt = new Date().toISOString();
-      next.error = err instanceof Error ? err.message : String(err);
-      ui.error(`[job-queue] ${next.type} job failed: ${next.error}`);
+      // Fire and forget — processNext will be called again on completion
+      this.runJob(next).finally(() => {
+        this.runningCount--;
+        this.processNext();
+      });
     }
+  }
 
-    this.processing = false;
+  private async runJob(job: Job): Promise<void> {
+    try {
+      await this.handler!(job);
+      job.status = "done";
+      job.completedAt = new Date().toISOString();
+    } catch (err) {
+      job.status = "failed";
+      job.completedAt = new Date().toISOString();
+      job.error = err instanceof Error ? err.message : String(err);
+      ui.error(`[job-queue] ${job.type} job failed: ${job.error}`);
+    }
     this.notify();
-
-    // Process next in queue
-    this.processNext();
   }
 }
 
