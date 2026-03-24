@@ -455,9 +455,19 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         ui.info(`[task] Pipeline retry: skipping builder, using existing branch ${existingPipelineState.agent_branch}`);
         taskLog.event("pipeline_retry", { agent_branch: existingPipelineState.agent_branch });
 
-        // Restore completion JSON
+        // Restore completion JSON — may contain nested COMPLETION_JSON:{...} text
         if (existingPipelineState.completion_json) {
-          try { actionCtx.completionJson = JSON.parse(existingPipelineState.completion_json); } catch { /* ignore */ }
+          try {
+            const outer = JSON.parse(existingPipelineState.completion_json);
+            // Check if the parsed result contains COMPLETION_JSON text (from agent output wrapper)
+            const outerStr = typeof outer === "string" ? outer : JSON.stringify(outer);
+            const cjMatch = outerStr.match(/COMPLETION_JSON:\s*(\{[\s\S]*\})\s*$/);
+            if (cjMatch) {
+              try { actionCtx.completionJson = JSON.parse(cjMatch[1]); } catch { actionCtx.completionJson = outer; }
+            } else {
+              actionCtx.completionJson = outer;
+            }
+          } catch { /* ignore */ }
         }
         actionCtx.agentBranch = existingPipelineState.agent_branch;
 
