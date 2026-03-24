@@ -13,6 +13,31 @@ import type { TemplateAction } from "../agents/agent-templates.js";
 import * as ui from "../ui.js";
 import { normalizeCompletion, toLegacyFormat, type AgentCompletion, type BuilderRecord } from "./completion-schema.js";
 
+/**
+ * Extract a balanced JSON object from text starting at `COMPLETION_JSON:`.
+ * Uses brace counting instead of regex to handle trailing text after the JSON.
+ */
+function extractJsonFromText(text: string): Record<string, unknown> | null {
+  const marker = "COMPLETION_JSON:";
+  const idx = text.indexOf(marker);
+  if (idx === -1) return null;
+  const jsonStart = idx + marker.length;
+  // Skip whitespace
+  let start = jsonStart;
+  while (start < text.length && (text[start] === " " || text[start] === "\n")) start++;
+  if (text[start] !== "{") return null;
+  // Count braces to find end
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") depth--;
+    if (depth === 0) {
+      try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; }
+    }
+  }
+  return null;
+}
+
 /** Legacy format — kept for backwards compatibility */
 export interface CompletionResult {
   review_comment: string;
@@ -85,12 +110,11 @@ export function extractCompletionJson(
     try {
       const ev = JSON.parse(l);
       if (ev.type === "result" && ev.subtype === "success" && typeof ev.result === "string") {
-        const cjMatch = ev.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
+        const cj = extractJsonFromText(ev.result);
         let result: CompletionResult;
         let completion: AgentCompletion;
-        if (cjMatch) {
+        if (cj) {
           try {
-            const cj = JSON.parse(cjMatch[1]);
             callbacks?.onRawJson?.(cj);
             const parsed = parseCompletionJson(cj);
             completion = parsed.completion;
@@ -144,9 +168,8 @@ export function extractCompletionJson(
     try {
       const event = JSON.parse(line);
       if (event.type === "result" && typeof event.result === "string") {
-        const match = event.result.match(/COMPLETION_JSON:(\{[\s\S]*\})/);
-        if (match) {
-          const json = JSON.parse(match[1]);
+        const json = extractJsonFromText(event.result);
+        if (json) {
           callbacks?.onRawJson?.(json);
           const { completion, legacy, builderRecord } = parseCompletionJson(json);
           if (builderRecord) callbacks?.onBuilderRecord?.(builderRecord);
