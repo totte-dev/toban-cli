@@ -6,17 +6,8 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-
-/** Detect the right install command based on lockfile presence. */
-function detectInstallCommand(dir: string): string | null {
-  if (existsSync(join(dir, "bun.lockb")) || existsSync(join(dir, "bun.lock"))) return "bun install";
-  if (existsSync(join(dir, "pnpm-lock.yaml"))) return "pnpm install";
-  if (existsSync(join(dir, "yarn.lock"))) return "yarn install";
-  if (existsSync(join(dir, "package-lock.json"))) return "npm ci";
-  if (existsSync(join(dir, "package.json"))) return "npm install";
-  return null;
-}
 import { homedir } from "node:os";
+import { detectInstallCommand } from "./utils/detect-package-manager.js";
 import type { AgentRunner } from "./agents/runner.js";
 import type { AgentType } from "./types.js";
 import {

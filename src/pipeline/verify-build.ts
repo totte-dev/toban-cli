@@ -138,11 +138,11 @@ export async function handleVerifyBuild(
     }
   } catch { /* diff check failed, continue with build */ }
 
-  // Install dependencies
+  // Install dependencies (detect package manager from lockfile)
   const pkgJsonPath = join(repoDir, "package.json");
   if (existsSync(pkgJsonPath)) {
-    const lockfilePath = join(repoDir, "package-lock.json");
-    const installCmd = existsSync(lockfilePath) ? "npm ci" : "npm install";
+    const { detectInstallCommand } = await import("../utils/detect-package-manager.js");
+    const installCmd = detectInstallCommand(repoDir) || "npm install";
     ui.info(`[${phase}] ${label}: installing dependencies (${installCmd})...`);
     try {
       execSync(installCmd, { cwd: repoDir, stdio: "pipe", timeout });
