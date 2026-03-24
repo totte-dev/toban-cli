@@ -146,6 +146,16 @@ Otherwise verdict = NEEDS_CHANGES.
 Output ONLY JSON:
 {"ac_results":[{"ac":"...","met":true/false,"evidence":"..."}],"verdict":"APPROVE or NEEDS_CHANGES","summary":"1-sentence overall assessment"}`;
   } else {
+    // Include actual diff content in prompt to avoid tool use (faster, maxTurns=1)
+    let diffContent = "";
+    try {
+      diffContent = revExec2(`git diff ${diffRef}`, { cwd: reviewRepoDir, stdio: "pipe", timeout: 15_000 }).toString();
+      // Truncate very large diffs to avoid prompt overflow
+      if (diffContent.length > 50_000) {
+        diffContent = diffContent.slice(0, 50_000) + "\n... (truncated)";
+      }
+    } catch { diffContent = "(diff unavailable)"; }
+
     fullPrompt = `You are a code reviewer. Build and tests have ALREADY PASSED (do NOT re-run them).
 Your job: verify that the code changes fulfill the acceptance criteria.
 
@@ -157,17 +167,18 @@ Description: ${ctx.task.description || "(no description)"}
 ## Acceptance Criteria
 ${acSection}
 
-## Diff
-Range: ${diffRef}
+## Diff (${diffRef})
+\`\`\`
+${diffContent}
+\`\`\`
+
 Stat:
 ${diffStatFull || "unknown"}
 ${builderIntent}
 ## Instructions
-1. Run: git diff ${diffRef}
-2. Read the changed files to understand what was done
-3. For EACH acceptance criterion, judge YES or NO with brief evidence from the diff
-4. Code quality issues are warnings only — they do NOT affect the verdict
-5. Verdict = APPROVE if all ACs are met, NEEDS_CHANGES if any AC is not met
+1. For EACH acceptance criterion, judge YES or NO with brief evidence from the diff
+2. Code quality issues are warnings only — they do NOT affect the verdict
+3. Verdict = APPROVE if all ACs are met, NEEDS_CHANGES if any AC is not met
 
 Output ONLY JSON (no markdown):
 {"ac_results":[{"ac":"...","met":true/false,"evidence":"..."}],"code_warnings":["optional quality notes"],"verdict":"APPROVE or NEEDS_CHANGES","summary":"1-sentence overall assessment"}`;
@@ -179,8 +190,9 @@ Output ONLY JSON (no markdown):
 
   // Use agent's DB engine setting for model resolution (respects dashboard config)
   const reviewerModel = resolveModelForRole("reviewer", ctx.config.agentEngine);
+  // maxTurns=1: diff is included in prompt, no tool use needed
   const reviewResult = await spawnClaudeOnce(fullPrompt, {
-    model: reviewerModel, role: "reviewer", maxTurns: 5, timeout: TIMEOUTS.REVIEWER, cwd: reviewRepoDir,
+    model: reviewerModel, role: "reviewer", maxTurns: 1, timeout: TIMEOUTS.REVIEWER, cwd: reviewRepoDir,
   });
 
   // Parse COMPLETION_JSON from reviewer output (supports COMPLETION_JSON: prefix and ```json blocks)
