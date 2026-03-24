@@ -7,15 +7,13 @@ import { execSync } from "node:child_process";
 import type { TemplateAction, ActionContext } from "../agents/agent-templates.js";
 import type { Task } from "../services/api-client.js";
 import { createAuthHeaders, fetchWithRetry } from "../services/api-client.js";
-import { interpolate, getDefaultTemplates } from "../agents/agent-templates.js";
 import * as ui from "../ui.js";
-import { parseTaskLabels } from "../utils/parse-labels.js";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";
 import { resolveRepoRoot } from "../services/git-ops.js";
 import { resolveModelForRole } from "../agents/agent-engine.js";
 import { TIMEOUTS, LIMITS } from "../constants.js";
 import { classifyRejection } from "../utils/infra-classifier.js";
-import type { ReviewerRecord, ReviewFinding, ManagerRecord, ReviewRecord } from "../utils/completion-schema.js";
+import type { ReviewerRecord, ReviewFinding } from "../utils/completion-schema.js";
 
 export async function handleSpawnReviewer(
   action: TemplateAction,
@@ -113,61 +111,66 @@ export async function handleSpawnReviewer(
     }
   } catch { /* use existing task data */ }
 
-  // Build reviewer prompt
+  // Build reviewer prompt — AC-focused review
+  // verify_build already passed (build + tests), so reviewer focuses on AC fulfillment
   const taskType = ctx.task.type as string || "implementation";
-  const { PROMPT_TEMPLATES } = await import("../manager/prompts/templates.js");
-  const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 
-  // Fetch playbook rules for reviewer, including skill rules matching task labels
-  let customRules = "";
-  const taskLabels = parseTaskLabels(ctx.task);
-  try { customRules = await ctx.api.fetchPlaybookPrompt("reviewer", taskLabels) || ""; } catch { /* non-fatal */ }
+  // Parse acceptance criteria from task
+  const rawAC = ctx.task.acceptance_criteria as string | string[] | null | undefined;
+  let acList: string[] = [];
+  if (rawAC) {
+    if (Array.isArray(rawAC)) acList = rawAC;
+    else { try { const parsed = JSON.parse(rawAC); if (Array.isArray(parsed)) acList = parsed; } catch { /* */ } }
+  }
+  const acSection = acList.length > 0
+    ? acList.map((ac, i) => `  ${i + 1}. ${ac}`).join("\n")
+    : "  (no acceptance criteria defined — judge based on task description)";
 
   let fullPrompt: string;
 
   if (ctx.mergeSkipped && ctx.completionJson?.review_comment) {
-    // No code changes — Reviewer verifies the agent's completion claim
-    const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
-    fullPrompt = `You are a strict code reviewer for project.
+    fullPrompt = `You are a code reviewer. Build and tests have ALREADY PASSED.
 Task: ${ctx.task.title}
+Description: ${ctx.task.description || "(no description)"}
+
+The Builder reported NO CODE CHANGES were needed: "${ctx.completionJson.review_comment}"
+
+Verify: are the acceptance criteria already met in the codebase?
+## Acceptance Criteria
+${acSection}
+
+For each AC, output YES or NO with brief evidence.
+If all ACs are met (or the task genuinely needs no changes), verdict = APPROVE.
+Otherwise verdict = NEEDS_CHANGES.
+
+Output ONLY JSON:
+{"ac_results":[{"ac":"...","met":true/false,"evidence":"..."}],"verdict":"APPROVE or NEEDS_CHANGES","summary":"1-sentence overall assessment"}`;
+  } else {
+    fullPrompt = `You are a code reviewer. Build and tests have ALREADY PASSED (do NOT re-run them).
+Your job: verify that the code changes fulfill the acceptance criteria.
+
+## Task
+Title: ${ctx.task.title}
 Type: ${taskType}
 Description: ${ctx.task.description || "(no description)"}
 
-The Builder agent reported NO CODE CHANGES were needed:
-"${ctx.completionJson.review_comment}"
+## Acceptance Criteria
+${acSection}
 
-Verify this claim (do NOT run tests — they have already passed in verify_build):
-1. Check if the task requirements are actually already met in the codebase
-2. If the agent's claim is correct and the task is truly complete, verdict = APPROVE
-3. If the task is NOT actually complete, verdict = NEEDS_CHANGES with explanation
+## Diff
+Range: ${diffRef}
+Stat:
+${diffStatFull || "unknown"}
+${builderIntent}
+## Instructions
+1. Run: git diff ${diffRef}
+2. Read the changed files to understand what was done
+3. For EACH acceptance criterion, judge YES or NO with brief evidence from the diff
+4. Code quality issues are warnings only — they do NOT affect the verdict
+5. Verdict = APPROVE if all ACs are met, NEEDS_CHANGES if any AC is not met
 
-${customRules}
-
-Output format: ${outputFormat}`;
-  } else {
-    const reviewerTemplate = getDefaultTemplates().find((t) => t.id === "reviewer")!;
-    const reviewCriteria = [
-      "1. REQUIREMENT MATCH: Do changes address the task description? Unrelated = NEEDS_CHANGES",
-      "2. SCOPE: Limited to what the task asks? Out-of-scope = NEEDS_CHANGES",
-      "3. MEANINGFUL CHANGES: Real code/content? Metadata-only = NEEDS_CHANGES",
-      "4. CODE QUALITY: Readability, security, error handling",
-      `5. ${typeHints[taskType] || typeHints.implementation || ""}`,
-      "",
-      "If tests fail, verdict MUST be NEEDS_CHANGES.",
-      "If changes don't match the task, verdict MUST be NEEDS_CHANGES.",
-    ].join("\n");
-
-    const reviewPrompt = interpolate(reviewerTemplate.prompt.completion, {
-      diffRef,
-      taskTitle: ctx.task.title,
-      taskDescription: ctx.task.description || "(no description)",
-      taskType,
-      reviewCriteria,
-      customReviewRules: customRules ? `\n${customRules}` : "",
-      testCommand: ctx.config.testCommand || "npm test",
-    });
-
-    fullPrompt = `${reviewerTemplate.prompt.mode_header}\n\nTask: ${ctx.task.title}\nType: ${taskType}\n\n## Diff Stat\n${diffStatFull || "unknown"}\n${builderIntent}\n${reviewPrompt}`;
+Output ONLY JSON (no markdown):
+{"ac_results":[{"ac":"...","met":true/false,"evidence":"..."}],"code_warnings":["optional quality notes"],"verdict":"APPROVE or NEEDS_CHANGES","summary":"1-sentence overall assessment"}`;
   }
 
   // Spawn reviewer as agent process
@@ -231,75 +234,7 @@ Output format: ${outputFormat}`;
     await ctx.api.updateTask(ctx.task.id, { review_comment: reviewComment } as Partial<Task>);
   }
 
-  // Second opinion gate: Manager re-evaluates NEEDS_CHANGES verdicts
-  if (verdict === "NEEDS_CHANGES" && reviewComment) {
-    ui.info(`[${phase}] ${label}: NEEDS_CHANGES — requesting Manager second opinion...`);
-    try {
-      const secondOpinionPrompt = `A Reviewer agent judged this task as NEEDS_CHANGES. Review the assessment and decide if the rejection is justified.
-
-Task: ${ctx.task.title}
-Type: ${taskType}
-Description: ${ctx.task.description || "(none)"}
-
-Reviewer's assessment:
-${reviewComment}
-
-If the rejection is clearly correct (real bugs, test failures, missing requirements), respond: CONFIRM_REJECT
-If the rejection seems overly strict, cosmetic, or based on style preferences rather than correctness, respond: OVERRIDE_APPROVE
-
-Respond in this format (2 lines):
-Line 1: CONFIRM_REJECT or OVERRIDE_APPROVE
-Line 2: Brief reason (1 sentence explaining your decision)`;
-
-      const managerResult = await spawnClaudeOnce(secondOpinionPrompt, {
-        role: "manager", maxTurns: 1, timeout: 60_000, cwd: resolveRepoRoot(ctx.config.workingDir),
-      });
-
-      // Extract Manager reasoning from output (first line or full text)
-      const managerReasoning = managerResult.replace(/^(OVERRIDE_APPROVE|CONFIRM_REJECT)\s*/i, "").trim().slice(0, 500) || "No detailed reasoning provided";
-
-      const isOverride = managerResult.includes("OVERRIDE_APPROVE");
-      const managerRecord: ManagerRecord = {
-        action: isOverride ? "override" : "accept",
-        original_verdict: "NEEDS_CHANGES",
-        reasoning: managerReasoning,
-      };
-      // Build fallback reviewerRecord from raw reviewComment if structured parse failed
-      const finalReviewerRecord = reviewerRecord ?? {
-        verdict: "NEEDS_CHANGES" as const,
-        findings: [{ severity: "info" as const, message: reviewComment.slice(0, 500) }],
-        reasoning: reviewComment.slice(0, 300),
-      };
-      ctx.reviewRecord = { ...ctx.reviewRecord, reviewer: finalReviewerRecord, manager: managerRecord };
-
-      if (isOverride) {
-        ui.info(`[${phase}] ${label}: Manager overrides → APPROVE (Reviewer was too strict)`);
-        ctx.eventEmitter?.infraError(ctx.agentName, ctx.task.id, {
-          category: "playbook_false_positive",
-          summary: "Manager overrode Reviewer rejection — deemed overly strict",
-        });
-        ctx.eventEmitter?.reviewCompleted(ctx.task.id, ctx.agentName, {
-          verdict: "APPROVE", classification: "infra", infra_category: "playbook_false_positive",
-          original_verdict: "NEEDS_CHANGES",
-        });
-        verdict = "APPROVE";
-        // Preserve original reviewer report, add override metadata
-        const overrideComment = JSON.stringify({
-          ...(completionMatch ? JSON.parse(completionMatch[1]) : {}),
-          verdict: "APPROVE",
-          manager_override: managerReasoning,
-          original_reviewer_verdict: "NEEDS_CHANGES",
-        });
-        // Don't overwrite reviewComment — keep original for reference in review_record
-        await ctx.api.updateTask(ctx.task.id, { review_comment: overrideComment } as Partial<Task>);
-      } else {
-        ui.info(`[${phase}] ${label}: Manager confirms NEEDS_CHANGES`);
-      }
-    } catch (err) {
-      ui.warn(`[${phase}] ${label}: Second opinion failed (${err}), keeping NEEDS_CHANGES`);
-    }
-  }
-
+  // Second opinion removed — AC-based review is deterministic enough
   ctx.reviewVerdict = verdict;
 
   // If reviewer record was built but no manager gate was triggered, set it now
