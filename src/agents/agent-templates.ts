@@ -444,7 +444,9 @@ export interface ActionContext {
   /** Set to true if git_merge was skipped (no agent commits or metadata-only) */
   mergeSkipped?: boolean;
   /** Parsed COMPLETION_JSON from agent output (set by cli.ts after agent finishes) */
-  completionJson?: { review_comment?: string; commits?: string; build_command?: string; test_command?: string };
+  completionJson?: Record<string, unknown>;
+  /** Raw agent stdout lines (for templates that need to re-parse output) */
+  agentStdout?: string[];
   /** Parsed RETRO_JSON from agent output (Builder's self-assessment: what went well, what to improve) */
   retroJson?: { went_well?: string; to_improve?: string; suggested_tasks?: Array<{ title: string }> };
   /** Structured builder record extracted from COMPLETION_JSON */
@@ -559,11 +561,8 @@ export async function executeActions(
         }
         case "save_decomposition": {
           // Parse COMPLETION_JSON and save decomposed tasks via API
-          if (!ctx.completionJson) {
-            ui.warn(`[${phase}] ${label}: no COMPLETION_JSON — skipping`);
-            break;
-          }
-          const decomp = ctx.completionJson as unknown as {
+          // Try completionJson first, then re-extract from stdout if tasks array is missing
+          let decomp: {
             summary?: string;
             tasks?: Array<{
               title: string;
@@ -576,7 +575,28 @@ export async function executeActions(
             }>;
             related_backlog?: string[];
             total_sp?: number;
-          };
+          } = (ctx.completionJson ?? {}) as typeof decomp;
+
+          // If tasks missing, try to re-extract from agent stdout
+          if (!decomp.tasks?.length && ctx.agentStdout?.length) {
+            for (const line of ctx.agentStdout) {
+              const text = typeof line === "string" ? line : "";
+              // Direct COMPLETION_JSON line
+              const directMatch = text.match(/COMPLETION_JSON:\s*(\{[\s\S]*\})\s*$/);
+              if (directMatch) {
+                try { decomp = JSON.parse(directMatch[1]); break; } catch { /* continue */ }
+              }
+              // Stream-json result event containing COMPLETION_JSON
+              try {
+                const ev = JSON.parse(text);
+                if (ev.type === "result" && typeof ev.result === "string") {
+                  const m = ev.result.match(/COMPLETION_JSON:\s*(\{[\s\S]*\})\s*$/);
+                  if (m) { try { decomp = JSON.parse(m[1]); break; } catch { /* continue */ } }
+                }
+              } catch { /* not JSON */ }
+            }
+          }
+
           if (!decomp.tasks?.length) {
             ui.warn(`[${phase}] ${label}: no tasks in decomposition`);
             break;

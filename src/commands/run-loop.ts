@@ -793,6 +793,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
             }
           };
           taskLog.stdout(runningAgent.stdout);
+          actionCtx.agentStdout = runningAgent.stdout;
 
           // Save pipeline state with agent branch — enables pipeline-only retry without re-running builder
           if (actionCtx.completionJson && actionCtx.agentBranch) {
