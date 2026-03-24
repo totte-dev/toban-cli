@@ -62,16 +62,8 @@ export interface WsChatServerOptions {
   apiUrl: string;
   /** Callback when a user message is received. Returns reply + optional proposals. */
   onMessage: (message: string) => Promise<string | { reply: string; proposals?: Array<Record<string, string>> }>;
-  /** Callback when first WS client connects */
-  onClientConnected?: () => void;
-  /** Callback when last WS client disconnects */
-  onAllClientsDisconnected?: () => void;
   /** Callback when a revert is requested from the UI */
   onRevert?: (taskId: string, repo: string, commits: string[]) => Promise<{ ok: boolean; error?: string }>;
-  /** Callback when an approval response is received from the UI */
-  onApprovalResponse?: (approvalId: string, approved: boolean) => void;
-  /** Callback to get pending approvals for re-sending on reconnect */
-  getPendingApprovals?: () => Array<{ id: string; role: string; taskIds: string[]; createdAt: number }>;
 }
 
 /** Tracked review state for a task */
@@ -95,13 +87,9 @@ export class WsChatServer {
   private apiKey: string;
   private apiUrl: string;
   private onMessage: (message: string) => Promise<string | { reply: string; proposals?: Array<Record<string, string>> }>;
-  private onClientConnected?: () => void;
-  private onAllClientsDisconnected?: () => void;
   private onRevert?: (taskId: string, repo: string, commits: string[]) => Promise<{ ok: boolean; error?: string }>;
-  private onApprovalResponse?: (approvalId: string, approved: boolean) => void;
-  private getPendingApprovals?: () => Array<{ id: string; role: string; taskIds: string[]; createdAt: number }>;
   private clients = new Set<WebSocket>();
-  /** Lock to prevent concurrent LLM calls from multiple WS clients */
+  /** Lock to prevent concurrent message processing */
   private chatProcessing = false;
   /** Latest review state per task for re-sending on reconnect */
   private reviewStates = new Map<string, ReviewState>();
@@ -120,11 +108,7 @@ export class WsChatServer {
     this.apiKey = options.apiKey;
     this.apiUrl = options.apiUrl;
     this.onMessage = options.onMessage;
-    this.onClientConnected = options.onClientConnected;
-    this.onAllClientsDisconnected = options.onAllClientsDisconnected;
     this.onRevert = options.onRevert;
-    this.onApprovalResponse = options.onApprovalResponse;
-    this.getPendingApprovals = options.getPendingApprovals;
   }
 
   /**
@@ -157,7 +141,7 @@ export class WsChatServer {
         const wasEmpty = this.clients.size === 0;
         this.clients.add(ws);
         ui.info(`[ws] Client connected (${this.clients.size} total)`);
-        if (wasEmpty) this.onClientConnected?.();
+        // Client connected
 
         ws.on("message", async (data) => {
           try {
@@ -175,7 +159,7 @@ export class WsChatServer {
         ws.on("close", () => {
           this.clients.delete(ws);
           ui.info(`[ws] Client disconnected (${this.clients.size} remaining)`);
-          if (this.clients.size === 0) this.onAllClientsDisconnected?.();
+          // All clients disconnected
         });
 
         ws.on("error", (err) => {
@@ -193,22 +177,7 @@ export class WsChatServer {
         // Re-send latest review states to newly connected client
         this.sendPendingReviewStates(ws);
 
-        // Re-send pending approvals to newly connected client
-        if (this.getPendingApprovals) {
-          const pending = this.getPendingApprovals();
-          for (const approval of pending) {
-            ws.send(JSON.stringify({
-              type: WS_MSG.APPROVAL_REQUEST,
-              approval_id: approval.id,
-              role: approval.role,
-              task_ids: approval.taskIds,
-              timestamp: new Date(approval.createdAt).toISOString(),
-            }));
-          }
-          if (pending.length > 0) {
-            ui.info(`[ws] Re-sent ${pending.length} pending approval(s) to new client`);
-          }
-        }
+        // Approval flow removed — task dispatch is automatic
       });
 
       this.httpServer.on("error", (err) => {
@@ -493,16 +462,6 @@ export class WsChatServer {
         } finally {
           this.chatProcessing = false;
         }
-        break;
-      }
-
-      case WS_MSG.APPROVAL_RESPONSE: {
-        if (!msg.approval_id || typeof msg.approved !== "boolean") {
-          ws.send(JSON.stringify({ type: WS_MSG.STATUS, content: "Missing approval_id or approved field", timestamp: new Date().toISOString() }));
-          return;
-        }
-        ui.info(`[ws] Approval response: ${msg.approval_id} → ${msg.approved ? "approved" : "rejected"}`);
-        this.onApprovalResponse?.(msg.approval_id, msg.approved);
         break;
       }
 

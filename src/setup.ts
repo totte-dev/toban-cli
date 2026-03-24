@@ -253,14 +253,7 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
     reposDir: managerReposDir, repositories: managerRepoInfos,
   });
 
-  mgr.onSpawnAgent = async (_role: string, taskIds: string[]) => {
-    for (const taskId of taskIds) {
-      try {
-        await api.updateTask(taskId, { status: "in_progress" });
-        ui.info(`[manager] Queued task ${taskId.slice(0, 8)} for agent execution`);
-      } catch (err) { ui.warn(`[manager] Failed to queue task ${taskId.slice(0, 8)}: ${err}`); }
-    }
-  };
+  // Manager LLM deprecated — task dispatch is handled by run-loop directly
 
   // --- WebSocket server ---
   let wsServer: WsChatServer | null = null;
@@ -269,27 +262,18 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
     wsServer = new WsChatServer({
       port: cliArgs.wsPort, apiKey: cliArgs.apiKey, apiUrl: cliArgs.apiUrl,
       onMessage: async (content) => mgr.handleWsMessage(content),
-      onClientConnected: () => mgr.pausePolling(),
-      onAllClientsDisconnected: () => mgr.resumePolling(),
       onRevert: async (taskId, repoName, commits) => executeRevert(repoName, commits, repos),
-      onApprovalResponse: (approvalId, approved) => { mgr.resolveApproval(approvalId, approved); },
-      getPendingApprovals: () => mgr.getPendingApprovals(),
     });
     actualWsPort = await wsServer.start();
     await wsServer.registerPort();
 
     mgr.onReply = (reply) => { wsServer?.broadcast({ type: WS_MSG.CHAT, from: "manager", to: "user", content: reply, timestamp: new Date().toISOString() }); };
-    mgr.onProposals = (proposals) => { wsServer?.broadcast({ type: WS_MSG.PROPOSALS, tasks: proposals, timestamp: new Date().toISOString() }); };
-    mgr.onStreamChunk = (chunk) => { wsServer?.broadcast({ type: WS_MSG.CHAT_STREAM, from: "manager", content: chunk, timestamp: new Date().toISOString() }); };
-    mgr.onApprovalRequest = (approval) => { wsServer?.broadcast({ type: WS_MSG.APPROVAL_REQUEST, approval_id: approval.id, role: approval.role, task_ids: approval.taskIds, timestamp: new Date().toISOString() }); };
     mgr.onActivityChange = (activity) => { wsServer?.broadcast({ type: WS_MSG.STATUS, from: "manager", content: activity, timestamp: new Date().toISOString() }); };
     mgr.onDataUpdate = (entity, id, changes) => { wsServer?.broadcast({ type: WS_MSG.DATA_UPDATE, entity, task_id: id, agent_name: entity === "agent" ? id : undefined, changes, timestamp: new Date().toISOString() }); };
-    mgr.onToolUse = (tool, summary) => {
-      wsServer?.broadcast({ type: WS_MSG.AGENT_ACTIVITY, agent_name: "manager", content: summary, kind: "tool", tool, timestamp: new Date().toISOString() });
-    };
   } catch (err) { ui.warn(`WebSocket server failed to start: ${err}`); }
 
-  mgr.start();
+  // Manager LLM polling disabled — run-loop handles task dispatch directly
+  mgr.startHeartbeat();
 
   ui.connectionInfo({
     apiUrl: cliArgs.apiUrl, agent: cliArgs.agentName, branch: cliArgs.baseBranch,
