@@ -97,6 +97,8 @@ export class WsChatServer {
   currentSprint?: number;
   /** Job queue for enrich/review jobs */
   jobQueue?: JobQueue;
+  /** Callback to wake the poll loop when dashboard sends changes */
+  onWake?: () => void;
 
   /** Whether any browser clients are connected */
   get hasClients(): boolean {
@@ -239,6 +241,11 @@ export class WsChatServer {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
       }
+    }
+
+    // Wake poll loop on data changes so next task is picked up immediately
+    if (message.type === WS_MSG.DATA_UPDATE || message.type === WS_MSG.REVIEW_UPDATE) {
+      this.onWake?.();
     }
   }
 

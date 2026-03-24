@@ -36,6 +36,20 @@ import { runHealthCheck } from "../utils/main-health-check.js";
 
 function sleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 
+/** Interruptible sleep — resolves on timeout or when wake() is called */
+function createInterruptibleSleep() {
+  let wakeUp: (() => void) | null = null;
+  return {
+    sleep(ms: number): Promise<void> {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => { wakeUp = null; resolve(); }, ms);
+        wakeUp = () => { clearTimeout(timer); wakeUp = null; resolve(); };
+      });
+    },
+    wake() { wakeUp?.(); },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Startup cleanup — ensure clean state before each Runner session
 // ---------------------------------------------------------------------------
@@ -162,6 +176,12 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   await startupCleanup(tobanHome, repos, api, sprintData);
 
   const POLL_INTERVAL_MS = INTERVALS.POLL;
+  const pollSleep = createInterruptibleSleep();
+
+  // Wake the poll loop immediately when dashboard sends task/sprint changes
+  if (wsServer) {
+    wsServer.onWake = () => pollSleep.wake();
+  }
 
   // Parallel agent slots — start with defaults, then reconfigure from plan limits
   const { SlotScheduler } = await import("../services/slot-scheduler.js");
@@ -214,7 +234,8 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   // Use typecheck instead of full build — faster, no cache issues, catches real errors
   const healthCheckBuildCmd = workspaceBuildCommand || "npm run typecheck --if-present";
   const healthCheckTestCmd = workspaceTestCommand || "npm test";
-  const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000; // re-check every 5 minutes
+  // verify_build runs full tests on every merge, so periodic health-check is a safety net only
+  const HEALTH_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 min (was 5 min)
 
   let mainHealthy = true;
   let lastHealthCheckTime = 0;
@@ -300,7 +321,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     } catch (err) {
       logError(CLI_ERR.API_REQUEST_FAILED, `Failed to refresh sprint: ${err}`, { phase: "poll" }, err);
       ui.warn(`Failed to refresh sprint: ${err} — retrying in ${POLL_INTERVAL_MS / 1000}s`);
-      await sleep(POLL_INTERVAL_MS);
+      await pollSleep.sleep(POLL_INTERVAL_MS);
       continue;
     }
 
@@ -322,7 +343,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
     // Gate task dispatch when main branch is unhealthy
     if (!mainHealthy) {
-      await sleep(POLL_INTERVAL_MS);
+      await pollSleep.sleep(POLL_INTERVAL_MS);
       continue;
     }
 
@@ -331,7 +352,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     const tickResult = await sprintController.tick(sprint);
     if (tickResult.action === "stop") break;
     if (tickResult.action === "wait") {
-      await sleep(POLL_INTERVAL_MS);
+      await pollSleep.sleep(POLL_INTERVAL_MS);
       continue;
     }
 
@@ -339,7 +360,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     const allTasks = sprintData.tasks as Task[];
     const scheduleResult = await taskScheduler.getDispatchableTasks(allTasks, sprint?.status as string | undefined);
     if (scheduleResult.status === "idle") {
-      await sleep(POLL_INTERVAL_MS * scheduleResult.waitMultiplier);
+      await pollSleep.sleep(POLL_INTERVAL_MS * scheduleResult.waitMultiplier);
       continue;
     }
     const todoTasks = scheduleResult.tasks;
@@ -902,7 +923,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
     if (!shutdownState.shuttingDown) {
       await api.updateAgent({ name: cliArgs.agentName, status: "idle", activity: "All tasks completed, waiting for new tasks" });
       ui.info(`Tasks done — polling again in ${POLL_INTERVAL_MS / 1000}s`);
-      await sleep(POLL_INTERVAL_MS);
+      await pollSleep.sleep(POLL_INTERVAL_MS);
     }
   }
 
