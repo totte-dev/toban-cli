@@ -84,7 +84,7 @@ export class TaskScheduler {
 
     // --- Auto-split large tasks ---
     const todoForAgents = allTasks.filter(
-      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && t.review_verdict !== "ERROR" && t.category !== "destructive" && hasStructuredDetails(t),
+      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && t.review_verdict !== "ERROR" && t.category !== "destructive" && (t.type === "decompose" || hasStructuredDetails(t)),
     );
 
     const tasksToSplit = todoForAgents.filter((t) => shouldSplit(t, 8));
