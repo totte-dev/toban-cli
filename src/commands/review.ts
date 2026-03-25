@@ -5,7 +5,6 @@
  *   toban review                          # review latest done/review task
  *   toban review --task <id>              # review a specific task
  *   toban review --diff <range>           # custom diff range (e.g. HEAD~5..HEAD)
- *   toban review --skill react,security   # match playbook rules by skill tags
  *   toban review --repo ../other-repo     # review diff in a different repo
  *
  * Engine-agnostic: uses AgentConfig.readOnly to restrict tools per engine.
@@ -24,7 +23,6 @@ export async function handleReview(
   apiUrl: string,
   apiKey: string,
   taskId?: string,
-  skills?: string[],
   diffRange?: string,
   engine: AgentType = "claude",
   usePr = false,
@@ -146,13 +144,8 @@ export async function handleReview(
   const taskType = (task?.type as string) || "implementation";
   const typeHints = JSON.parse(PROMPT_TEMPLATES["reviewer-type-hints"] || "{}") as Record<string, string>;
 
-  // Fetch playbook rules
-  const reviewTags = skills || (task ? parseTaskLabels(task) : []);
-  let customRules = "";
-  try { customRules = await api.fetchPlaybookPrompt("reviewer", reviewTags) || ""; } catch { /* non-fatal */ }
-  if (reviewTags.length > 0) {
-    ui.info(`[review] Tags for skill matching: ${reviewTags.join(", ")}`);
-  }
+  const reviewTags = task ? parseTaskLabels(task) : [];
+  const customRules = "";
 
   let reviewSystem: string;
   if (task) {

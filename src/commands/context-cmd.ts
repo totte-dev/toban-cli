@@ -2,9 +2,8 @@
  * `toban context` — Get project context on demand.
  *
  * Usage:
- *   toban context              # Full context (spec + rules + failures + sprint + knowledge)
+ *   toban context              # Full context (spec + failures + sprint + knowledge)
  *   toban context spec         # Project spec only
- *   toban context rules        # Playbook rules only
  *   toban context failures     # Past failures only
  *   toban context sprint       # Current sprint tasks
  *   toban context knowledge    # Shared team knowledge
@@ -46,16 +45,6 @@ export async function handleContext(args: string[]): Promise<void> {
         if (spec.features) console.log(`## Features\n${spec.features}\n`);
         if (spec.requirements) console.log(`## Requirements\n${spec.requirements}\n`);
       }
-    }
-  }
-
-  if (sub === "all" || sub === "rules") {
-    const agentRole = agentName.replace(/-\d+$/, ""); // builder-1 → builder
-    const data = (await apiFetch(`${apiUrl}/api/v1/playbook/prompt?agent=${agentRole}`, apiKey)) as Record<string, unknown> | null;
-    if (data && (data as { prompt?: string }).prompt) {
-      console.log("# Playbook Rules\n");
-      console.log((data as { prompt: string }).prompt);
-      console.log("");
     }
   }
 

@@ -61,18 +61,6 @@ describe("buildAgentPrompt", () => {
     expect(prompt).toContain("Role Boundary");
   });
 
-  it("includes playbook rules when provided", () => {
-    const rules = "## Playbook\n- Always write tests first";
-    const prompt = buildAgentPrompt(makeCtx({ playbookRules: rules }));
-    expect(prompt).toContain("Always write tests first");
-  });
-
-  it("omits playbook block when not provided", () => {
-    const prompt = buildAgentPrompt(makeCtx({ playbookRules: undefined }));
-    // No crash, playbook content absent
-    expect(prompt).not.toContain("## Playbook");
-  });
-
   it("includes repository list when provided", () => {
     const prompt = buildAgentPrompt(
       makeCtx({

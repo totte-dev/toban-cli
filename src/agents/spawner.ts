@@ -141,8 +141,6 @@ export function spawnAgent(
       ...(config.taskTitle ? { TOBAN_TASK_TITLE: config.taskTitle } : {}),
       ...(config.sprintNumber != null ? { TOBAN_SPRINT: String(config.sprintNumber) } : {}),
       ...(config.managerPort ? { TOBAN_MANAGER_PORT: String(config.managerPort) } : {}),
-      // Inject project secrets directly as env vars (no prefix in non-Docker mode)
-      ...(config.secrets ?? {}),
     },
     detached: true,
   });

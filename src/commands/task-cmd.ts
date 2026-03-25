@@ -191,7 +191,7 @@ Rules:
 - constraints_list: things to avoid or be careful about
 - category: read_only (no code changes), mutating (code changes), destructive (deploy/revert/delete)`;
 
-      const result = await spawnClaudeOnce(prompt, { role: "strategist", maxTurns: 1, timeout: 60_000 });
+      const result = await spawnClaudeOnce(prompt, { role: "builder", maxTurns: 1, timeout: 60_000 });
 
       // Extract JSON from response
       const jsonMatch = result.match(/\{[\s\S]*\}/);

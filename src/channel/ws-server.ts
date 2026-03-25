@@ -574,7 +574,7 @@ Rules:
 - constraints_list: things to avoid or be careful about
 - category: read_only (no code changes), mutating (code changes), destructive (deploy/revert/delete)`;
 
-      const result = await spawnClaudeOnce(prompt, { role: "strategist", maxTurns: 1, timeout: 60_000 });
+      const result = await spawnClaudeOnce(prompt, { role: "builder", maxTurns: 1, timeout: 60_000 });
       const jsonMatch = result.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         this.broadcast({ type: WS_MSG.ENRICH_RESULT, task_id: taskId, content: "Failed to parse LLM response", ok: false, timestamp: new Date().toISOString() });

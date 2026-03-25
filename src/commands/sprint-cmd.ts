@@ -151,25 +151,6 @@ export async function handleSprintCmd(apiUrl: string, apiKey: string, args: stri
       }
     } catch { /* retro may not exist */ }
 
-    // Rule suggestions
-    try {
-      const suggestions = (await apiFetch(`${apiUrl}/api/v1/sprints/${target.number}/retro/rule-suggestions`, apiKey)) as {
-        suggestions: Array<{ title: string; status: string; source: string }>;
-      };
-      const accepted = suggestions.suggestions.filter((s) => s.status === "accepted");
-      const pending = suggestions.suggestions.filter((s) => s.status === "pending");
-      if (accepted.length > 0) {
-        console.log(`Rules added (${accepted.length}):`);
-        for (const s of accepted) console.log(`  - ${s.title}`);
-        console.log("");
-      }
-      if (pending.length > 0) {
-        console.log(`Pending rule suggestions (${pending.length}):`);
-        for (const s of pending) console.log(`  - ${s.title}`);
-        console.log("");
-      }
-    } catch { /* suggestions may not exist */ }
-
     // Saved summary
     if (target.retro_summary) {
       console.log("Summary:");

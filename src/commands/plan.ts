@@ -319,7 +319,7 @@ function parseDecomposeResult(result: string): DecomposeResult | null {
  */
 async function handleBacklogSelect(apiUrl: string, apiKey: string): Promise<void> {
   const api = createApiClient(apiUrl, apiKey);
-  try { await api.updateAgent({ name: "strategist", status: "working", activity: "Selecting sprint tasks..." }); } catch { /* non-fatal */ }
+  try { await api.updateAgent({ name: "manager", status: "working", activity: "Selecting sprint tasks..." }); } catch { /* non-fatal */ }
 
   try {
     const sprintData = await api.fetchSprintData();
@@ -387,6 +387,6 @@ Output ONLY valid JSON (no markdown):
     }
 
   } finally {
-    try { await api.updateAgent({ name: "strategist", status: "idle", activity: "Planning done" }); } catch { /* non-fatal */ }
+    try { await api.updateAgent({ name: "manager", status: "idle", activity: "Planning done" }); } catch { /* non-fatal */ }
   }
 }

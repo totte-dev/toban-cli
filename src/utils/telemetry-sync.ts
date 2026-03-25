@@ -5,18 +5,8 @@
  * Workspace is identified by a SHA-256 hash of the API key.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { getMatchBufferPath } from "./rule-matcher.js";
-import type { RuleMatchResult } from "./rule-matcher.js";
+import { readFileSync, existsSync } from "node:fs";
 import * as ui from "../ui.js";
-
-interface RuleStats {
-  rule_hash: string;
-  confirm_count: number;
-  reject_count: number;
-  auto_hit_count: number;
-}
 
 /**
  * Detect project context from the working directory.
@@ -49,116 +39,13 @@ export function detectContext(workingDir: string): string {
 
 /**
  * Sync rule telemetry to API. Call on sprint completion or CLI shutdown.
- *
- * Reads rule-matches.jsonl, aggregates by rule_id → rule_hash, sends to API,
- * then clears the buffer.
+ * Now a no-op since local rule matching was removed.
  */
 export async function syncRuleTelemetry(
-  apiUrl: string,
-  apiKey: string,
-  workingDir: string,
-  sprint?: number,
+  _apiUrl: string,
+  _apiKey: string,
+  _workingDir: string,
+  _sprint?: number,
 ): Promise<void> {
-  const bufferPath = getMatchBufferPath();
-  if (!existsSync(bufferPath)) return;
-
-  let content: string;
-  try {
-    content = readFileSync(bufferPath, "utf-8").trim();
-  } catch { return; }
-  if (!content) return;
-
-  // Parse all entries
-  const entries = content
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      try { return JSON.parse(line) as RuleMatchResult; } catch { return null; }
-    })
-    .filter((e): e is RuleMatchResult => e !== null);
-
-  if (entries.length === 0) return;
-
-  // Aggregate T1 auto_hits by rule_id
-  const statsMap = new Map<string, { confirms: number; rejects: number; autoHits: number }>();
-  for (const entry of entries) {
-    const key = entry.rule_id;
-    const existing = statsMap.get(key) || { confirms: 0, rejects: 0, autoHits: 0 };
-    if (entry.tier === "auto_hit") existing.autoHits++;
-    statsMap.set(key, existing);
-  }
-
-  // Fetch T2 confirm/reject counts from API match-log
-  try {
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    };
-    const matchLogController = new AbortController();
-    const matchLogTimeout = setTimeout(() => matchLogController.abort(), 10_000);
-    const res = await fetch(`${apiUrl}/api/v1/rule-evaluations/match-log?limit=200`, {
-      headers,
-      signal: matchLogController.signal,
-    });
-    clearTimeout(matchLogTimeout);
-    if (res.ok) {
-      const matchLog = (await res.json()) as Array<{ rule_id: string; feedback: string | null }>;
-      if (matchLog.length >= 200) {
-        ui.warn("[telemetry] match-log truncated at 200 entries — confirm/reject counts may be incomplete");
-      }
-      for (const entry of matchLog) {
-        if (!entry.feedback || !entry.rule_id) continue;
-        const existing = statsMap.get(entry.rule_id) || { confirms: 0, rejects: 0, autoHits: 0 };
-        if (entry.feedback === "confirm") existing.confirms++;
-        else if (entry.feedback === "reject") existing.rejects++;
-        statsMap.set(entry.rule_id, existing);
-      }
-    }
-  } catch { /* non-fatal: proceed with auto_hit counts only */ }
-
-  // Hash rule_ids for anonymization
-  const telemetryEntries: RuleStats[] = [];
-  for (const [ruleId, stats] of statsMap) {
-    const ruleHash = createHash("sha256").update(ruleId).digest("hex").slice(0, 32);
-    telemetryEntries.push({
-      rule_hash: ruleHash,
-      confirm_count: stats.confirms,
-      reject_count: stats.rejects,
-      auto_hit_count: stats.autoHits,
-    });
-  }
-
-  if (telemetryEntries.length === 0) return;
-
-  const contextVector = detectContext(workingDir);
-
-  // Send to API (with 10s timeout to avoid blocking shutdown)
-  try {
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    };
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10_000);
-    const res = await fetch(`${apiUrl}/api/v1/telemetry/rules`, {
-      method: "POST",
-      headers,
-      signal: controller.signal,
-      body: JSON.stringify({
-        entries: telemetryEntries,
-        context_vector: contextVector || undefined,
-        sprint,
-      }),
-    });
-    clearTimeout(timeoutId);
-
-    if (res.ok) {
-      ui.info(`[telemetry] Synced ${telemetryEntries.length} rule stats`);
-      // Clear the buffer after successful sync
-      try { writeFileSync(bufferPath, ""); } catch { /* best-effort */ }
-    }
-  } catch {
-    // Non-fatal: telemetry is best-effort
-    ui.warn("[telemetry] Failed to sync rule stats (will retry next sprint)");
-  }
+  // No-op: local rule matching buffer removed
 }

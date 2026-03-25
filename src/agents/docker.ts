@@ -159,13 +159,6 @@ function buildDockerArgs(
     ...(process.env.GITHUB_TOKEN
       ? ["-e", `GITHUB_TOKEN=${process.env.GITHUB_TOKEN}`]
       : []),
-    // Inject project secrets with TOBAN_SECRET_ prefix
-    // The entrypoint script writes these to .env.local in the worktree
-    ...(config.secrets
-      ? Object.entries(config.secrets).flatMap(([key, value]) => [
-          "-e", `TOBAN_SECRET_${key}=${value}`,
-        ])
-      : []),
     // Image
     AGENT_IMAGE,
     // Override CMD with the full command (e.g., "claude --dangerously-skip-permissions ...")

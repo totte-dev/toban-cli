@@ -7,7 +7,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { fetchWithRetry, createAuthHeaders, type ApiClient, type Task } from "../services/api-client.js";
+import { type ApiClient, type Task } from "../services/api-client.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../services/error-logger.js";
 import type { GuardrailConfig } from "../utils/guardrail.js";
@@ -19,8 +19,6 @@ import { handleSpawnReviewer } from "../pipeline/spawn-reviewer.js";
 import { handleReviewChanges } from "../pipeline/review-changes.js";
 import { handleInjectMemory, handleCollectMemory } from "../pipeline/memory.js";
 import { handleFetchRecentChanges, handleRecordChanges } from "../pipeline/context-sharing.js";
-import { handleRuleMatch } from "../pipeline/rule-match.js";
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -28,7 +26,7 @@ import { handleRuleMatch } from "../pipeline/rule-match.js";
 /** An action executed before or after the agent runs */
 export interface TemplateAction {
   /** Action type */
-  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline" | "rule_match" | "save_decomposition";
+  type: "update_task" | "update_agent" | "git_merge" | "git_push" | "git_auth_check" | "review_changes" | "spawn_reviewer" | "submit_retro" | "notify_user" | "shell" | "inject_memory" | "collect_memory" | "fetch_recent_changes" | "record_changes" | "verify_build" | "merge_pipeline";
   /** Parameters passed to the action */
   params?: Record<string, unknown>;
   /** Human-readable description */
@@ -91,7 +89,6 @@ const DEFAULT_TEMPLATES: AgentTemplate[] = [
       { type: "collect_memory", when: "success", label: "Collect agent memory" },
       { type: "record_changes", when: "success", label: "Record change summary for other agents" },
       { type: "merge_pipeline", when: "success", label: "Merge, verify build, push" },
-      { type: "rule_match", when: "success", label: "Match diff against playbook rules" },
       // Slot released here — spawn_reviewer runs after idle, doesn't block next task
       { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
       { type: "submit_retro", when: "success", label: "Submit retrospective" },
@@ -130,183 +127,6 @@ Bad example: "Implemented the feature"
 Good example: "Why: Auth middleware was missing, causing unauthenticated API access. What: Added JWT verification + session management. Files: middleware/auth.ts (new, 45 lines), routes/index.ts (added auth guard to 3 endpoints). Decisions: Self-implemented JWT instead of express-jwt to avoid adding a dependency. Testing: Added 5 unit tests for token validation edge cases."
 
 The CLI will automatically update the task status and submit this data. Do NOT manually call any API.`,
-    },
-  },
-  {
-    id: "research",
-    name: "Research / Investigation",
-    allow_no_commit_completion: true,
-    match: {
-      task_types: ["research", "investigation", "analysis", "audit"],
-    },
-    tools: ["Read", "Grep", "Glob", "Bash", "Agent"],
-    pre_actions: [
-      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
-      { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
-      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
-    ],
-    post_actions: [
-      { type: "collect_memory", when: "success", label: "Collect agent memory" },
-      { type: "submit_retro", when: "success", label: "Submit retrospective" },
-      { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
-      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
-      { type: "notify_user", params: { message: "⚠️ Task \"{{taskTitle}}\" {{status}}" }, when: "failure", label: "Notify user of failure" },
-      { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
-    ],
-    prompt: {
-      mode_header: "## READ-ONLY MODE — Do NOT modify any files, create commits, or push code.",
-      completion: `Your job is to investigate, analyze, and report findings. Use Read, Grep, Glob, and Bash (for read-only commands like ls, git log, etc.) to gather information.
-Do NOT call curl or any API endpoints directly — the CLI handles all API communication.
-
-When your investigation is complete:
-1. Write a clear, detailed summary of your findings.
-2. Output a completion report on a new line in this exact format:
-COMPLETION_JSON:{"review_comment":"<your detailed findings and recommendations>"}
-
-The CLI will automatically update the task status and submit this data.
-
-DO NOT: git add, git commit, git push, or modify any files. Only read and analyze.`,
-      rules: [
-        "You MUST NOT create, edit, write, or delete any files.",
-        "You MUST NOT run git add, git commit, git push, or any destructive commands.",
-        "Your output is a written report in the review_comment field.",
-      ],
-    },
-  },
-  {
-    id: "content",
-    name: "Content / Documentation",
-    allow_no_commit_completion: true,
-    match: {
-      task_types: ["content", "docs", "documentation"],
-    },
-    tools: "all",
-    pre_actions: [
-      { type: "git_auth_check", label: "Verify git push credentials" },
-      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
-      { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
-      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
-    ],
-    post_actions: [
-      { type: "collect_memory", when: "success", label: "Collect agent memory" },
-      { type: "git_merge", when: "success", label: "Merge branch to base" },
-      { type: "git_push", when: "success", label: "Push main to remote" },
-      { type: "update_task", params: { status: "review" }, when: "success", label: "Move task to review" },
-      { type: "submit_retro", when: "success", label: "Submit retrospective" },
-      { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
-      { type: "spawn_reviewer", when: "success", label: "Spawn Reviewer agent for content review (async)" },
-      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
-      { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
-    ],
-    prompt: {
-      completion: `You are writing documentation or content. Focus on clarity, accuracy, and consistency.
-IMPORTANT: Only modify files in docs/ or content directories. Do NOT change application code.
-Do NOT run git push — the CLI will handle pushing after you finish.
-
-When completing a task:
-1. Commit your changes: git add -A && git commit -m "<message>"
-2. Output a completion report on a new line in this exact format:
-COMPLETION_JSON:{"review_comment":"<detailed summary: Why this doc was needed, What was created/updated, Key sections added, Decisions on structure/format>","commits":"<commit hashes>"}`,
-      rules: [
-        "Only modify documentation files (docs/, README, etc.)",
-        "Do NOT change application source code",
-        "Verify all links and references are valid",
-      ],
-    },
-  },
-  {
-    id: "strategy",
-    name: "Strategy / Planning",
-    allow_no_commit_completion: true,
-    match: {
-      task_types: ["strategy", "planning"],
-    },
-    tools: ["Read", "Grep", "Glob", "Bash", "Agent", "WebSearch", "WebFetch"],
-    pre_actions: [
-      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
-      { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
-      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
-    ],
-    post_actions: [
-      { type: "collect_memory", when: "success", label: "Collect agent memory" },
-      { type: "submit_retro", when: "success", label: "Submit retrospective" },
-      { type: "update_agent", params: { status: "idle", activity: "Task completed" }, when: "success", label: "Report agent idle" },
-      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
-      { type: "update_agent", params: { status: "idle", activity: "Task failed" }, when: "failure", label: "Report agent idle" },
-    ],
-    prompt: {
-      mode_header: "## STRATEGY MODE — Analyze, plan, and propose. Do NOT modify code or infrastructure.",
-      completion: `You are a strategist. Research, analyze, and produce actionable recommendations.
-Use WebSearch and WebFetch for market research, Read/Grep for codebase analysis.
-Do NOT call curl or any API endpoints directly.
-
-When your analysis is complete:
-1. Write a clear, structured report with findings and recommendations.
-2. Output a completion report on a new line:
-COMPLETION_JSON:{"review_comment":"<your strategic analysis and recommendations>"}`,
-      rules: [
-        "You MUST NOT create, edit, write, or delete any files.",
-        "Focus on analysis and recommendations, not implementation.",
-        "Back claims with data or evidence from your research.",
-      ],
-    },
-  },
-  {
-    id: "story-decompose",
-    name: "Story Decomposition",
-    allow_no_commit_completion: true,
-    match: {
-      task_types: ["decompose"],
-    },
-    tools: ["Read", "Grep", "Glob", "Bash"],
-    pre_actions: [
-      { type: "inject_memory", label: "Inject agent memory into CLAUDE.md" },
-      { type: "update_task", params: { status: "in_progress" }, label: "Mark task in_progress" },
-      { type: "update_agent", params: { status: "working" }, label: "Report agent working" },
-    ],
-    post_actions: [
-      { type: "save_decomposition", when: "success", label: "Save decomposition to API" },
-      { type: "update_task", params: { status: "done" }, when: "success", label: "Mark decompose task done" },
-      { type: "update_agent", params: { status: "idle", activity: "Decomposition complete" }, when: "success", label: "Report agent idle" },
-      { type: "update_task", params: { status: "todo" }, when: "failure", label: "Reset task to todo on failure" },
-      { type: "update_agent", params: { status: "idle", activity: "Decomposition failed" }, when: "failure", label: "Report agent idle" },
-    ],
-    prompt: {
-      mode_header: "## DECOMPOSE MODE — Read code, analyze, and decompose a Story into tasks. Do NOT modify any files.",
-      completion: `You are a Story decomposition agent. Your job is to read the codebase and break a Story into concrete, implementable tasks.
-
-## Story
-Title: {{storyTitle}}
-Description: {{storyDescription}}
-{{storyFeedback}}
-
-## Instructions
-1. Read the codebase to understand the current architecture and relevant files
-2. Decompose the Story into 2-6 tasks that together fulfill the Story's intent
-3. For each task, provide:
-   - title: concise, starts with a verb
-   - acceptance_criteria: 2-5 testable conditions (REQUIRED, be specific)
-   - files_hint: files likely to be modified (REQUIRED, use actual paths from the codebase)
-   - priority: p1 (must-have) / p2 (should-have) / p3 (nice-to-have)
-   - story_points: 1 (trivial) / 2 (small) / 3 (medium) / 5 (large)
-   - type: feature / bug / chore / infra
-   - steps: optional brief implementation notes (the agent will figure out the details)
-4. Also suggest existing backlog tasks that relate to this Story (by ID prefix)
-
-## Quality rules
-- acceptance_criteria MUST be verifiable (build passes, behavior changes, test exists)
-- files_hint MUST reference real files you found in the codebase
-- Each task should be completable independently by one agent
-- Order tasks by dependency (foundational first)
-
-## Output
-Output ONLY valid JSON on a new line:
-COMPLETION_JSON:{"summary":"1-2 sentence rationale","tasks":[{"title":"...","acceptance_criteria":["..."],"files_hint":["..."],"priority":"p1","story_points":3,"type":"feature","steps":["optional"]}],"related_backlog":["8char-id"],"total_sp":0}`,
-      rules: [
-        "You MUST NOT create, edit, write, or delete any files.",
-        "You MUST read actual source code to determine files_hint — do not guess.",
-        "acceptance_criteria must be specific and testable, not vague.",
-      ],
     },
   },
   {
@@ -568,119 +388,6 @@ export async function executeActions(
           }
           break;
         }
-        case "save_decomposition": {
-          // Parse COMPLETION_JSON and save decomposed tasks via API
-          // Try completionJson first, then re-extract from stdout if tasks array is missing
-          let decomp: {
-            summary?: string;
-            tasks?: Array<{
-              title: string;
-              acceptance_criteria?: string[];
-              files_hint?: string[];
-              priority?: string;
-              story_points?: number;
-              type?: string;
-              steps?: string[];
-            }>;
-            related_backlog?: string[];
-            total_sp?: number;
-          } = (ctx.completionJson ?? {}) as typeof decomp;
-
-          // If tasks missing, try to re-extract from agent stdout
-          if (!decomp.tasks?.length && ctx.agentStdout?.length) {
-            for (const line of ctx.agentStdout) {
-              const text = typeof line === "string" ? line : "";
-              // Direct COMPLETION_JSON line
-              const directMatch = text.match(/COMPLETION_JSON:\s*(\{[\s\S]*\})\s*$/);
-              if (directMatch) {
-                try { decomp = JSON.parse(directMatch[1]); break; } catch { /* continue */ }
-              }
-              // Stream-json result event containing COMPLETION_JSON
-              try {
-                const ev = JSON.parse(text);
-                if (ev.type === "result" && typeof ev.result === "string") {
-                  const m = ev.result.match(/COMPLETION_JSON:\s*(\{[\s\S]*\})\s*$/);
-                  if (m) { try { decomp = JSON.parse(m[1]); break; } catch { /* continue */ } }
-                }
-              } catch { /* not JSON */ }
-            }
-          }
-
-          if (!decomp.tasks?.length) {
-            ui.warn(`[${phase}] ${label}: no tasks in decomposition — treating as failure`);
-            ctx.exitCode = 1; // Trigger failure path so task is reset to todo, not marked done
-            break;
-          }
-          // Extract story_id from task description (injected by Dashboard when creating decompose task)
-          const storyIdMatch = (ctx.task.description || "").match(/story_id:([a-f0-9-]+)/);
-          const storyId = storyIdMatch?.[1] || undefined;
-          const sprintNum = ctx.config.sprintNumber;
-
-          // Create child tasks via API
-          let created = 0;
-          const taskIds: string[] = [];
-          for (const t of decomp.tasks) {
-            try {
-              const res = await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/tasks`, {
-                method: "POST",
-                headers: { ...createAuthHeaders(ctx.config.apiKey), "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  title: t.title,
-                  description: t.steps?.join("; ") || "",
-                  acceptance_criteria: t.acceptance_criteria || [],
-                  files_hint: t.files_hint || [],
-                  steps: t.steps || [],
-                  priority: t.priority || "p2",
-                  story_points: t.story_points || 3,
-                  type: t.type || "feature",
-                  owner: "builder",
-                  sprint: -1, // backlog — user approves during planning
-                  story_id: storyId || null,
-                  category: "mutating",
-                }),
-              });
-              const body = (await res.json()) as { id?: string };
-              if (body.id) { taskIds.push(body.id); created++; }
-            } catch (err) { ui.warn(`[${phase}] Failed to create task: ${t.title} — ${err}`); }
-          }
-
-          // Save plan summary to sprint_plans (if sprint available)
-          if (sprintNum != null) {
-            try {
-              await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/sprints/${sprintNum}/plan`, {
-                method: "POST",
-                headers: { ...createAuthHeaders(ctx.config.apiKey), "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  summary: decomp.summary || "Story decomposition",
-                  tasks: decomp.tasks.map((t, i) => ({ id: taskIds[i]?.slice(0, 8) || `new-${i}`, title: t.title, reason: "" })),
-                  total_sp: decomp.total_sp || decomp.tasks.reduce((s, t) => s + (t.story_points || 3), 0),
-                }),
-              });
-            } catch { /* non-fatal */ }
-          }
-
-          // Update Story status to ready
-          if (storyId) {
-            try {
-              await fetchWithRetry(`${ctx.config.apiUrl}/api/v1/stories/${storyId}`, {
-                method: "PATCH",
-                headers: { ...createAuthHeaders(ctx.config.apiKey), "Content-Type": "application/json" },
-                body: JSON.stringify({ status: "ready" }),
-              });
-            } catch { /* non-fatal */ }
-          }
-
-          // Notify dashboard so Plan View refreshes
-          for (const tid of taskIds) {
-            ctx.onDataUpdate?.("task", tid, { status: "todo" });
-          }
-          if (storyId) {
-            ctx.onDataUpdate?.("story", storyId, { status: "ready" });
-          }
-
-          ui.info(`[${phase}] ${label}: ${created}/${decomp.tasks.length} tasks created${storyId ? ` for story ${storyId.slice(0, 8)}` : ""}`);
-          break;
-        }
         case "spawn_reviewer": {
           if (ctx.jobQueue) {
             // Enqueue review job for serial processing
@@ -753,10 +460,6 @@ export async function executeActions(
         }
         case "merge_pipeline": {
           await handleMergePipeline(action, ctx, phase);
-          break;
-        }
-        case "rule_match": {
-          await handleRuleMatch(action, ctx, phase);
           break;
         }
         default:

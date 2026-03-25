@@ -113,16 +113,8 @@ export interface ApiClient {
   }): Promise<void>;
   submitRetroComment(sprintNumber: number, data: RetroCommentInput): Promise<void>;
   reportProgress(data: ProgressReport): Promise<void>;
-  fetchPlaybookPrompt(agentName?: string, taskTags?: string[]): Promise<string>;
-  /** Fetch raw playbook rules for local keyword matching */
-  fetchPlaybookRules(): Promise<Array<{ id: string; category: string; title: string; content: string; tags: string | null }>>;
-  /** Create a custom playbook rule */
-  createPlaybookRule(title: string, content: string, category: string): Promise<void>;
-  /** Fetch anti-patterns (rejected false positive tokens) per rule */
-  fetchAntiPatterns(): Promise<Record<string, string[]>>;
   fetchMessages(channel: string): Promise<Message[]>;
   sendMessage(from: string, to: string, content: string): Promise<void>;
-  fetchMySecrets(): Promise<Record<string, string>>;
   fetchApiDocs(agentName: string): Promise<string>;
   fetchAgentMemories(agentName: string): Promise<AgentMemory[]>;
   putAgentMemory(agentName: string, key: string, data: { type: string; content: string; shared?: boolean; tags?: string }): Promise<void>;
@@ -345,62 +337,6 @@ export function createApiClient(apiUrl: string, apiKey: string): ApiClient {
         });
       } catch {
         // Non-fatal
-      }
-    },
-
-    async fetchPlaybookPrompt(agentName?: string, taskTags?: string[]): Promise<string> {
-      try {
-        const params = new URLSearchParams();
-        if (agentName) params.set("agent", agentName);
-        if (taskTags?.length) params.set("tags", taskTags.join(","));
-        const qs = params.toString() ? `?${params.toString()}` : "";
-        const res = await fetch(`${apiUrl}/api/v1/playbook/prompt${qs}`, { headers });
-        if (!res.ok) return "";
-        const data = (await res.json()) as { prompt: string };
-        return data.prompt ?? "";
-      } catch {
-        return "";
-      }
-    },
-
-    async createPlaybookRule(title: string, content: string, category: string): Promise<void> {
-      await fetch(`${apiUrl}/api/v1/playbook`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ title, content, category }),
-      });
-    },
-
-    async fetchAntiPatterns(): Promise<Record<string, string[]>> {
-      try {
-        const res = await fetch(`${apiUrl}/api/v1/rule-evaluations/anti-patterns`, { headers });
-        if (!res.ok) return {};
-        return (await res.json()) as Record<string, string[]>;
-      } catch {
-        return {};
-      }
-    },
-
-    async fetchPlaybookRules(): Promise<Array<{ id: string; category: string; title: string; content: string; tags: string | null }>> {
-      try {
-        const res = await fetch(`${apiUrl}/api/v1/playbook`, { headers });
-        if (!res.ok) return [];
-        const data = (await res.json()) as Array<{ id: string; category: string; title: string; content: string; tags: string | null; enabled?: number }>;
-        if (!Array.isArray(data)) return [];
-        return data.filter((r) => r.enabled !== 0);
-      } catch {
-        return [];
-      }
-    },
-
-    async fetchMySecrets(): Promise<Record<string, string>> {
-      try {
-        const res = await fetch(`${apiUrl}/api/v1/secrets/mine`, { headers });
-        if (!res.ok) return {};
-        const data = (await res.json()) as Record<string, string>;
-        return data ?? {};
-      } catch {
-        return {};
       }
     },
 

@@ -12,7 +12,6 @@ import type { Task } from "../services/api-client.js";
 import { createAuthHeaders, fetchWithRetry } from "../services/api-client.js";
 import * as ui from "../ui.js";
 import { logError, CLI_ERR } from "../services/error-logger.js";
-import { parseTaskLabels } from "../utils/parse-labels.js";
 import { fireRuleEvaluate } from "../services/rule-evaluate.js";
 import { spawnClaudeOnce } from "../utils/spawn-claude.js";
 import { resolveRepoRoot } from "../services/git-ops.js";
@@ -100,12 +99,7 @@ export async function handleReviewChanges(
         taskType,
         taskDescription: ctx.task.description || "(no description)",
         taskTypeHint: typeHints[taskType] || typeHints.implementation || "",
-        customReviewRules: await (async () => {
-          const labels = parseTaskLabels(ctx.task);
-          let rules = "";
-          try { rules = await ctx.api.fetchPlaybookPrompt("reviewer", labels) || ""; } catch { /* */ }
-          return rules ? `\n## Project-Specific Review Rules\n${rules}` : "";
-        })()
+        customReviewRules: ""
       });
       const outputFormat = PROMPT_TEMPLATES["reviewer-output-format"] || '{"verdict":"APPROVE or NEEDS_CHANGES"}';
 
@@ -191,7 +185,7 @@ ${outputFormat}`;
             } catch { /* approve API may fail; task stays in review for manual approval */ }
           }
 
-          // Fire-and-forget: evaluate review against playbook rules
+          // Fire-and-forget: evaluate review against rules
           fireRuleEvaluate({
             apiUrl: ctx.config.apiUrl,
             apiKey: ctx.config.apiKey,

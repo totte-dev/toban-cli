@@ -61,7 +61,6 @@ export interface ManagerContext {
     content: string;
     created_at: string;
   }>;
-  playbook_rules: string;
   analytics?: {
     velocity: Array<{ sprint: number; points: number }>;
     quality: Array<{ sprint: number; avg_score: number }>;
@@ -75,7 +74,7 @@ export interface ManagerAction {
 }
 
 // Validation constants
-const VALID_OWNERS = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "user"];
+const VALID_OWNERS = ["builder", "cloud-engineer", "marketer", "operator", "user"];
 const VALID_STATUS = ["todo", "in_progress", "review", "done"];
 const VALID_PRIORITY = ["p0", "p1", "p2", "p3"];
 const VALID_TYPE = ["feature", "bug", "chore", "research", "docs", "infra", "content", "strategy", "task"];

@@ -72,14 +72,14 @@ describe("classifyRejection", () => {
     expect(result.category).toBe("build_env");
   });
 
-  it("detects Manager override as playbook false positive", () => {
+  it("detects Manager override as reviewer override", () => {
     const result = classifyRejection(
       '{"verdict":"NEEDS_CHANGES","code_quality":"Style issue"}',
       "",
       true,
     );
     expect(result.classification).toBe("infra");
-    expect(result.category).toBe("playbook_false_positive");
+    expect(result.category).toBe("reviewer_override");
   });
 
   it("detects CLAUDE.md issues", () => {
@@ -100,6 +100,6 @@ describe("classifyRejection", () => {
       true,
     );
     expect(result.classification).toBe("infra");
-    expect(result.category).toBe("playbook_false_positive");
+    expect(result.category).toBe("reviewer_override");
   });
 });

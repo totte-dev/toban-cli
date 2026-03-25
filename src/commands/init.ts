@@ -13,8 +13,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "n
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { createApiClient, type WorkspaceInfo } from "../services/api-client.js";
-import { analyzeProjectAndSuggestRules } from "../utils/rule-suggestions.js";
-
 // ---------------------------------------------------------------------------
 // Git hook installer
 // ---------------------------------------------------------------------------
@@ -339,50 +337,8 @@ export async function handleInit(): Promise<void> {
     }
   }
 
-  // 8. Suggest playbook rules based on project analysis
+  // 8. Optionally create first sprint
   const api = createApiClient(apiUrl, apiKey);
-  if (gitDir) {
-    const suggestRules = await p.confirm({
-      message: "Analyze project and suggest playbook rules?",
-      initialValue: true,
-    });
-    if (!isCancel(suggestRules) && suggestRules) {
-      spin.start("Analyzing project...");
-      try {
-        const suggestions = await analyzeProjectAndSuggestRules(cwd);
-        spin.stop(`Found ${suggestions.length} rule suggestion(s)`);
-
-        if (suggestions.length > 0) {
-          const selected = await p.multiselect({
-            message: "Select rules to add to your Playbook",
-            options: suggestions.map((s, i) => ({
-              value: i,
-              label: s.title,
-              hint: s.source,
-            })),
-            required: false,
-          });
-
-          if (!isCancel(selected) && Array.isArray(selected) && selected.length > 0) {
-            let added = 0;
-            for (const idx of selected) {
-              const rule = suggestions[idx as number];
-              try {
-                await api.createPlaybookRule(rule.title, rule.content, rule.category);
-                added++;
-              } catch { /* skip on error */ }
-            }
-            p.log.success(`Added ${added} rule(s) to Playbook`);
-          }
-        }
-      } catch (err) {
-        spin.stop("Analysis failed");
-        p.log.warning(`Could not analyze project: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-  }
-
-  // 9. Optionally create first sprint
   const createSprint = await p.confirm({
     message: "Create and start the first sprint now?",
     initialValue: false,
@@ -398,7 +354,7 @@ export async function handleInit(): Promise<void> {
     }
   }
 
-  // 10. Generate minimal CLAUDE.md
+  // 9. Generate minimal CLAUDE.md
   const claudeMdPath = join(cwd, "CLAUDE.md");
   const hasClaudeMd = existsSync(claudeMdPath);
   const generateClaudeMd = await p.confirm({
@@ -412,12 +368,11 @@ export async function handleInit(): Promise<void> {
       `## Setup`,
       ``,
       `\`\`\`bash`,
-      `# Get project context (spec, rules, sprint, knowledge)`,
+      `# Get project context (spec, sprint, knowledge)`,
       `toban context`,
       ``,
       `# Get specific sections`,
       `toban context spec       # Project spec`,
-      `toban context rules      # Playbook rules`,
       `toban context sprint     # Current sprint tasks`,
       `toban context knowledge  # Shared team knowledge`,
       `toban context failures   # Past failures`,

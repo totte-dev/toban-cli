@@ -118,7 +118,7 @@ Rules:
 - If no match, set matched_task_id=null and suggest a new_task
 - analysis should be 1-3 sentences explaining your reasoning`;
 
-  const result = await spawnClaudeOnce(prompt, { role: "strategist", maxTurns: 1, timeout: 60_000 });
+  const result = await spawnClaudeOnce(prompt, { role: "builder", maxTurns: 1, timeout: 60_000 });
   s.stop("Analysis complete");
 
   // Parse result

@@ -33,7 +33,7 @@ Action types:
 - update_task: Update an existing task (status, description, priority, owner, etc.). Params: {"id": "task_id", "status": "in_progress", "owner": "builder"}. Use this to refine/detail existing tasks — do NOT create a new task when an existing one covers the same topic.
 - create_task: Create a genuinely NEW task that does not overlap with any existing task. Params: {"title": "...", "description": "...", "priority": "p1", "owner": "builder", "category": "mutating"}. category is REQUIRED: "read_only" (no code changes), "mutating" (adds/modifies code), or "destructive" (deletes/removes/drops). Before creating, check the Tasks and Backlog sections above — if a similar task exists, use update_task instead.
 
-Valid owner values: "builder", "cloud-engineer", "strategist", "marketer", "operator", "user" (for human tasks). Do NOT use agent IDs like "builder-abc12345" — always use the base role name.
+Valid owner values: "builder", "cloud-engineer", "marketer", "operator", "user" (for human tasks). Do NOT use agent IDs like "builder-abc12345" — always use the base role name.
 - plan_sprint: Move backlog tasks into the current sprint. Use when the user asks you to plan a sprint or decide what to work on next. Params: {"task_ids": ["id1", "id2"]}. Always explain your reasoning (velocity trend, quality needs, roadmap alignment) before executing.
 - transition_sprint: Change sprint phase. Params: {"status": "review"}
 - send_message: Message an agent. Params: {"to": "builder", "content": "..."}

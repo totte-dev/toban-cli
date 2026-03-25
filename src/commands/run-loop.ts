@@ -188,7 +188,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
   const scheduler = new SlotScheduler([
     { role: "builder", maxConcurrency: 2 },
     { role: "cloud-engineer", maxConcurrency: 1 },
-    { role: "strategist", maxConcurrency: 1 },
   ]);
 
   // Fetch plan limits and reconfigure scheduler
@@ -384,8 +383,8 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
 
       ui.step(`Starting task: ${task.title} [slot: ${slotName}]`);
 
-      // Meta-tasks (decompose, research, etc.) skip detail/AC checks
-      const META_TASK_TYPES = ["decompose", "research", "strategy", "docs"];
+      // Meta-tasks (research, etc.) skip detail/AC checks
+      const META_TASK_TYPES = ["research", "docs"];
       const isMetaTask = META_TASK_TYPES.includes(task.type?.toString() ?? "");
 
       // Shared helper for parsing JSON arrays from DB columns
@@ -472,7 +471,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       };
 
       // Check if pipeline state exists — if so, skip builder and run pipeline only
-      // Read-only templates (decompose, research) don't benefit from pipeline retry — always re-run agent
+      // Read-only templates (research) don't benefit from pipeline retry — always re-run agent
       // loadPipelineState/clearPipelineState imported at top level
       const existingPipelineState = agentTemplate.allow_no_commit_completion ? null : loadPipelineState(task.id);
       if (existingPipelineState?.agent_branch) {
@@ -523,31 +522,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
       const parsedDesc = getPromptDescription(task.description as string | undefined);
       let fullDescription = [parsedDesc, contextNotes].filter(Boolean).join("\n\n") || undefined;
 
-      // Fetch Story info for decompose tasks
-      let storyTitle: string | undefined;
-      let storyDescription: string | undefined;
-      let storyFeedback: string | undefined;
-      const storyIdForFetch = taskType === "decompose"
-        ? (task.description || "").match(/story_id:([a-f0-9-]+)/)?.[1]
-        : undefined;
-      if (storyIdForFetch) {
-        try {
-          const storyRes = await fetch(`${cliArgs.apiUrl}/api/v1/stories/${storyIdForFetch}`, {
-            headers: { Authorization: `Bearer ${cliArgs.apiKey}` },
-          });
-          if (storyRes.ok) {
-            const story = (await storyRes.json()) as { title: string; description: string; feedback?: string };
-            storyTitle = story.title;
-            storyDescription = story.description;
-            storyFeedback = story.feedback || undefined;
-          }
-        } catch { /* use task title/description as fallback */ }
-      }
-      if (taskType === "decompose" && !storyTitle) {
-        storyTitle = task.title;
-        storyDescription = task.description || "";
-      }
-
       // Fetch past failures for prompt injection
       let pastFailures: Array<{ summary: string; failure_type: string; agent_name: string | null }> = [];
       try { pastFailures = await api.fetchRelevantFailures(); } catch { /* non-fatal */ }
@@ -588,22 +562,14 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
         taskPriority: typeof task.priority === "string" ? task.priority : `p${task.priority}`,
         taskType, apiUrl: cliArgs.apiUrl, apiKey: cliArgs.apiKey,
         language: ctx.language,
-        playbookRules: (await ctx.api.fetchPlaybookPrompt(agentRole, taskLabels)) || ctx.playbookRules,
         targetRepo: task.target_repo ?? undefined,
         apiDocs: apiDocs || undefined, engineHint: getEngine(cliArgs.engine).promptHint,
         pastFailures: pastFailures.length > 0 ? pastFailures : undefined,
         previousReview,
         guardrailRules: buildGuardrailRules(guardrailConfig, cliArgs.autoMode),
-        storyTitle, storyDescription, storyFeedback,
       });
 
       try {
-        let secrets: Record<string, string> = {};
-        try {
-          secrets = await api.fetchMySecrets();
-          if (Object.keys(secrets).length > 0) ui.info(`Injected ${Object.keys(secrets).length} secrets`);
-        } catch (err) { ui.warn(`Could not fetch secrets: ${err}`); }
-
         // Ensure git user is set before worktree creation
         if (ctx.gitUserInfo) ensureGitUser(taskWorkingDir, ctx.gitUserInfo.name, ctx.gitUserInfo.email);
 
@@ -616,7 +582,6 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
           branch: cliArgs.baseBranch, apiKey: cliArgs.apiKey, apiUrl: cliArgs.apiUrl,
           prompt, parentAgent: cliArgs.agentName, sprintNumber: sprintData.sprint.number,
           model: agentModel,
-          ...(Object.keys(secrets).length > 0 ? { secrets } : {}),
           ...(ctx.wsPort ? { managerPort: ctx.wsPort } : {}),
           ...(isReadOnly ? { readOnly: true } : {}),
         };
@@ -714,7 +679,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
               onRawJson: (raw) => { rawCompletionJson = raw; },
             });
             if (parsed) {
-              // Use raw JSON for templates that need full data (e.g. decompose with tasks array)
+              // Use raw JSON for templates that need full data
               actionCtx.completionJson = rawCompletionJson ?? parsed;
             }
           }
@@ -801,7 +766,7 @@ export async function runLoop(cliArgs: CliArgs, runner: AgentRunner, shutdownSta
                   }),
                 });
                 ui.info(`[retro] Submitted: went_well=${!!safeWentWell}, to_improve=${!!safeToImprove}, tasks=${validTasks.length}`);
-                // Fire-and-forget: evaluate retro against playbook rules
+                // Fire-and-forget: evaluate retro against rules
                 fireRuleEvaluate({
                   apiUrl: cliArgs.apiUrl,
                   apiKey: cliArgs.apiKey,

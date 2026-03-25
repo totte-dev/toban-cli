@@ -167,7 +167,6 @@ export function buildSystemPrompt(
 
   const actions = loadPromptTemplate("manager-actions");
   const rules = loadPromptTemplate("manager-rules");
-  const playbook = ctx.playbook_rules ? `\n## Playbook Rules\n${ctx.playbook_rules}` : "";
   const adr = ctx.adr_summary ? `\n## Architecture Decision Records\n${ctx.adr_summary}\nYou MUST follow all ACCEPTED ADRs when making decisions.` : "";
 
   let analyticsBlock = "";
@@ -182,7 +181,7 @@ ${qualLines || "  (no data)"}
 Use these trends to inform sprint planning — if velocity is declining, reduce scope. If quality is dropping, prioritize test/review improvements.\n`;
   }
 
-  return `${system}\n${opts.codebaseSummary}\n${actions}\n${rules}${playbook}${adr}${analyticsBlock}`;
+  return `${system}\n${opts.codebaseSummary}\n${actions}\n${rules}${adr}${analyticsBlock}`;
 }
 
 // ---------------------------------------------------------------------------

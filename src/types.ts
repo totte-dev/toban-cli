@@ -29,8 +29,6 @@ export interface AgentConfig {
   sprintNumber?: number;
   /** Full command template from provider config (e.g. "claude --model claude-sonnet-4-20250514") */
   commandTemplate?: string;
-  /** Project secrets to inject into the agent environment */
-  secrets?: Record<string, string>;
   /** Manager WS server port (for agent HTTP messaging) */
   managerPort?: number;
   /** Read-only mode: restrict to read tools only (for research/investigation tasks) */

@@ -8,7 +8,7 @@ export type InfraCategory =
   | "merge_conflict"
   | "worktree_setup"
   | "build_env"
-  | "playbook_false_positive"
+  | "reviewer_override"
   | "prompt_injection";
 
 export interface ClassificationResult {
@@ -51,12 +51,12 @@ export function classifyRejection(
   agentStderr: string,
   wasOverridden: boolean,
 ): ClassificationResult {
-  // Manager override = Reviewer was too strict = Playbook false positive
+  // Manager override = Reviewer was too strict
   if (wasOverridden) {
     return {
       classification: "infra",
-      category: "playbook_false_positive",
-      reason: "Manager overrode Reviewer rejection (Playbook rule false positive)",
+      category: "reviewer_override",
+      reason: "Manager overrode Reviewer rejection (false positive)",
     };
   }
 

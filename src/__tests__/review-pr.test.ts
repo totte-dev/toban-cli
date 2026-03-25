@@ -36,7 +36,6 @@ vi.mock("../agents/spawner.js", () => ({
 vi.mock("../services/api-client.js", () => ({
   createApiClient: () => ({
     fetchTasks: vi.fn().mockResolvedValue([]),
-    fetchPlaybookPrompt: vi.fn().mockResolvedValue(""),
   }),
   createAuthHeaders: (key: string) => ({ Authorization: `Bearer ${key}`, "Content-Type": "application/json" }),
 }));

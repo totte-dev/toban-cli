@@ -83,7 +83,6 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
 const ROLE_DEFAULT_MODEL: Record<string, string> = {
   builder: "claude-sonnet-4-6",
   reviewer: "claude-sonnet-4-6",
-  strategist: "claude-opus-4-6",
   manager: "claude-sonnet-4-6",
   "cloud-engineer": "claude-opus-4-6",
 };

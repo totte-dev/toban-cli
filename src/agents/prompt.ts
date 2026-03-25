@@ -40,8 +40,6 @@ export interface PromptContext {
   apiKey: string;
   /** Workspace language (e.g. "ja", "en") */
   language?: string;
-  /** Pre-built playbook rules block */
-  playbookRules?: string;
   /** Target repository name for this task */
   targetRepo?: string;
   /** Available repositories for this agent */
@@ -69,8 +67,6 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
     "You are a software development agent. You write production-quality code, run tests, and commit clean changes.",
   "cloud-engineer":
     "You are a cloud infrastructure agent. You manage CI/CD pipelines, IaC (Terraform/Pulumi), monitoring, and deployment configurations.",
-  strategist:
-    "You are a business strategy agent. You research markets, analyze competitors, and produce strategic documents.",
   marketer:
     "You are a marketing agent. You create content, manage community presence, and build developer relations materials.",
   operator:
@@ -105,7 +101,6 @@ function buildSpecBlock(specJson?: string): string {
 const ROLE_CAPABILITIES: Record<string, string> = {
   builder: "code implementation, testing, and code review",
   "cloud-engineer": "infrastructure, CI/CD, deployment, and monitoring",
-  strategist: "market research, competitive analysis, and strategic planning",
   marketer: "content creation, community management, and developer relations",
   operator: "system monitoring, incident response, and operational runbooks",
 };
@@ -172,8 +167,6 @@ export function buildAgentPrompt(ctx: PromptContext): string {
   const descriptionBlock = descParts.length > 0 ? `\n\nDescription:\n${descParts.join("\n\n")}` : "";
 
   const securityRules = buildSecurityRules(ctx.role);
-  const playbookBlock = ctx.playbookRules ?? "";
-
   let repoBlock = "";
   if (ctx.repositories && ctx.repositories.length > 0) {
     const rows = ctx.repositories.map(
@@ -240,7 +233,7 @@ toban chat --type <type> --topic <topic> "message"
 - \`toban task info\` — Re-read your task details and acceptance criteria
 - \`toban task list\` — See all sprint tasks to understand your scope
 - \`toban task blocker "reason"\` — Report blocker (also posts to channel)
-- \`toban context\` — Get project spec, playbook rules, past failures
+- \`toban context\` — Get project spec, past failures
 - \`toban memory search "query"\` — Search team knowledge (design decisions, known issues)
 - \`toban memory set key "value"\` — Save a discovery for other agents
 
@@ -290,7 +283,6 @@ The team channel is monitored by the orchestrator and the user. Always post, eve
     securityRules,
     guardrailBlock,
     peerAwarenessBlock,
-    playbookBlock,
     failuresBlock,
     specBlock,
     repoBlock,

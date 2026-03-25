@@ -48,10 +48,10 @@ export interface TaskSchedulerDeps {
 }
 
 /** Agent roles that can own tasks for auto-dispatch */
-const AGENT_ROLES = ["builder", "cloud-engineer", "strategist", "marketer", "operator", "qa"];
+const AGENT_ROLES = ["builder", "cloud-engineer", "marketer", "operator", "qa"];
 
 /** Task types that can run during planning phase (no code changes) */
-const PLANNING_SAFE_TYPES = ["decompose", "research", "strategy", "docs"];
+const PLANNING_SAFE_TYPES = ["research", "docs"];
 
 /** Result of getDispatchableTasks — ready-to-dispatch tasks or idle/wait. */
 export type ScheduleResult =
@@ -89,7 +89,7 @@ export class TaskScheduler {
     // During planning phase, only meta-tasks (decompose, research, etc.) are allowed
     const isPlanning = sprintStatus === "planning";
     const todoForAgents = allTasks.filter(
-      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && (t.review_verdict !== "ERROR" || PLANNING_SAFE_TYPES.includes(t.type as string)) && t.category !== "destructive" && (t.type === "decompose" || hasStructuredDetails(t)) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
+      (t) => t.status === "todo" && t.owner && AGENT_ROLES.includes(t.owner) && (t.review_verdict !== "ERROR" || PLANNING_SAFE_TYPES.includes(t.type as string)) && t.category !== "destructive" && hasStructuredDetails(t) && (!isPlanning || PLANNING_SAFE_TYPES.includes(t.type as string)),
     );
 
     // --- Auto-transition todo → in_progress ---

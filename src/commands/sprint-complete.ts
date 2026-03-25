@@ -92,7 +92,7 @@ Generate a report with these 4 sections (keep each section 2-4 bullet points, pl
 
 Output the report as plain text, concise and actionable. No JSON wrapping.`;
 
-    const report = await spawnClaudeOnce(prompt, { role: "strategist", maxTurns: 1, timeout: 120_000 });
+    const report = await spawnClaudeOnce(prompt, { role: "builder", maxTurns: 1, timeout: 120_000 });
     if (report.trim()) {
       await fetch(`${apiUrl}/api/v1/sprints/${sprint.number}`, {
         method: "PATCH",

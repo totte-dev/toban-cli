@@ -64,7 +64,6 @@ export interface SetupResult {
   sprintData: SprintStartResult;
   workspaceName: string | undefined;
   workspaceSpec: string | undefined;
-  playbookRules: string | undefined;
   language: string | undefined;
   mainGithubRepo: string | undefined;
 }
@@ -86,7 +85,6 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
   let workingDir = cliArgs.workingDir;
   let workspaceSpec: string | undefined;
   let workspaceName: string | undefined;
-  let playbookRules: string | undefined;
   let mainGithubRepo: string | undefined;
   let wsLanguage: string | undefined;
   let gitUserInfo: { name: string; email: string } | undefined;
@@ -102,9 +100,6 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
       gitUserInfo = { name: ws.github_login, email: `${ws.github_login}@users.noreply.github.com` };
     }
     s.stop(workspaceName ? `Workspace: ${workspaceName}` : "Workspace loaded");
-
-    try { playbookRules = await api.fetchPlaybookPrompt() || undefined; }
-    catch (pbErr) { ui.warn(`Could not fetch playbook rules: ${pbErr}`); }
 
     if (!cliArgs.explicitWorkingDir && ws.github_repo) {
       const tobanHome = join(homedir(), ".toban");
@@ -283,7 +278,7 @@ export async function setup(cliArgs: CliArgs, runner: AgentRunner): Promise<Setu
   return {
     api, mgr, wsServer, wsPort: actualWsPort, workingDir, tobanHome,
     repos, gitToken, gitUserInfo, credentialHelperPath, sprintData: sprintData!,
-    workspaceName, workspaceSpec, playbookRules, language: wsLanguage,
+    workspaceName, workspaceSpec, language: wsLanguage,
     mainGithubRepo,
   };
 }
