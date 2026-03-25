@@ -49,7 +49,7 @@ You (PM)          Toban Dashboard          toban-cli              Agents
 - **Isolated execution**: Each agent runs in its own git worktree -- no conflicts between parallel tasks
 - **Real-time streaming**: Agent activity (tool use, file edits, commands) streams to the dashboard live
 - **Auto merge & push**: Completed branches are merged to main and pushed automatically
-- **Manager LLM**: A coordinator LLM handles sprint planning, task assignment, and retrospectives
+- **Code review**: Automated reviewer checks every change before merge
 
 ## Requirements
 
@@ -77,18 +77,17 @@ npx toban-cli@latest start
 | `--api-key <key>` | `TOBAN_API_KEY` | API key for authentication |
 | `--working-dir <dir>` | | Repository root (default: cwd) |
 | `--branch <branch>` | | Base branch (default: main) |
-| `--model <model>` | | AI model for Manager LLM |
 | `--engine <type>` | | Agent engine (default: claude) |
 | `--ws-port <port>` | | WebSocket port (default: 4000, 0=auto) |
 | `--debug` | `DEBUG=1` | Verbose output |
 
 ## How It Works
 
-1. **Connect** -- CLI authenticates with the Toban API and starts the sprint
-2. **Plan** -- Manager LLM analyzes the backlog and assigns tasks to agents
-3. **Execute** -- Each agent spawns in an isolated git worktree with a focused prompt
-4. **Stream** -- Activity streams to the dashboard via WebSocket in real-time
-5. **Review** -- Completed work is submitted for review with auto-generated comments
+1. **Connect** -- CLI authenticates with the Toban API and polls for tasks
+2. **Execute** -- Each task spawns a Builder agent in an isolated git worktree
+3. **Stream** -- Activity streams to the dashboard via WebSocket in real-time
+4. **Verify** -- Build and tests are verified after the agent commits
+5. **Review** -- A Reviewer agent checks the diff for quality and correctness
 6. **Merge** -- Approved changes are merged to main and pushed to the remote
 
 ## Supported Agent Engines
@@ -96,8 +95,8 @@ npx toban-cli@latest start
 | Engine | Status | Description |
 |--------|--------|-------------|
 | Claude Code | Stable | Primary and recommended engine via `@anthropic-ai/claude-code` CLI |
-| Codex CLI | Planned | OpenAI Codex CLI integration |
-| Gemini CLI | Planned | Google Gemini CLI integration |
+| Codex CLI | Experimental | OpenAI Codex CLI integration |
+| Gemini CLI | Experimental | Google Gemini CLI integration |
 
 ## Documentation
 
